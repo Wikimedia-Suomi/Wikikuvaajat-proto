@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wikikuvaajat Locations</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <style>
+      :root {
+        font-family: Arial, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f7f7f7;
+      }
+      #app {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 1rem;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      button,
+      select {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 0.5rem 0.75rem;
+        background: white;
+      }
+      .tabs {
+        display: flex;
+        gap: 0.5rem;
+      }
+      .card {
+        background: white;
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      li {
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #eee;
+      }
+      #map {
+        height: 420px;
+        border-radius: 8px;
+      }
+      .detail-grid {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 0.5rem;
+      }
+      @media (max-width: 600px) {
+        .toolbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        #map {
+          height: 320px;
+        }
+        .detail-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="toolbar">
+        <div class="tabs">
+          <button @click="view='list'">{{ t.listView }}</button>
+          <button @click="view='map'">{{ t.mapView }}</button>
+          <button @click="view='detail'">{{ t.detailView }}</button>
+        </div>
+        <div>
+          <label>
+            {{ t.language }}
+            <select v-model="language">
+              <option value="en">English</option>
+              <option value="sv">Svenska</option>
+              <option value="fi">Suomi</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="card" v-if="loading">{{ t.loading }}</div>
+      <div class="card" v-else-if="error">{{ error }}</div>
+
+      <section class="card" v-else-if="view==='list'">
+        <h2>{{ t.listView }}</h2>
+        <ul>
+          <li v-for="location in locations" :key="location.id">
+            <strong>{{ location.label }}</strong><br />
+            {{ location.latitude }}, {{ location.longitude }}
+          </li>
+        </ul>
+      </section>
+
+      <section class="card" v-else-if="view==='map'">
+        <h2>{{ t.mapView }}</h2>
+        <div id="map"></div>
+      </section>
+
+      <section class="card" v-else>
+        <h2>{{ t.detailView }}</h2>
+        <label>
+          {{ t.chooseLocation }}
+          <select v-model="selectedId" @change="loadDetail">
+            <option v-for="location in locations" :value="location.id" :key="location.id">{{ location.label }}</option>
+          </select>
+        </label>
+        <div v-if="detail" class="detail-grid" style="margin-top: 1rem;">
+          <strong>{{ t.id }}</strong><span>{{ detail.id }}</span>
+          <strong>{{ t.name }}</strong><span>{{ detail.label }}</span>
+          <strong>{{ t.latitude }}</strong><span>{{ detail.latitude }}</span>
+          <strong>{{ t.longitude }}</strong><span>{{ detail.longitude }}</span>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const { createApp, nextTick } = Vue;
+
+      createApp({
+        data() {
+          return {
+            view: "list",
+            locations: [],
+            detail: null,
+            selectedId: null,
+            loading: true,
+            error: "",
+            language: "en",
+            map: null,
+            markers: [],
+            i18n: {
+              en: {
+                listView: "List",
+                mapView: "Map",
+                detailView: "Single item details",
+                language: "Language",
+                loading: "Loading...",
+                chooseLocation: "Choose location",
+                id: "Identifier",
+                name: "Name",
+                latitude: "Latitude",
+                longitude: "Longitude",
+              },
+              sv: {
+                listView: "Lista",
+                mapView: "Karta",
+                detailView: "Detaljvy",
+                language: "Språk",
+                loading: "Laddar...",
+                chooseLocation: "Välj plats",
+                id: "Identifierare",
+                name: "Namn",
+                latitude: "Latitud",
+                longitude: "Longitud",
+              },
+              fi: {
+                listView: "Lista",
+                mapView: "Kartta",
+                detailView: "Yksityiskohta",
+                language: "Kieli",
+                loading: "Ladataan...",
+                chooseLocation: "Valitse sijainti",
+                id: "Tunniste",
+                name: "Nimi",
+                latitude: "Leveysaste",
+                longitude: "Pituusaste",
+              },
+            },
+          };
+        },
+        computed: {
+          t() {
+            return this.i18n[this.language];
+          },
+        },
+        watch: {
+          view() {
+            if (this.view === "map") {
+              this.$nextTick(() => this.renderMap());
+            }
+          },
+          language(newValue) {
+            document.cookie = `django_language=${newValue}; path=/`;
+            fetch('/i18n/setlang/', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+              body: `language=${newValue}&next=/`,
+            });
+          },
+        },
+        methods: {
+          async loadLocations() {
+            try {
+              const response = await fetch("/api/locations/");
+              const data = await response.json();
+              this.locations = data.results;
+              this.selectedId = this.locations[0]?.id || null;
+              if (this.selectedId) {
+                await this.loadDetail();
+              }
+            } catch (error) {
+              this.error = error.message;
+            } finally {
+              this.loading = false;
+            }
+          },
+          async loadDetail() {
+            if (!this.selectedId) return;
+            const response = await fetch(`/api/locations/${this.selectedId}/`);
+            this.detail = await response.json();
+          },
+          renderMap() {
+            if (!this.map) {
+              this.map = L.map("map").setView([60.1699, 24.9384], 5);
+              L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+                maxZoom: 19,
+                attribution: "&copy; OpenStreetMap contributors",
+              }).addTo(this.map);
+            }
+
+            this.markers.forEach((marker) => marker.remove());
+            this.markers = this.locations.map((location) =>
+              L.marker([location.latitude, location.longitude])
+                .addTo(this.map)
+                .bindPopup(location.label)
+            );
+          },
+        },
+        mounted() {
+          const langCookie = document.cookie
+            .split(";")
+            .map((part) => part.trim())
+            .find((part) => part.startsWith("django_language="));
+          if (langCookie) {
+            this.language = langCookie.split("=")[1];
+          }
+          this.loadLocations();
+        },
+      }).mount("#app");
+    </script>
+  </body>
+</html>
