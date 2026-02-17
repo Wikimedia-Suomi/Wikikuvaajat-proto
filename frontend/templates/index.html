@@ -1,0 +1,31 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Locations Explorer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="{% static 'ui/styles.css' %}" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    {{ api_base_url|json_script:"api-base-url" }}
+    {{ sparql_default_endpoint|json_script:"sparql-default-endpoint" }}
+    {{ sparql_predefined_endpoints|json_script:"sparql-predefined-endpoints" }}
+    <script>
+      window.APP_CONFIG = {
+        apiBaseUrl: JSON.parse(document.getElementById('api-base-url').textContent),
+        sparqlDefaultEndpoint: JSON.parse(document.getElementById('sparql-default-endpoint').textContent),
+        sparqlPredefinedEndpoints: JSON.parse(document.getElementById('sparql-predefined-endpoints').textContent)
+      }
+    </script>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
+    <script src="https://unpkg.com/vue-i18n@9/dist/vue-i18n.global.prod.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{% static 'ui/app.js' %}"></script>
+  </body>
+</html>

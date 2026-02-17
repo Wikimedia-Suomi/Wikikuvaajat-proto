@@ -1,0 +1,6825 @@
+(function () {
+  const { createApp, ref, computed, onMounted, onBeforeUnmount, watch, nextTick } = Vue
+  const { createRouter, createWebHashHistory, useRoute } = VueRouter
+  const { createI18n, useI18n } = VueI18n
+
+  const configuredApiBaseUrl =
+    (window.APP_CONFIG && typeof window.APP_CONFIG.apiBaseUrl === 'string'
+      ? window.APP_CONFIG.apiBaseUrl
+      : 'http://localhost:8000/api'
+    ).replace(/\/$/, '')
+  const configuredSparqlDefaultEndpoint =
+    (window.APP_CONFIG && typeof window.APP_CONFIG.sparqlDefaultEndpoint === 'string'
+      ? window.APP_CONFIG.sparqlDefaultEndpoint
+      : ''
+    ).trim()
+  const configuredPredefinedEndpoints =
+    window.APP_CONFIG && Array.isArray(window.APP_CONFIG.sparqlPredefinedEndpoints)
+      ? window.APP_CONFIG.sparqlPredefinedEndpoints
+      : []
+  const API_BASE_URL = configuredApiBaseUrl
+  const SUPPORTED_LOCALES = ['en', 'sv', 'fi']
+  const AUTOCOMPLETE_RESULT_LIMIT = 20
+  const LOCATION_SILENT_REFRESH_DELAY_MS = 5000
+
+  const PREDEFINED_ENDPOINTS = configuredPredefinedEndpoints
+    .filter((entry) => entry && typeof entry.url === 'string' && entry.url.trim() !== '')
+    .map((entry) => ({
+      id: String(entry.id || entry.label || entry.url).trim(),
+      label: String(entry.label || entry.id || entry.url).trim(),
+      url: String(entry.url).trim()
+    }))
+
+  function normalizeLocationId(id) {
+    try {
+      return encodeURIComponent(decodeURIComponent(id))
+    } catch (error) {
+      return encodeURIComponent(id)
+    }
+  }
+
+  async function request(path, options = {}) {
+    const {
+      lang = null,
+      method = 'GET',
+      body = null,
+      queryParams = null
+    } = options
+
+    const url = new URL(`${API_BASE_URL}${path}`, window.location.origin)
+    if (lang) {
+      url.searchParams.set('lang', lang)
+    }
+    if (queryParams && typeof queryParams === 'object') {
+      Object.entries(queryParams).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          url.searchParams.set(key, String(value))
+        }
+      })
+    }
+
+    const requestOptions = { method }
+    if (body !== null) {
+      requestOptions.headers = { 'Content-Type': 'application/json' }
+      requestOptions.body = JSON.stringify(body)
+    }
+
+    const response = await fetch(url.toString(), requestOptions)
+
+    let payload = null
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      payload = await response.json()
+    } else {
+      payload = await response.text()
+    }
+
+    if (!response.ok) {
+      if (payload && typeof payload === 'object' && payload.detail) {
+        throw new Error(payload.detail)
+      }
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    return payload
+  }
+
+  function fetchLocations(lang) {
+    return request('/locations/', { lang })
+  }
+
+  function fetchLocation(id, lang) {
+    return request(`/locations/${normalizeLocationId(id)}/`, { lang })
+  }
+
+  function fetchLocationChildren(id, lang) {
+    return request('/locations/children/', {
+      lang,
+      queryParams: { location_id: id },
+    })
+  }
+
+  async function fetchProjects() {
+    return []
+  }
+
+  async function createProject(payload) {
+    void payload
+    throw new Error('Projects are disabled.')
+  }
+
+  function createDraft(payload) {
+    return request('/drafts/', {
+      method: 'POST',
+      body: payload
+    })
+  }
+
+  function addExistingWikidataItem(payload) {
+    return request('/wikidata/add-existing/', {
+      method: 'POST',
+      body: payload,
+    })
+  }
+
+  function createWikidataItem(payload, lang) {
+    return request('/wikidata/create/', {
+      method: 'POST',
+      body: payload,
+      lang,
+    })
+  }
+
+  function fetchAuthStatus() {
+    return request('/auth/status/')
+  }
+
+  function fetchDraft(draftId) {
+    return request(`/drafts/${encodeURIComponent(String(draftId))}/`)
+  }
+
+  function updateDraft(draftId, payload) {
+    return request(`/drafts/${encodeURIComponent(String(draftId))}/`, {
+      method: 'PATCH',
+      body: payload
+    })
+  }
+
+  function searchWikidataEntities(query, lang, limit = AUTOCOMPLETE_RESULT_LIMIT) {
+    return request('/wikidata/search/', {
+      lang,
+      queryParams: { q: query, limit }
+    })
+  }
+
+  function fetchWikidataEntity(entityId, lang = null) {
+    const qid = extractWikidataId(String(entityId || ''))
+    if (!qid) {
+      throw new Error('Invalid Wikidata id.')
+    }
+    return request(`/wikidata/entities/${encodeURIComponent(qid)}/`, { lang })
+  }
+
+  function searchCommonsCategories(query, limit = AUTOCOMPLETE_RESULT_LIMIT) {
+    return request('/commons/categories/', {
+      queryParams: { q: query, limit }
+    })
+  }
+
+  async function fetchCommonsCategoryChildren(categoryName, limit = AUTOCOMPLETE_RESULT_LIMIT) {
+    const rawCategory = typeof categoryName === 'string' ? categoryName.trim() : ''
+    const normalizedCategory = rawCategory.replace(/^category:/i, '').trim().replace(/\s+/g, '_')
+    if (!normalizedCategory) {
+      return []
+    }
+
+    const parsedLimit = Number(limit)
+    const requestedLimit = Number.isFinite(parsedLimit)
+      ? Math.max(1, Math.min(Math.trunc(parsedLimit), 50))
+      : AUTOCOMPLETE_RESULT_LIMIT
+
+    const url = new URL('https://commons.wikimedia.org/w/api.php')
+    url.searchParams.set('action', 'query')
+    url.searchParams.set('list', 'categorymembers')
+    url.searchParams.set('cmtitle', `Category:${normalizedCategory}`)
+    url.searchParams.set('cmtype', 'subcat')
+    url.searchParams.set('cmlimit', String(requestedLimit))
+    url.searchParams.set('format', 'json')
+    url.searchParams.set('formatversion', '2')
+    url.searchParams.set('origin', '*')
+
+    const response = await fetch(url.toString(), { method: 'GET' })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    if (payload && typeof payload === 'object' && payload.error && payload.error.info) {
+      throw new Error(String(payload.error.info))
+    }
+
+    const members =
+      payload &&
+      typeof payload === 'object' &&
+      payload.query &&
+      typeof payload.query === 'object' &&
+      Array.isArray(payload.query.categorymembers)
+        ? payload.query.categorymembers
+        : []
+
+    const seen = new Set()
+    const categories = []
+    for (const member of members) {
+      if (!member || typeof member !== 'object') {
+        continue
+      }
+      const title = typeof member.title === 'string' ? member.title : ''
+      const normalizedTitle = title.replace(/^category:/i, '').trim().replace(/\s+/g, '_')
+      if (!normalizedTitle) {
+        continue
+      }
+      const dedupeKey = normalizedTitle.toLowerCase()
+      if (seen.has(dedupeKey)) {
+        continue
+      }
+      seen.add(dedupeKey)
+      categories.push({
+        name: normalizedTitle,
+        title: `Category:${normalizedTitle}`,
+        commons_category: normalizedTitle,
+      })
+    }
+    return categories
+  }
+
+  function searchGeocodePlaces(query, limit = AUTOCOMPLETE_RESULT_LIMIT) {
+    return request('/geocode/search/', {
+      queryParams: { q: query, limit }
+    })
+  }
+
+  function reverseGeocodeCoordinates(latitude, longitude, lang = null) {
+    return request('/geocode/reverse/', {
+      lang,
+      queryParams: { lat: latitude, lon: longitude }
+    })
+  }
+
+  function buildYasguiUrl(endpointUrl, query) {
+    const url = new URL('https://yasgui.triply.cc/')
+    if (endpointUrl) {
+      url.searchParams.set('endpoint', endpointUrl)
+    }
+    if (query) {
+      url.searchParams.set('query', query)
+    }
+    return url.toString()
+  }
+
+  function buildSophoxUrl(query) {
+    return `https://sophox.org/#query=${encodeURIComponent(query)}`
+  }
+
+  function buildQueryUiUrl(endpointUrl, query, endpointId = null) {
+    if (endpointId === 'qlever-osm-planet') {
+      return buildSophoxUrl(query)
+    }
+
+    if (!endpointUrl) {
+      return buildYasguiUrl('', query)
+    }
+
+    let parsed
+    try {
+      parsed = new URL(endpointUrl)
+    } catch (error) {
+      return buildYasguiUrl(endpointUrl, query)
+    }
+
+    const host = parsed.hostname.toLowerCase()
+    const path = parsed.pathname
+
+    if (host === 'query.wikidata.org') {
+      return `https://query.wikidata.org/#${encodeURIComponent(query)}`
+    }
+
+    if (host === 'commons-query.wikimedia.org') {
+      return `https://commons-query.wikimedia.org/#${encodeURIComponent(query)}`
+    }
+
+    if (host === 'sophox.org') {
+      return buildSophoxUrl(query)
+    }
+
+    if (path.startsWith('/api/') && host.includes('qlever')) {
+      const datasetPath = path.slice('/api/'.length).replace(/^\/+|\/+$/g, '')
+      if (datasetPath === 'osm-planet') {
+        return buildSophoxUrl(query)
+      }
+      const uiBase = `${parsed.protocol}//${parsed.host}/${datasetPath || 'wikidata'}/`
+      const uiUrl = new URL(uiBase)
+      uiUrl.searchParams.set('query', query)
+      return uiUrl.toString()
+    }
+
+    if (host === 'dbpedia.org' && path.startsWith('/sparql')) {
+      const uiUrl = new URL('https://dbpedia.org/sparql')
+      uiUrl.searchParams.set('query', query)
+      uiUrl.searchParams.set('format', 'text/html')
+      return uiUrl.toString()
+    }
+
+    return buildYasguiUrl(endpointUrl, query)
+  }
+
+  function openQueryInUi(endpointUrl, query, endpointId = null) {
+    const url = buildQueryUiUrl(endpointUrl, query, endpointId)
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  function renderQueryForTesting(queryTemplate, lang, limit) {
+    return queryTemplate
+      .replace(/\{\{\s*lang\s*\}\}/g, lang)
+      .replace(/\{\{\s*limit\s*\}\}/g, String(limit))
+  }
+
+  function normalizeSupportedLocale(candidate) {
+    if (typeof candidate !== 'string' || candidate.trim() === '') {
+      return null
+    }
+
+    const normalized = candidate.trim().toLowerCase().replace('_', '-')
+    if (SUPPORTED_LOCALES.includes(normalized)) {
+      return normalized
+    }
+
+    const baseLocale = normalized.split('-')[0]
+    if (SUPPORTED_LOCALES.includes(baseLocale)) {
+      return baseLocale
+    }
+
+    return null
+  }
+
+  function extractWikidataId(value) {
+    if (typeof value !== 'string') {
+      return ''
+    }
+    const match = value.trim().match(/(Q\d+)/i)
+    return match ? match[1].toUpperCase() : ''
+  }
+
+  function normalizeLocationUri(value) {
+    if (typeof value !== 'string') {
+      return ''
+    }
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return ''
+    }
+    const wikidataMatch = trimmed.match(/^https?:\/\/www\.wikidata\.org\/entity\/(Q\d+)$/i)
+    if (wikidataMatch) {
+      return `https://www.wikidata.org/entity/${wikidataMatch[1].toUpperCase()}`
+    }
+    return trimmed
+  }
+
+  function locationOptionLabel(item) {
+    if (!item || typeof item !== 'object') {
+      return ''
+    }
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    const uri = typeof item.uri === 'string' ? item.uri.trim() : ''
+    if (name && uri) {
+      return `${name} (${uri})`
+    }
+    return name || uri
+  }
+
+  function wikidataAutocompleteLabel(item) {
+    if (!item || typeof item !== 'object') {
+      return ''
+    }
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    const label = typeof item.label === 'string' ? item.label.trim() : ''
+    const description = typeof item.description === 'string' ? item.description.trim() : ''
+    const base = id ? `${label || id} (${id})` : (label || '')
+    if (!description) {
+      return base
+    }
+    return `${base} - ${description}`
+  }
+
+  function debounce(fn, delayMs) {
+    let timerId = null
+    return (...args) => {
+      if (timerId) {
+        window.clearTimeout(timerId)
+      }
+      timerId = window.setTimeout(() => {
+        fn(...args)
+      }, delayMs)
+    }
+  }
+
+  function normalizeTextForCompare(value) {
+    if (value === null || value === undefined) {
+      return ''
+    }
+    return String(value).trim().toLowerCase()
+  }
+
+  function textValuesDiffer(manualValue, wikidataValue) {
+    return normalizeTextForCompare(manualValue) !== normalizeTextForCompare(wikidataValue)
+  }
+
+  function parseCoordinate(value) {
+    const parsed = Number.parseFloat(String(value))
+    return Number.isNaN(parsed) ? null : parsed
+  }
+
+  function coordinatesDiffer(manualLat, manualLon, wikidataLat, wikidataLon) {
+    const mLat = parseCoordinate(manualLat)
+    const mLon = parseCoordinate(manualLon)
+    const wLat = parseCoordinate(wikidataLat)
+    const wLon = parseCoordinate(wikidataLon)
+
+    if (mLat === null || mLon === null || wLat === null || wLon === null) {
+      return !(mLat === null && mLon === null && wLat === null && wLon === null)
+    }
+
+    return Math.abs(mLat - wLat) > 0.00001 || Math.abs(mLon - wLon) > 0.00001
+  }
+
+  function displayValue(value, emptyPlaceholder) {
+    if (value === null || value === undefined) {
+      return emptyPlaceholder
+    }
+    const text = String(value).trim()
+    return text ? text : emptyPlaceholder
+  }
+
+  function escapeHtml(value) {
+    if (value === null || value === undefined) {
+      return ''
+    }
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+  }
+
+  function isHttpUrl(value) {
+    if (typeof value !== 'string') {
+      return false
+    }
+    const trimmed = value.trim()
+    return trimmed.startsWith('http://') || trimmed.startsWith('https://')
+  }
+
+  function formatCountValue(value, locale, emptyPlaceholder = '-') {
+    const parsed = Number.parseInt(String(value), 10)
+    if (Number.isNaN(parsed)) {
+      return emptyPlaceholder
+    }
+    return new Intl.NumberFormat(locale).format(parsed)
+  }
+
+  function parseImageCountValue(value) {
+    const parsed = Number.parseInt(String(value), 10)
+    if (Number.isNaN(parsed)) {
+      return null
+    }
+    return parsed < 0 ? 0 : parsed
+  }
+
+  function preferredCommonsImageSource(location) {
+    if (!location || typeof location !== 'object') {
+      return ''
+    }
+
+    const petscanCount = parseImageCountValue(location.commons_image_count_petscan)
+    const viewItCount = parseImageCountValue(location.view_it_image_count)
+
+    if (petscanCount === null && viewItCount === null) {
+      return ''
+    }
+    if (petscanCount === null) {
+      return 'view-it'
+    }
+    if (viewItCount === null) {
+      return 'petscan'
+    }
+    return viewItCount > petscanCount ? 'view-it' : 'petscan'
+  }
+
+  function preferredCommonsImageCount(location) {
+    const sourceKey = preferredCommonsImageSource(location)
+    if (sourceKey === 'view-it') {
+      return location && typeof location === 'object' ? location.view_it_image_count : ''
+    }
+    if (sourceKey === 'petscan') {
+      return location && typeof location === 'object' ? location.commons_image_count_petscan : ''
+    }
+    return ''
+  }
+
+  function preferredCommonsImageHref(location) {
+    if (!location || typeof location !== 'object') {
+      return ''
+    }
+    const sourceKey = preferredCommonsImageSource(location)
+    if (sourceKey === 'view-it') {
+      const url = typeof location.view_it_url === 'string' ? location.view_it_url.trim() : ''
+      return isHttpUrl(url) ? url : ''
+    }
+    if (sourceKey === 'petscan') {
+      const url = typeof location.commons_category_url === 'string' ? location.commons_category_url.trim() : ''
+      return isHttpUrl(url) ? url : ''
+    }
+    return ''
+  }
+
+  function formatCoordinatePair(latitude, longitude, locale, fractionDigits = 4, emptyPlaceholder = '-') {
+    const lat = Number.parseFloat(String(latitude))
+    const lon = Number.parseFloat(String(longitude))
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      return emptyPlaceholder
+    }
+    const numberFormat = new Intl.NumberFormat(locale, {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits
+    })
+    return `${numberFormat.format(lat)}, ${numberFormat.format(lon)}`
+  }
+
+  function hasTextValue(value) {
+    return normalizeTextForCompare(value) !== ''
+  }
+
+  function handleImageLoadError(event, fallbackUrl = '') {
+    const target = event && event.target ? event.target : null
+    if (!target) {
+      return
+    }
+
+    const normalizedFallback = typeof fallbackUrl === 'string' ? fallbackUrl.trim() : ''
+    if (normalizedFallback && target.src !== normalizedFallback) {
+      target.src = normalizedFallback
+      return
+    }
+
+    target.style.display = 'none'
+  }
+
+  function parseWikidataDateParts(value) {
+    if (typeof value !== 'string') {
+      return null
+    }
+
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return null
+    }
+
+    const match = trimmed.match(/^([+-]?\d{1,6})-(\d{2})-(\d{2})(?:T.*)?$/)
+    if (!match) {
+      return null
+    }
+
+    const year = Number.parseInt(match[1], 10)
+    const month = Number.parseInt(match[2], 10)
+    const day = Number.parseInt(match[3], 10)
+    if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) {
+      return null
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+      return null
+    }
+
+    return { year, month, day }
+  }
+
+  const messages = {
+    en: {
+      appTitle: 'Locations Explorer',
+      navList: 'List',
+      navMap: 'Map',
+      navDetail: 'Details',
+      loading: 'Loading...',
+      loadingProjects: 'Loading projects...',
+      loadError: 'Could not load data.',
+      noData: 'No locations found.',
+      openDetails: 'Open details',
+      backToList: 'Back to list',
+      coordinates: 'Coordinates',
+      locationOnMap: 'Location on map',
+      language: 'Language',
+      detailHint: 'Choose a location from list or map.',
+      basicInformation: 'Basic information',
+      mediaAndCounts: 'Media and image counts',
+      additionalProperties: 'Additional properties',
+      sourceUri: 'Source URI',
+      wikidataIdLabel: 'WIKIDATA ID',
+      project: 'Project',
+      defaultProject: 'Default data',
+      newProject: 'New Project',
+      newLocation: 'Create location',
+      createSubLocation: 'Create sub-location',
+      saveImage: 'Save image',
+      saveImageWizardTitle: 'Save image with Upload Wizard',
+      saveImageWizardLocationStep: 'Step 1: Choose image location',
+      saveImageWizardLocationHelp: 'Pick coordinates from the map. Initial coordinates come from this location.',
+      saveImageCoordinateSource: 'Coordinate source',
+      saveImageCoordinateSourceMap: 'Map coordinates',
+      saveImageCoordinateSourceExif: 'Image EXIF coordinates',
+      saveImageExifCoordinatesHint: 'Map selection is hidden. Upload Wizard uses coordinates from image EXIF metadata.',
+      saveImageCaption: 'Caption text',
+      saveImageCategories: 'Categories',
+      saveImageCategoriesHelp: 'Search categories and add them to the list.',
+      saveImageCategorySuggestionsEmpty: 'No category suggestions.',
+      saveImageSubcategorySuggestions: 'Subcategories from selected categories',
+      addCategory: 'Add',
+      removeCategory: 'Remove',
+      saveImageOpenUploadWizard: 'Open Wikimedia Commons Upload Wizard',
+      saveImageCoordinatesRequired: 'Select coordinates on map or enable EXIF coordinates.',
+      saveImageUrlPreview: 'Upload Wizard URL preview',
+      createProjectTitle: 'Create Project',
+      createLocationTitle: 'Create Draft Location',
+      editLocationTitle: 'Edit Draft Location',
+      editLocationData: 'Edit details',
+      projectName: 'Name',
+      projectDescription: 'Description',
+      locationName: 'Location name',
+      locationDescription: 'Description text',
+      locationType: 'Type',
+      wikidataItem: 'Wikidata item',
+      latitude: 'Latitude',
+      longitude: 'Longitude',
+      addressText: 'Address',
+      postalCode: 'Postal code',
+      municipalityP131: 'Municipality (P131)',
+      locatedInAdministrativeTerritorialEntityP131: 'Located in the administrative territorial entity (P131)',
+      streetAddressP6375: 'Street address (P6375)',
+      postalCodeP281: 'Postal code (P281)',
+      locatedOnStreetP669: 'Located on street (P669)',
+      houseNumberP670: 'House number (P670)',
+      heritageDesignationP1435: 'Heritage designation (P1435)',
+      instanceOfP31: 'Instance of (P31)',
+      architecturalStyleP149: 'Architectural style (P149)',
+      routeInstructionP2795: 'Route instruction (P2795)',
+      ysoIdP2347: 'YSO ID (P2347)',
+      kantoIdP8980: 'KANTO ID (P8980)',
+      protectedBuildingsRegisterInFinlandIdP5310: 'Protected Buildings Register in Finland ID (P5310)',
+      rkyNationalBuiltHeritageEnvironmentIdP4009: 'RKY national built heritage environment ID (P4009)',
+      registerIds: 'Register IDs',
+      permanentBuildingNumberVtjPrtP3824: 'Permanent building number VTJ-PRT (P3824)',
+      protectedBuildingsRegisterInFinlandBuildingIdP5313: 'Protected Buildings Register in Finland Building ID (P5313)',
+      helsinkiPersistentBuildingIdRatuP8355: 'Helsinki persistent building ID Ratu (P8355)',
+      commonsCategory: 'Wikimedia Commons category',
+      commonsImagesPetScan: 'Commons images (PetScan)',
+      viewItImages: 'View-it images',
+      commonsImagesWithSource: 'Commons images ({source})',
+      imageSourcePetScan: 'petscan',
+      imageSourceViewIt: 'view-it',
+      inceptionP571: 'Inception (P571)',
+      locationP276: 'Location (P276)',
+      architectP84: 'Architect (P84)',
+      officialClosureDateP3999: 'Date of official closure (P3999)',
+      stateOfUseP5817: 'State of use (P5817)',
+      image: 'Image',
+      parentLocation: 'Parent location',
+      parentLocationPlaceholder: 'Search parent location...',
+      clearParent: 'Clear parent',
+      wikidataItemPlaceholder: 'Search Wikidata item...',
+      datasourceType: 'Datasource',
+      endpointPreset: 'Endpoint preset',
+      customEndpoint: 'Custom endpoint',
+      sparqlEndpoint: 'SPARQL endpoint',
+      sparqlQuery: 'SPARQL query',
+      create: 'Create',
+      saveChanges: 'Save changes',
+      cancel: 'Cancel',
+      saving: 'Saving...',
+      testQuery: 'Test query',
+      testingQuery: 'Testing...',
+      testQueryResult: 'Query returned {count} items.',
+      testQueryNoResult: 'Query executed successfully, but returned no items.',
+      projectNameRequired: 'Project name is required.',
+      projectQueryRequired: 'SPARQL query is required.',
+      sparqlHelp: 'Use variables uri, label, comment, and either coord or lat/lon. Optional placeholders: {{lang}}, {{limit}}.',
+      locationNameRequired: 'Location name is required.',
+      locationTypeRequired: 'Location type is required.',
+      latitudeRequired: 'Latitude is required.',
+      longitudeRequired: 'Longitude is required.',
+      municipalitySelectionRequired: 'Select municipality from suggestions.',
+      commonsSelectionRequired: 'Select Commons category from suggestions.',
+      parentSelectionRequired: 'Select parent location from suggestions.',
+      wikidataLookupLoading: 'Loading Wikidata details...',
+      wikidataLookupFailed: 'Could not load Wikidata details.',
+      wikidataSourceNotice: 'Values are read from Wikidata. Clear Wikidata item to edit fields manually.',
+      wikidataEditDiffNotice: 'Wikidata values are primary. Local values are shown for comparison and cannot be edited.',
+      wikidataCoordinatesMissing: 'Wikidata item has no coordinates.',
+      pickCoordinates: 'Pick from map',
+      coordinatePickerTitle: 'Pick coordinates',
+      placeSearch: 'Place search',
+      search: 'Search',
+      searching: 'Searching...',
+      noSearchResults: 'No matches found.',
+      useSelectedCoordinates: 'Use selected coordinates',
+      typePlaceholder: 'Search Wikidata type...',
+      municipalityPlaceholder: 'Search municipality (Wikidata)...',
+      commonsPlaceholder: 'Search Commons category...',
+      autocompleteNoMatches: 'No suggestions.',
+      lockedField: 'Locked',
+      manualValue: 'Manual',
+      wikidataValue: 'Wikidata',
+      differentValue: 'Different',
+      noValue: '-',
+      coordMapLegendManual: 'Manual coordinates',
+      coordMapLegendWikidata: 'Wikidata coordinates',
+      subLocations: 'Sub-locations',
+      noSubLocations: 'No sub-locations yet.',
+      openDetailsFor: 'Open details for {name}',
+      back: 'Back',
+      createLocationTypeStepTitle: 'How do you want to create the location?',
+      createWizardIntro: 'Choose the creation method first. You can return and change this selection.',
+      createModeExistingTitle: 'Add existing Wikidata item',
+      createModeExistingDesc: 'Pick an existing Wikidata item and add P5008 = Q138299296 if missing.',
+      createModeNewWikidataTitle: 'Create new Wikidata item',
+      createModeNewWikidataDesc: 'Use a guided form to create a new Wikidata item for a building.',
+      createModeLocalTitle: 'Create local draft',
+      createModeLocalDesc: 'Create a locally stored draft as before.',
+      addExistingWikidataTitle: 'Add Existing Wikidata Item',
+      addExistingWikidataHelp: 'Select an existing Wikidata item. The app adds P5008 = Q138299296 only if it is missing.',
+      createNewWikidataTitle: 'Create New Wikidata Item',
+      createNewWikidataHelp: 'Required for building: label, description, P31, P17, P131, coordinates.',
+      locationAndCoordinates: 'Location and coordinates',
+      createWikidataItem: 'Create Wikidata item',
+      addToList: 'Add to list',
+      next: 'Next',
+      wikidataItemRequired: 'Wikidata item is required.',
+      locationDescriptionRequired: 'Description is required.',
+      countryP17: 'Country (P17)',
+      countrySelectionRequired: 'Select country from suggestions.',
+      sourceUrl: 'Source URL',
+      sourceUrlPlaceholder: 'https://example.org/source',
+      sourceUrlRequiredForArchitect: 'Architect source URL is required.',
+      sourceUrlRequiredForInception: 'Inception source URL is required.',
+      sourceUrlRequiredForOfficialClosure: 'Official closure date source URL is required.',
+      sourceUrlRequiredForHeritage: 'Heritage status source URL is required.',
+      keyPropertiesWithSources: 'Key properties with source',
+      optionalProperties: 'Optional properties',
+      countryPlaceholder: 'Search country (Wikidata)...',
+      signInWikimedia: 'Sign in with Wikimedia',
+      signOut: 'Sign out',
+      signedInAs: 'Signed in as {name}',
+      addLocationWithCradle: 'Add location with Cradle',
+      cradleGuideTitle: 'Add location with Cradle',
+      cradleGuideIntro: 'Cradle is a tool for creating new Wikidata items with a form. To use Cradle:',
+      cradleGuideStep1: 'Select English as language if it is not already selected.',
+      cradleGuideStep2: 'Sign in to Cradle first from the top-right corner.',
+      cradleGuideStep3: 'If you are not on the form page, choose form "Building (Wikikuvaajat)".',
+      cradleGuideStep4: 'Fill at least Labels, instance of, country, and located in the administrative entity (municipality). Tip: the row supports multi-select. For text fields, set language to "fi".',
+      cradleGuideStep5: 'When all required fields are filled, click "Create item" at the bottom of the page.',
+      cradleGuideStep6: 'Wait for creation. There is a busy indicator at the top, but it may never finish; verify completion directly from Wikidata.',
+      openCradle: 'Open Cradle',
+      authRequiredForWikidataWrites: 'Sign in with Wikimedia before editing Wikidata.',
+      authRequiredForLocationWrites: 'Sign in with Wikimedia before adding locations.'
+    },
+    sv: {
+      appTitle: 'Platsutforskare',
+      navList: 'Lista',
+      navMap: 'Karta',
+      navDetail: 'Detaljer',
+      loading: 'Laddar...',
+      loadingProjects: 'Laddar projekt...',
+      loadError: 'Kunde inte ladda data.',
+      noData: 'Inga platser hittades.',
+      openDetails: 'Visa detaljer',
+      backToList: 'Tillbaka till listan',
+      coordinates: 'Koordinater',
+      locationOnMap: 'Plats på karta',
+      language: 'Språk',
+      detailHint: 'Välj en plats från lista eller karta.',
+      basicInformation: 'Grundinformation',
+      mediaAndCounts: 'Media och bildantal',
+      additionalProperties: 'Ytterligare egenskaper',
+      sourceUri: 'Käll-URI',
+      wikidataIdLabel: 'WIKIDATA ID',
+      project: 'Projekt',
+      defaultProject: 'Standarddata',
+      newProject: 'Nytt projekt',
+      newLocation: 'Skapa plats',
+      createSubLocation: 'Skapa underplats',
+      saveImage: 'Spara bild',
+      saveImageWizardTitle: 'Spara bild med Upload Wizard',
+      saveImageWizardLocationStep: 'Steg 1: Välj bildens plats',
+      saveImageWizardLocationHelp: 'Välj koordinater på kartan. Platsens koordinater används som startvärden.',
+      saveImageCoordinateSource: 'Koordinatkälla',
+      saveImageCoordinateSourceMap: 'Kartkoordinater',
+      saveImageCoordinateSourceExif: 'Bildens EXIF-koordinater',
+      saveImageExifCoordinatesHint: 'Kartval är dolt. Upload Wizard använder koordinater från bildens EXIF-metadata.',
+      saveImageCaption: 'Bildtext',
+      saveImageCategories: 'Kategorier',
+      saveImageCategoriesHelp: 'Sök kategorier och lägg till dem i listan.',
+      saveImageCategorySuggestionsEmpty: 'Inga kategoriförslag.',
+      saveImageSubcategorySuggestions: 'Underkategorier från valda kategorier',
+      addCategory: 'Lägg till',
+      removeCategory: 'Ta bort',
+      saveImageOpenUploadWizard: 'Öppna Wikimedia Commons Upload Wizard',
+      saveImageCoordinatesRequired: 'Välj koordinater på kartan eller aktivera EXIF-koordinater.',
+      saveImageUrlPreview: 'Förhandsgranskning av Upload Wizard-URL',
+      createProjectTitle: 'Skapa projekt',
+      createLocationTitle: 'Skapa utkastplats',
+      editLocationTitle: 'Redigera utkastplats',
+      editLocationData: 'Redigera uppgifter',
+      projectName: 'Namn',
+      projectDescription: 'Beskrivning',
+      locationName: 'Platsnamn',
+      locationDescription: 'Beskrivningstext',
+      locationType: 'Typ',
+      wikidataItem: 'Wikidata-objekt',
+      latitude: 'Latitud',
+      longitude: 'Longitud',
+      addressText: 'Adress',
+      postalCode: 'Postnummer',
+      municipalityP131: 'Kommun (P131)',
+      locatedInAdministrativeTerritorialEntityP131: 'Belägen i administrativ enhet (P131)',
+      streetAddressP6375: 'Gatuadress (P6375)',
+      postalCodeP281: 'Postnummer (P281)',
+      locatedOnStreetP669: 'Belägen på gata (P669)',
+      houseNumberP670: 'Husnummer (P670)',
+      heritageDesignationP1435: 'Kulturminnesklassning (P1435)',
+      instanceOfP31: 'Instans av (P31)',
+      architecturalStyleP149: 'Arkitektonisk stil (P149)',
+      routeInstructionP2795: 'Vägbeskrivning (P2795)',
+      ysoIdP2347: 'YSO-ID (P2347)',
+      kantoIdP8980: 'KANTO-ID (P8980)',
+      protectedBuildingsRegisterInFinlandIdP5310: 'ID i skyddade byggnaders register i Finland (P5310)',
+      rkyNationalBuiltHeritageEnvironmentIdP4009: 'RKY nationellt byggt kulturmiljö-ID (P4009)',
+      registerIds: 'Register-ID:n',
+      permanentBuildingNumberVtjPrtP3824: 'Permanent byggnadsnummer VTJ-PRT (P3824)',
+      protectedBuildingsRegisterInFinlandBuildingIdP5313: 'Byggnads-ID i skyddade byggnaders register i Finland (P5313)',
+      helsinkiPersistentBuildingIdRatuP8355: 'Helsingfors beständiga byggnads-ID Ratu (P8355)',
+      commonsCategory: 'Wikimedia Commons-kategori',
+      commonsImagesPetScan: 'Commons-bilder (PetScan)',
+      viewItImages: 'View-it-bilder',
+      commonsImagesWithSource: 'Commons-bilder ({source})',
+      imageSourcePetScan: 'petscan',
+      imageSourceViewIt: 'view-it',
+      inceptionP571: 'Starttid (P571)',
+      locationP276: 'Plats (P276)',
+      architectP84: 'Arkitekt (P84)',
+      officialClosureDateP3999: 'Datum för officiell stängning (P3999)',
+      stateOfUseP5817: 'Användningsstatus (P5817)',
+      image: 'Bild',
+      parentLocation: 'Överordnad plats',
+      parentLocationPlaceholder: 'Sök överordnad plats...',
+      clearParent: 'Rensa overordnad',
+      wikidataItemPlaceholder: 'Sök Wikidata-objekt...',
+      datasourceType: 'Datakälla',
+      endpointPreset: 'Endpoint-val',
+      customEndpoint: 'Anpassad endpoint',
+      sparqlEndpoint: 'SPARQL-endpoint',
+      sparqlQuery: 'SPARQL-fråga',
+      create: 'Skapa',
+      saveChanges: 'Spara ändringar',
+      cancel: 'Avbryt',
+      saving: 'Sparar...',
+      testQuery: 'Testa fråga',
+      testingQuery: 'Testar...',
+      testQueryResult: 'Frågan returnerade {count} objekt.',
+      testQueryNoResult: 'Frågan lyckades, men returnerade inga objekt.',
+      projectNameRequired: 'Projektnamn krävs.',
+      projectQueryRequired: 'SPARQL-fråga krävs.',
+      sparqlHelp: 'Använd variablerna uri, label, comment, och antingen coord eller lat/lon. Valfria platshållare: {{lang}}, {{limit}}.',
+      locationNameRequired: 'Platsnamn krävs.',
+      locationTypeRequired: 'Platstyp krävs.',
+      latitudeRequired: 'Latitud krävs.',
+      longitudeRequired: 'Longitud krävs.',
+      municipalitySelectionRequired: 'Välj kommun från förslag.',
+      commonsSelectionRequired: 'Välj Commons-kategori från förslag.',
+      parentSelectionRequired: 'Välj överordnad plats från förslag.',
+      wikidataLookupLoading: 'Laddar Wikidata-uppgifter...',
+      wikidataLookupFailed: 'Kunde inte hämta Wikidata-uppgifter.',
+      wikidataSourceNotice: 'Värden kommer från Wikidata. Töm Wikidata-fältet för manuell redigering.',
+      wikidataEditDiffNotice: 'Wikidata-värden är primära. Lokala värden visas för jämförelse och kan inte redigeras.',
+      wikidataCoordinatesMissing: 'Wikidata-objektet saknar koordinater.',
+      pickCoordinates: 'Välj på karta',
+      coordinatePickerTitle: 'Välj koordinater',
+      placeSearch: 'Sök plats',
+      search: 'Sök',
+      searching: 'Söker...',
+      noSearchResults: 'Inga träffar.',
+      useSelectedCoordinates: 'Använd valda koordinater',
+      typePlaceholder: 'Sök Wikidata-typ...',
+      municipalityPlaceholder: 'Sök kommun (Wikidata)...',
+      commonsPlaceholder: 'Sök Commons-kategori...',
+      autocompleteNoMatches: 'Inga förslag.',
+      lockedField: 'Låst',
+      manualValue: 'Manuell',
+      wikidataValue: 'Wikidata',
+      differentValue: 'Avviker',
+      noValue: '-',
+      coordMapLegendManual: 'Manuella koordinater',
+      coordMapLegendWikidata: 'Wikidata-koordinater',
+      subLocations: 'Underplatser',
+      noSubLocations: 'Inga underplatser ännu.',
+      openDetailsFor: 'Visa detaljer för {name}',
+      back: 'Tillbaka',
+      createLocationTypeStepTitle: 'Hur vill du skapa platsen?',
+      createWizardIntro: 'Välj först hur platsen ska skapas. Du kan gå tillbaka och byta val.',
+      createModeExistingTitle: 'Lägg till befintligt Wikidata-objekt',
+      createModeExistingDesc: 'Välj ett befintligt Wikidata-objekt och lägg till P5008 = Q138299296 vid behov.',
+      createModeNewWikidataTitle: 'Skapa nytt Wikidata-objekt',
+      createModeNewWikidataDesc: 'Använd ett guidat formulär för att skapa ett nytt Wikidata-objekt för en byggnad.',
+      createModeLocalTitle: 'Skapa lokalt utkast',
+      createModeLocalDesc: 'Skapa ett lokalt sparat utkast som tidigare.',
+      addExistingWikidataTitle: 'Lägg till befintligt Wikidata-objekt',
+      addExistingWikidataHelp: 'Välj ett befintligt Wikidata-objekt. Appen lägger till P5008 = Q138299296 om den saknas.',
+      createNewWikidataTitle: 'Skapa nytt Wikidata-objekt',
+      createNewWikidataHelp: 'Obligatoriskt för byggnad: etikett, beskrivning, P31, P17, P131, koordinater.',
+      locationAndCoordinates: 'Plats och koordinater',
+      createWikidataItem: 'Skapa Wikidata-objekt',
+      addToList: 'Lägg till i listan',
+      next: 'Nästa',
+      wikidataItemRequired: 'Wikidata-objekt krävs.',
+      locationDescriptionRequired: 'Beskrivning krävs.',
+      countryP17: 'Land (P17)',
+      countrySelectionRequired: 'Välj land från förslag.',
+      sourceUrl: 'Käll-URL',
+      sourceUrlPlaceholder: 'https://example.org/source',
+      sourceUrlRequiredForArchitect: 'Käll-URL krävs för arkitekt.',
+      sourceUrlRequiredForInception: 'Käll-URL krävs för starttid.',
+      sourceUrlRequiredForOfficialClosure: 'Käll-URL krävs för datum för officiell stängning.',
+      sourceUrlRequiredForHeritage: 'Käll-URL krävs för kulturminnesstatus.',
+      keyPropertiesWithSources: 'Nyckelegenskaper med källa',
+      optionalProperties: 'Valfria egenskaper',
+      countryPlaceholder: 'Sök land (Wikidata)...',
+      signInWikimedia: 'Logga in med Wikimedia',
+      signOut: 'Logga ut',
+      signedInAs: 'Inloggad som {name}',
+      addLocationWithCradle: 'Lägg till plats med Cradle',
+      cradleGuideTitle: 'Lägg till plats med Cradle',
+      cradleGuideIntro: 'Cradle är ett verktyg för att skapa nya Wikidata-objekt med ett formulär. För att använda Cradle:',
+      cradleGuideStep1: 'Välj engelska som språk om det inte redan är valt.',
+      cradleGuideStep2: 'Logga först in i Cradle från övre högra hörnet.',
+      cradleGuideStep3: 'Om du inte är på formulärsidan, välj formuläret "Building (Wikikuvaajat)".',
+      cradleGuideStep4: 'Fyll minst i Labels, instance of, country och located in the administrative entity (kommun). Tips: raden stöder flerval. För textfält, sätt språk till "fi".',
+      cradleGuideStep5: 'När alla obligatoriska fält är ifyllda, klicka på "Create item" längst ner på sidan.',
+      cradleGuideStep6: 'Vänta på skapandet. Det finns en busy-indikator högst upp, men den kan fastna; kontrollera resultatet direkt i Wikidata.',
+      openCradle: 'Öppna Cradle',
+      authRequiredForWikidataWrites: 'Logga in med Wikimedia innan du redigerar Wikidata.',
+      authRequiredForLocationWrites: 'Logga in med Wikimedia innan du lägger till platser.'
+    },
+    fi: {
+      appTitle: 'Sijaintiselain',
+      navList: 'Lista',
+      navMap: 'Kartta',
+      navDetail: 'Tiedot',
+      loading: 'Ladataan...',
+      loadingProjects: 'Ladataan projekteja...',
+      loadError: 'Tietojen lataus ei onnistunut.',
+      noData: 'Sijainteja ei löytynyt.',
+      openDetails: 'Avaa tiedot',
+      backToList: 'Takaisin listaan',
+      coordinates: 'Koordinaatit',
+      locationOnMap: 'Sijainti kartalla',
+      language: 'Kieli',
+      detailHint: 'Valitse sijainti listasta tai kartalta.',
+      basicInformation: 'Perustiedot',
+      mediaAndCounts: 'Media ja kuvamäärät',
+      additionalProperties: 'Lisäominaisuudet',
+      sourceUri: 'Lähde-URI',
+      wikidataIdLabel: 'WIKIDATA ID',
+      project: 'Projekti',
+      defaultProject: 'Oletusdata',
+      newProject: 'Uusi projekti',
+      newLocation: 'Luo kohde',
+      createSubLocation: 'Luo alakohde',
+      saveImage: 'Tallenna kuva',
+      saveImageWizardTitle: 'Tallenna kuva Upload Wizardilla',
+      saveImageWizardLocationStep: 'Vaihe 1: Valitse kuvan sijainti',
+      saveImageWizardLocationHelp: 'Valitse koordinaatit kartalta. Kohteen koordinaatteja käytetään alkuarvoina.',
+      saveImageCoordinateSource: 'Koordinaattien lähde',
+      saveImageCoordinateSourceMap: 'Karttakoordinaatit',
+      saveImageCoordinateSourceExif: 'Kuvan EXIF-koordinaatit',
+      saveImageExifCoordinatesHint: 'Karttavalinta on piilotettu. Upload Wizard käyttää kuvan EXIF-metatietojen koordinaatteja.',
+      saveImageCaption: 'Kuvateksti',
+      saveImageCategories: 'Luokat',
+      saveImageCategoriesHelp: 'Hae luokkia ja lisää ne listaan.',
+      saveImageCategorySuggestionsEmpty: 'Ei luokkaehdotuksia.',
+      saveImageSubcategorySuggestions: 'Valittujen luokkien alaluokat',
+      addCategory: 'Lisää',
+      removeCategory: 'Poista',
+      saveImageOpenUploadWizard: 'Avaa Wikimedia Commonsin Upload Wizard',
+      saveImageCoordinatesRequired: 'Valitse koordinaatit kartalta tai ota EXIF-koordinaatit käyttöön.',
+      saveImageUrlPreview: 'Upload Wizard -URL esikatselu',
+      createProjectTitle: 'Luo projekti',
+      createLocationTitle: 'Luo kohdeluonnos',
+      editLocationTitle: 'Muokkaa kohdeluonnosta',
+      editLocationData: 'Muokkaa tietoja',
+      projectName: 'Nimi',
+      projectDescription: 'Kuvaus',
+      locationName: 'Kohteen nimi',
+      locationDescription: 'Kuvausteksti',
+      locationType: 'Tyyppi',
+      wikidataItem: 'Wikidata-kohde',
+      latitude: 'Leveysaste',
+      longitude: 'Pituusaste',
+      addressText: 'Osoite',
+      postalCode: 'Postinumero',
+      municipalityP131: 'Kunta (P131)',
+      locatedInAdministrativeTerritorialEntityP131: 'Sijaitsee hallinnollisella alueella (P131)',
+      streetAddressP6375: 'Katuosoite (P6375)',
+      postalCodeP281: 'Postinumero (P281)',
+      locatedOnStreetP669: 'Sijaitsee kadulla (P669)',
+      houseNumberP670: 'Talonumero (P670)',
+      heritageDesignationP1435: 'Suojelustatus (P1435)',
+      instanceOfP31: 'Luokka (P31)',
+      architecturalStyleP149: 'Arkkitehtoninen tyyli (P149)',
+      routeInstructionP2795: 'Reittiohje (P2795)',
+      ysoIdP2347: 'YSO-tunniste (P2347)',
+      kantoIdP8980: 'KANTO-tunniste (P8980)',
+      protectedBuildingsRegisterInFinlandIdP5310: 'Suomen suojeltujen rakennusten rekisterin tunniste (P5310)',
+      rkyNationalBuiltHeritageEnvironmentIdP4009: 'RKY valtakunnallisesti merkittävän rakennetun kulttuuriympäristön tunniste (P4009)',
+      registerIds: 'Rekisteritunnisteet',
+      permanentBuildingNumberVtjPrtP3824: 'Pysyvä rakennustunnus VTJ-PRT (P3824)',
+      protectedBuildingsRegisterInFinlandBuildingIdP5313: 'Suojeltujen rakennusten rekisterin rakennustunnus (P5313)',
+      helsinkiPersistentBuildingIdRatuP8355: 'Helsingin pysyvä rakennustunnus Ratu (P8355)',
+      commonsCategory: 'Wikimedia Commons -luokka',
+      commonsImagesPetScan: 'Commons-kuvat (PetScan)',
+      viewItImages: 'View-it-kuvat',
+      commonsImagesWithSource: 'Commons-kuvat ({source})',
+      imageSourcePetScan: 'petscan',
+      imageSourceViewIt: 'view-it',
+      inceptionP571: 'Aloitusajankohta (P571)',
+      locationP276: 'Sijainti (P276)',
+      architectP84: 'Arkkitehti (P84)',
+      officialClosureDateP3999: 'Virallinen sulkemispäivä (P3999)',
+      stateOfUseP5817: 'Käytön tila (P5817)',
+      image: 'Kuva',
+      parentLocation: 'Yläkohde',
+      parentLocationPlaceholder: 'Hae yläkohdetta...',
+      clearParent: 'Tyhjennä yläkohde',
+      wikidataItemPlaceholder: 'Hae Wikidata-kohdetta...',
+      datasourceType: 'Tietolähde',
+      endpointPreset: 'Päätepistevalinta',
+      customEndpoint: 'Mukautettu päätepiste',
+      sparqlEndpoint: 'SPARQL-päätepiste',
+      sparqlQuery: 'SPARQL-kysely',
+      create: 'Luo',
+      saveChanges: 'Tallenna muutokset',
+      cancel: 'Peruuta',
+      saving: 'Tallennetaan...',
+      testQuery: 'Testaa kysely',
+      testingQuery: 'Testataan...',
+      testQueryResult: 'Kysely palautti {count} kohdetta.',
+      testQueryNoResult: 'Kysely onnistui, mutta ei palauttanut kohteita.',
+      projectNameRequired: 'Projektin nimi vaaditaan.',
+      projectQueryRequired: 'SPARQL-kysely vaaditaan.',
+      sparqlHelp: 'Käytä muuttujia uri, label, comment ja joko coord tai lat/lon. Valinnaiset paikat: {{lang}}, {{limit}}.',
+      locationNameRequired: 'Kohteen nimi vaaditaan.',
+      locationTypeRequired: 'Kohteen tyyppi vaaditaan.',
+      latitudeRequired: 'Leveysaste vaaditaan.',
+      longitudeRequired: 'Pituusaste vaaditaan.',
+      municipalitySelectionRequired: 'Valitse kunta ehdotuksista.',
+      commonsSelectionRequired: 'Valitse Commons-luokka ehdotuksista.',
+      parentSelectionRequired: 'Valitse yläkohde ehdotuksista.',
+      wikidataLookupLoading: 'Haetaan Wikidata-tietoja...',
+      wikidataLookupFailed: 'Wikidata-tietojen haku ei onnistunut.',
+      wikidataSourceNotice: 'Arvot tulevat Wikidatasta. Tyhjennä Wikidata-kohde muokataksesi kenttiä.',
+      wikidataEditDiffNotice: 'Wikidata-arvot ovat ensisijaisia. Paikalliset arvot näytetään vertailua varten eikä niitä voi muokata.',
+      wikidataCoordinatesMissing: 'Wikidata-kohteella ei ole koordinaatteja.',
+      pickCoordinates: 'Valitse kartalta',
+      coordinatePickerTitle: 'Valitse koordinaatit',
+      placeSearch: 'Paikannimihaku',
+      search: 'Hae',
+      searching: 'Haetaan...',
+      noSearchResults: 'Ei hakutuloksia.',
+      useSelectedCoordinates: 'Käytä valittuja koordinaatteja',
+      typePlaceholder: 'Hae Wikidata-tyyppiä...',
+      municipalityPlaceholder: 'Hae kuntaa (Wikidata)...',
+      commonsPlaceholder: 'Hae Commons-luokkaa...',
+      autocompleteNoMatches: 'Ei ehdotuksia.',
+      lockedField: 'Lukittu',
+      manualValue: 'Manuaalinen',
+      wikidataValue: 'Wikidata',
+      differentValue: 'Poikkeaa',
+      noValue: '-',
+      coordMapLegendManual: 'Manuaaliset koordinaatit',
+      coordMapLegendWikidata: 'Wikidata-koordinaatit',
+      subLocations: 'Alakohteet',
+      noSubLocations: 'Ei alakohteita vielä.',
+      openDetailsFor: 'Avaa kohteen {name} tiedot',
+      back: 'Takaisin',
+      createLocationTypeStepTitle: 'Miten haluat luoda kohteen?',
+      createWizardIntro: 'Valitse ensin luontitapa. Voit palata taakse ja vaihtaa valintaa.',
+      createModeExistingTitle: 'Lisää olemassa oleva Wikidata-kohde',
+      createModeExistingDesc: 'Valitse olemassa oleva Wikidata-kohde ja lisää P5008 = Q138299296 jos se puuttuu.',
+      createModeNewWikidataTitle: 'Luo uusi Wikidata-kohde',
+      createModeNewWikidataDesc: 'Luo rakennukselle uusi Wikidata-kohde ohjatulla lomakkeella.',
+      createModeLocalTitle: 'Luo paikallinen luonnos',
+      createModeLocalDesc: 'Luo paikallisesti tallennettava luonnos kuten aiemmin.',
+      addExistingWikidataTitle: 'Lisää olemassa oleva Wikidata-kohde',
+      addExistingWikidataHelp: 'Valitse olemassa oleva Wikidata-kohde. Sovellus lisää P5008 = Q138299296 vain jos se puuttuu.',
+      createNewWikidataTitle: 'Luo uusi Wikidata-kohde',
+      createNewWikidataHelp: 'Rakennukselle pakolliset tiedot: nimi, kuvaus, P31, P17, P131 ja koordinaatit.',
+      locationAndCoordinates: 'Sijainti ja koordinaatit',
+      createWikidataItem: 'Luo Wikidata-kohde',
+      addToList: 'Lisää listaan',
+      next: 'Seuraava',
+      wikidataItemRequired: 'Wikidata-kohde vaaditaan.',
+      locationDescriptionRequired: 'Kuvaus vaaditaan.',
+      countryP17: 'Maa (P17)',
+      countrySelectionRequired: 'Valitse maa ehdotuksista.',
+      sourceUrl: 'Lähde-URL',
+      sourceUrlPlaceholder: 'https://example.org/source',
+      sourceUrlRequiredForArchitect: 'Arkkitehdin lähde-URL vaaditaan.',
+      sourceUrlRequiredForInception: 'Luomisvuoden lähde-URL vaaditaan.',
+      sourceUrlRequiredForOfficialClosure: 'Virallisen sulkemispäivän lähde-URL vaaditaan.',
+      sourceUrlRequiredForHeritage: 'Suojelustatuksen lähde-URL vaaditaan.',
+      keyPropertiesWithSources: 'Keskeiset ominaisuudet ja lähteet',
+      optionalProperties: 'Valinnaiset ominaisuudet',
+      countryPlaceholder: 'Hae maa (Wikidata)...',
+      signInWikimedia: 'Kirjaudu Wikimediaan',
+      signOut: 'Kirjaudu ulos',
+      signedInAs: 'Kirjautunut: {name}',
+      addLocationWithCradle: 'Lisää kohde Cradlella',
+      cradleGuideTitle: 'Lisää kohde Cradlella',
+      cradleGuideIntro: 'Cradle on työkalu jolla voi luoda uusia wikidata-kohteita lomakkeella. Käyttääksesi Cradlea:',
+      cradleGuideStep1: 'Valitse kieleksi englanti jos se ei ole vielä se.',
+      cradleGuideStep2: 'Kirjaudu ensin sisälle Cradleen oikeasta yläreunasta.',
+      cradleGuideStep3: 'Jos et ole lomakesivulla, niin valitse lomakkeeksi "Building (Wikikuvaajat)".',
+      cradleGuideStep4: 'Täytä vähintään Labels, instance of, country, located in the admistrative entity (kunta). Vinkkinä rivillä on mahdollisuus monivalintaan. Tekstit vaatii kielen kohdalle arvon "fi".',
+      cradleGuideStep5: 'Kun kaikki vaaditut tiedot on täytetty niin sivun alareunassa on "Create item" -nappi.',
+      cradleGuideStep6: 'Odota luontia. Sivun yläreunassa on busy-indikaattori, mutta se ei valmistu ikinä ja valmistuminen pitää varmistaa Wikidatasta.',
+      openCradle: 'Avaa Cradle',
+      authRequiredForWikidataWrites: 'Kirjaudu Wikimediaan ennen Wikidata-muutoksia.',
+      authRequiredForLocationWrites: 'Kirjaudu Wikimediaan ennen kohteiden lisäämistä.'
+    }
+  }
+
+  const initialLocale =
+    normalizeSupportedLocale(localStorage.getItem('locale')) ||
+    normalizeSupportedLocale(navigator.language) ||
+    normalizeSupportedLocale(Array.isArray(navigator.languages) ? navigator.languages[0] : null) ||
+    'en'
+
+  const i18n = createI18n({
+    legacy: false,
+    locale: initialLocale,
+    fallbackLocale: 'en',
+    messages
+  })
+
+  const projects = ref([])
+  const activeProjectId = ref(localStorage.getItem('activeProjectId') || '')
+  const projectsLoading = ref(false)
+  const projectError = ref('')
+  const locationsVersion = ref(0)
+  const locationsCache = ref({})
+  const locationDetailCache = ref({})
+  const locationChildrenCache = ref({})
+  const pendingLocationLoads = new Map()
+  const pendingDetailLoads = new Map()
+  const pendingChildrenLoads = new Map()
+
+  function locationsCacheKey(lang) {
+    return normalizeSupportedLocale(lang) || 'en'
+  }
+
+  function invalidateLocationsCache() {
+    locationsCache.value = {}
+    locationDetailCache.value = {}
+    locationChildrenCache.value = {}
+  }
+
+  function normalizeCacheLocationId(locationId) {
+    if (typeof locationId !== 'string' || !locationId.trim()) {
+      return ''
+    }
+    return normalizeLocationId(locationId.trim())
+  }
+
+  function detailCacheKey(lang, locationId) {
+    return `${locationsCacheKey(lang)}|${normalizeCacheLocationId(locationId)}`
+  }
+
+  function childrenCacheKey(lang, locationId) {
+    return `${locationsCacheKey(lang)}|${normalizeCacheLocationId(locationId)}`
+  }
+
+  function findLocationInCachedList(locationId, lang) {
+    const normalizedId = normalizeCacheLocationId(locationId)
+    if (!normalizedId) {
+      return null
+    }
+
+    const cachedList = locationsCache.value[locationsCacheKey(lang)]
+    if (!Array.isArray(cachedList)) {
+      return null
+    }
+
+    for (const item of cachedList) {
+      if (!item || typeof item !== 'object') {
+        continue
+      }
+      const candidateId = normalizeCacheLocationId(String(item.id || ''))
+      if (candidateId && candidateId === normalizedId) {
+        return item
+      }
+
+      const candidateUri = normalizeCacheLocationId(String(item.uri || ''))
+      if (candidateUri && candidateUri === normalizedId) {
+        return item
+      }
+    }
+
+    return null
+  }
+
+  function getLocationFromListCache(locationId, lang) {
+    const cached = findLocationInCachedList(locationId, lang)
+    if (!cached || typeof cached !== 'object') {
+      return null
+    }
+    return { ...cached }
+  }
+
+  async function getLocationsCached(lang, { force = false } = {}) {
+    const key = locationsCacheKey(lang)
+    const hasCachedValue = Object.prototype.hasOwnProperty.call(locationsCache.value, key)
+    if (!force && hasCachedValue) {
+      return locationsCache.value[key]
+    }
+
+    if (!force && pendingLocationLoads.has(key)) {
+      return pendingLocationLoads.get(key)
+    }
+
+    const requestPromise = (async () => {
+      const loaded = await fetchLocations(key)
+      const normalized = Array.isArray(loaded) ? loaded : []
+      locationsCache.value = {
+        ...locationsCache.value,
+        [key]: normalized,
+      }
+      return normalized
+    })()
+
+    pendingLocationLoads.set(key, requestPromise)
+    try {
+      return await requestPromise
+    } finally {
+      pendingLocationLoads.delete(key)
+    }
+  }
+
+  async function getLocationDetailCached(locationId, lang, { force = false } = {}) {
+    const key = detailCacheKey(lang, locationId)
+    const hasCachedDetail = Object.prototype.hasOwnProperty.call(locationDetailCache.value, key)
+    if (!force && hasCachedDetail) {
+      return locationDetailCache.value[key]
+    }
+
+    if (!force && pendingDetailLoads.has(key)) {
+      return pendingDetailLoads.get(key)
+    }
+
+    const requestPromise = (async () => {
+      const loaded = await fetchLocation(locationId, lang)
+      locationDetailCache.value = {
+        ...locationDetailCache.value,
+        [key]: loaded,
+      }
+      if (loaded && typeof loaded === 'object' && Array.isArray(loaded.children)) {
+        locationChildrenCache.value = {
+          ...locationChildrenCache.value,
+          [childrenCacheKey(lang, locationId)]: loaded.children,
+        }
+      }
+      return loaded
+    })()
+
+    pendingDetailLoads.set(key, requestPromise)
+    try {
+      return await requestPromise
+    } finally {
+      pendingDetailLoads.delete(key)
+    }
+  }
+
+  async function getLocationChildrenCached(locationId, lang, { force = false } = {}) {
+    const key = childrenCacheKey(lang, locationId)
+    const hasCachedChildren = Object.prototype.hasOwnProperty.call(locationChildrenCache.value, key)
+    if (!force && hasCachedChildren) {
+      return locationChildrenCache.value[key]
+    }
+
+    if (!force && pendingChildrenLoads.has(key)) {
+      return pendingChildrenLoads.get(key)
+    }
+
+    const requestPromise = (async () => {
+      const loaded = await fetchLocationChildren(locationId, lang)
+      const normalized = Array.isArray(loaded) ? loaded : []
+      locationChildrenCache.value = {
+        ...locationChildrenCache.value,
+        [key]: normalized,
+      }
+      return normalized
+    })()
+
+    pendingChildrenLoads.set(key, requestPromise)
+    try {
+      return await requestPromise
+    } finally {
+      pendingChildrenLoads.delete(key)
+    }
+  }
+
+  function setActiveProject(projectId) {
+    const normalized = projectId ? String(projectId) : ''
+    activeProjectId.value = normalized
+    if (normalized) {
+      localStorage.setItem('activeProjectId', normalized)
+    } else {
+      localStorage.removeItem('activeProjectId')
+    }
+  }
+
+  async function loadProjects(preferredProjectId = null) {
+    projectsLoading.value = true
+    projectError.value = ''
+
+    try {
+      const loadedProjects = await fetchProjects()
+      projects.value = Array.isArray(loadedProjects) ? loadedProjects : []
+
+      const candidateId = preferredProjectId || localStorage.getItem('activeProjectId') || ''
+      const hasCandidate = projects.value.some((project) => String(project.id) === String(candidateId))
+      if (hasCandidate) {
+        setActiveProject(candidateId)
+      } else {
+        setActiveProject('')
+      }
+    } catch (error) {
+      projectError.value = error.message || 'Failed to load projects.'
+    } finally {
+      projectsLoading.value = false
+    }
+  }
+
+  async function createProjectRecord(payload) {
+    const created = await createProject(payload)
+    await loadProjects(String(created.id))
+    return created
+  }
+
+  function notifyLocationsChanged() {
+    invalidateLocationsCache()
+    locationsVersion.value += 1
+  }
+
+  const projectStore = {
+    projects,
+    activeProjectId,
+    projectsLoading,
+    projectError,
+    locationsVersion,
+    setActiveProject,
+    loadProjects,
+    createProjectRecord,
+    notifyLocationsChanged,
+    getLocationsCached,
+    getLocationFromListCache,
+    getLocationDetailCached,
+    getLocationChildrenCached,
+  }
+
+  const authStore = {
+    authEnabled: ref(false),
+    authAuthenticated: ref(false),
+    authUsername: ref(''),
+    authLoginUrl: ref('/auth/login/mediawiki/?next=/'),
+    authLogoutUrl: ref('/auth/logout/?next=/'),
+    authStatusLoading: ref(true),
+  }
+
+  const defaultProjectQuery = `PREFIX dbo: <http://dbpedia.org/ontology/>
+PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?uri ?label ?comment ?lat ?lon
+WHERE {
+  ?uri a dbo:Place ;
+       rdfs:label ?label ;
+       geo:lat ?lat ;
+       geo:long ?lon .
+  FILTER(lang(?label) = "{{lang}}")
+  OPTIONAL {
+    ?uri rdfs:comment ?comment .
+    FILTER(lang(?comment) = "{{lang}}")
+  }
+}
+LIMIT {{limit}}`
+
+  const endpointQueryTemplates = {
+    wikidata: `PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX schema: <http://schema.org/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?uri ?label ?comment ?coord
+WHERE {
+  ?uri wdt:P31/wdt:P279* wd:Q515 ;
+       wdt:P625 ?coord ;
+       rdfs:label ?label .
+  FILTER(LANG(?label) = "{{lang}}")
+  OPTIONAL {
+    ?uri schema:description ?comment .
+    FILTER(LANG(?comment) = "{{lang}}")
+  }
+}
+LIMIT {{limit}}`,
+    'qlever-wikidata': `PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX schema: <http://schema.org/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?uri ?label ?comment ?coord
+WHERE {
+  ?uri wdt:P31/wdt:P279* wd:Q515 ;
+       wdt:P625 ?coord ;
+       rdfs:label ?label .
+  FILTER(LANG(?label) = "{{lang}}")
+  OPTIONAL {
+    ?uri schema:description ?comment .
+    FILTER(LANG(?comment) = "{{lang}}")
+  }
+}
+LIMIT {{limit}}`,
+    'wikimedia-commons-query-service': `PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?uri ?label ?coord
+WHERE {
+  ?uri wdt:P1259 ?coord ;
+       rdfs:label ?label .
+  FILTER(LANG(?label) = "{{lang}}")
+}
+LIMIT {{limit}}`,
+    'qlever-wikimedia-commons': `PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?uri ?label ?coord
+WHERE {
+  ?uri wdt:P1259 ?coord ;
+       rdfs:label ?label .
+  FILTER(LANG(?label) = "{{lang}}")
+}
+LIMIT {{limit}}`,
+    'qlever-osm-planet': `PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+PREFIX osmkey: <https://www.openstreetmap.org/wiki/Key:>
+
+SELECT DISTINCT ?uri ?label ?lat ?lon
+WHERE {
+  ?uri osmkey:name ?label ;
+       geo:lat ?lat ;
+       geo:long ?lon .
+}
+LIMIT {{limit}}`,
+  }
+
+  function sampleQueryForEndpoint(endpointId) {
+    return endpointQueryTemplates[endpointId] || defaultProjectQuery
+  }
+
+  const LanguageSwitcher = {
+    setup() {
+      const { t, locale } = useI18n()
+
+      function onChange(event) {
+        const selectedLocale = normalizeSupportedLocale(event.target.value) || 'en'
+        locale.value = selectedLocale
+        localStorage.setItem('locale', selectedLocale)
+      }
+
+      return { t, locale, onChange }
+    },
+    template: `
+      <label class="language-switcher">
+        <span>{{ t('language') }}</span>
+        <select :value="locale" @change="onChange" aria-label="language selector">
+          <option value="en">EN</option>
+          <option value="sv">SV</option>
+          <option value="fi">FI</option>
+        </select>
+      </label>
+    `
+  }
+
+  const ListView = {
+    setup() {
+      const { t, locale } = useI18n()
+      const { activeProjectId, locationsVersion, getLocationsCached } = projectStore
+      const locations = ref([])
+      const loading = ref(false)
+      const error = ref('')
+      let silentRefreshTimer = null
+      let loadToken = 0
+
+      function clearSilentRefreshTimer() {
+        if (silentRefreshTimer !== null) {
+          clearTimeout(silentRefreshTimer)
+          silentRefreshTimer = null
+        }
+      }
+
+      function scheduleSilentRefresh(lang, token) {
+        clearSilentRefreshTimer()
+        silentRefreshTimer = setTimeout(async () => {
+          silentRefreshTimer = null
+          try {
+            const refreshed = await getLocationsCached(lang, { force: true })
+            if (token !== loadToken) {
+              return
+            }
+            locations.value = Array.isArray(refreshed) ? refreshed : []
+          } catch (silentRefreshError) {
+            void silentRefreshError
+          }
+        }, LOCATION_SILENT_REFRESH_DELAY_MS)
+      }
+
+      async function loadLocations() {
+        const token = ++loadToken
+        const currentLang = locale.value
+        loading.value = true
+        error.value = ''
+        clearSilentRefreshTimer()
+
+        try {
+          const loaded = await getLocationsCached(currentLang)
+          if (token !== loadToken) {
+            return
+          }
+          locations.value = Array.isArray(loaded) ? loaded : []
+          scheduleSilentRefresh(currentLang, token)
+        } catch (err) {
+          if (token !== loadToken) {
+            return
+          }
+          error.value = err.message || t('loadError')
+        } finally {
+          if (token === loadToken) {
+            loading.value = false
+          }
+        }
+      }
+
+      onMounted(loadLocations)
+      onBeforeUnmount(clearSilentRefreshTimer)
+      watch([() => locale.value, () => activeProjectId.value, () => locationsVersion.value], loadLocations)
+
+      function formatImageCount(value) {
+        return formatCountValue(value, locale.value, t('noValue'))
+      }
+
+      function hasImageCount(value) {
+        return value !== null && value !== undefined && value !== ''
+      }
+
+      function preferredImageSource(item) {
+        return preferredCommonsImageSource(item)
+      }
+
+      function preferredImageCount(item) {
+        return preferredCommonsImageCount(item)
+      }
+
+      function preferredImageHref(item) {
+        return preferredCommonsImageHref(item)
+      }
+
+      function commonsImagesLabel(item) {
+        const sourceKey = preferredImageSource(item)
+        if (!sourceKey) {
+          return ''
+        }
+        const sourceLabel = sourceKey === 'view-it' ? t('imageSourceViewIt') : t('imageSourcePetScan')
+        return t('commonsImagesWithSource', { source: sourceLabel })
+      }
+
+      function formatCoordinates(latitude, longitude) {
+        return formatCoordinatePair(latitude, longitude, locale.value)
+      }
+
+      function locationDisplayName(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        if (typeof item.name === 'string' && item.name.trim()) {
+          return item.name.trim()
+        }
+        if (typeof item.uri === 'string' && item.uri.trim()) {
+          return item.uri.trim()
+        }
+        return t('noValue')
+      }
+
+      function formatDescription(value) {
+        return displayValue(value, t('noValue'))
+      }
+
+      function detailsAriaLabel(item) {
+        return t('openDetailsFor', { name: locationDisplayName(item) })
+      }
+
+      return {
+        t,
+        locations,
+        loading,
+        error,
+        formatImageCount,
+        hasImageCount,
+        preferredImageSource,
+        preferredImageCount,
+        preferredImageHref,
+        commonsImagesLabel,
+        formatCoordinates,
+        locationDisplayName,
+        formatDescription,
+        detailsAriaLabel,
+        handleImageLoadError
+      }
+    },
+    template: `
+      <section class="view-section list-view" :aria-busy="loading ? 'true' : 'false'">
+        <p v-if="loading" class="status" role="status" aria-live="polite">{{ t('loading') }}</p>
+        <p v-else-if="error" class="status error" role="alert">{{ error }}</p>
+        <p v-else-if="locations.length === 0" class="status" role="status" aria-live="polite">{{ t('noData') }}</p>
+
+        <ul v-else class="locations-grid" :aria-label="t('navList')">
+          <li v-for="location in locations" :key="location.id" class="location-card">
+            <article class="card-content">
+              <header class="card-header">
+                <h2>
+                  <RouterLink
+                    class="text-link"
+                    :to="{ name: 'detail', params: { id: location.id } }"
+                    :aria-label="detailsAriaLabel(location)"
+                  >
+                    {{ locationDisplayName(location) }}
+                  </RouterLink>
+                </h2>
+              </header>
+              <figure v-if="location.image_thumb_url || location.image_url" class="location-thumb">
+                <RouterLink
+                  :to="{ name: 'detail', params: { id: location.id } }"
+                  :aria-label="detailsAriaLabel(location)"
+                >
+                  <img
+                    class="thumb-image"
+                    :src="location.image_thumb_url || location.image_url"
+                    :alt="location.image_name || locationDisplayName(location)"
+                    loading="lazy"
+                    @error="(event) => handleImageLoadError(event, location.image_url)"
+                  />
+                </RouterLink>
+              </figure>
+              <p class="desc">{{ formatDescription(location.description) }}</p>
+              <dl class="meta-list">
+                <div class="meta-row">
+                  <dt>{{ t('coordinates') }}</dt>
+                  <dd>{{ formatCoordinates(location.latitude, location.longitude) }}</dd>
+                </div>
+                <div v-if="location.commons_category" class="meta-row">
+                  <dt>{{ t('commonsCategory') }}</dt>
+                  <dd>
+                    <a
+                      v-if="location.commons_category_url"
+                      :href="location.commons_category_url"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {{ location.commons_category }}
+                    </a>
+                    <span v-else>{{ location.commons_category }}</span>
+                  </dd>
+                </div>
+                <div v-if="preferredImageSource(location)" class="meta-row">
+                  <dt>{{ commonsImagesLabel(location) }}</dt>
+                  <dd>
+                    <a
+                      v-if="preferredImageHref(location)"
+                      :href="preferredImageHref(location)"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {{ formatImageCount(preferredImageCount(location)) }}
+                    </a>
+                    <span v-else>{{ formatImageCount(preferredImageCount(location)) }}</span>
+                  </dd>
+                </div>
+              </dl>
+            </article>
+          </li>
+        </ul>
+      </section>
+    `
+  }
+
+  const MapView = {
+    setup() {
+      const { t, locale } = useI18n()
+      const { activeProjectId, locationsVersion, getLocationsCached } = projectStore
+      const mapElement = ref(null)
+      const locations = ref([])
+      const loading = ref(false)
+      const error = ref('')
+      let mapInstance = null
+      let silentRefreshTimer = null
+      let loadToken = 0
+
+      delete L.Icon.Default.prototype._getIconUrl
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
+      })
+
+      function destroyMap() {
+        if (mapInstance) {
+          mapInstance.remove()
+          mapInstance = null
+        }
+      }
+
+      function clearSilentRefreshTimer() {
+        if (silentRefreshTimer !== null) {
+          clearTimeout(silentRefreshTimer)
+          silentRefreshTimer = null
+        }
+      }
+
+      function scheduleSilentRefresh(lang, token) {
+        clearSilentRefreshTimer()
+        silentRefreshTimer = setTimeout(async () => {
+          silentRefreshTimer = null
+          try {
+            const refreshed = await getLocationsCached(lang, { force: true })
+            if (token !== loadToken) {
+              return
+            }
+            locations.value = Array.isArray(refreshed) ? refreshed : []
+            await nextTick()
+            if (token !== loadToken) {
+              return
+            }
+            drawMap()
+          } catch (silentRefreshError) {
+            void silentRefreshError
+          }
+        }, LOCATION_SILENT_REFRESH_DELAY_MS)
+      }
+
+      function locationDisplayName(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        if (typeof item.name === 'string' && item.name.trim()) {
+          return item.name.trim()
+        }
+        if (typeof item.uri === 'string' && item.uri.trim()) {
+          return item.uri.trim()
+        }
+        return t('noValue')
+      }
+
+      function hasImageCount(value) {
+        return value !== null && value !== undefined && value !== ''
+      }
+
+      function formatImageCount(value) {
+        return formatCountValue(value, locale.value, t('noValue'))
+      }
+
+      function preferredImageSource(item) {
+        return preferredCommonsImageSource(item)
+      }
+
+      function preferredImageCount(item) {
+        return preferredCommonsImageCount(item)
+      }
+
+      function preferredImageHref(item) {
+        return preferredCommonsImageHref(item)
+      }
+
+      function commonsImagesLabel(item) {
+        const sourceKey = preferredImageSource(item)
+        if (!sourceKey) {
+          return ''
+        }
+        const sourceLabel = sourceKey === 'view-it' ? t('imageSourceViewIt') : t('imageSourcePetScan')
+        return t('commonsImagesWithSource', { source: sourceLabel })
+      }
+
+      function formatCoordinates(latitude, longitude) {
+        return formatCoordinatePair(latitude, longitude, locale.value, 4, t('noValue'))
+      }
+
+      function popupExternalLink(urlValue, labelValue) {
+        const label = displayValue(labelValue, t('noValue'))
+        const url = typeof urlValue === 'string' ? urlValue.trim() : ''
+        if (!isHttpUrl(url)) {
+          return escapeHtml(label)
+        }
+        return `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+      }
+
+      function popupMetaRow(label, valueHtml) {
+        return `
+          <div class="meta-row">
+            <dt>${escapeHtml(label)}</dt>
+            <dd>${valueHtml}</dd>
+          </div>
+        `
+      }
+
+      function popupContent(location) {
+        const name = locationDisplayName(location)
+        const description = typeof location.description === 'string' ? location.description.trim() : ''
+        const coordinates = formatCoordinates(location.latitude, location.longitude)
+        const rows = [popupMetaRow(t('coordinates'), escapeHtml(coordinates))]
+
+        const commonsCategory = typeof location.commons_category === 'string'
+          ? location.commons_category.trim()
+          : ''
+        if (commonsCategory) {
+          rows.push(
+            popupMetaRow(
+              t('commonsCategory'),
+              popupExternalLink(location.commons_category_url, commonsCategory),
+            )
+          )
+        }
+        if (preferredImageSource(location)) {
+          rows.push(
+            popupMetaRow(
+              commonsImagesLabel(location),
+              popupExternalLink(
+                preferredImageHref(location),
+                formatImageCount(preferredImageCount(location)),
+              ),
+            )
+          )
+        }
+
+        const locationId = (typeof location.id === 'string' && location.id.trim())
+          ? location.id.trim()
+          : normalizeLocationId(String(location.uri || ''))
+        const detailsLink = locationId
+          ? `<a class="text-link map-popup-link" href="#/location/${escapeHtml(locationId)}">${escapeHtml(t('openDetails'))}</a>`
+          : ''
+
+        return `
+          <article class="map-popup-card">
+            <h3>${escapeHtml(name)}</h3>
+            ${description ? `<p class="map-popup-description">${escapeHtml(description)}</p>` : ''}
+            <dl class="meta-list map-popup-meta">${rows.join('')}</dl>
+            ${detailsLink}
+          </article>
+        `
+      }
+
+      function drawMap() {
+        destroyMap()
+
+        if (!mapElement.value || locations.value.length === 0) {
+          return
+        }
+
+        mapInstance = L.map(mapElement.value).setView(
+          [locations.value[0].latitude, locations.value[0].longitude],
+          5
+        )
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(mapInstance)
+
+        locations.value.forEach((location) => {
+          L.marker([location.latitude, location.longitude]).addTo(mapInstance).bindPopup(popupContent(location))
+        })
+      }
+
+      async function loadLocations() {
+        const token = ++loadToken
+        const currentLang = locale.value
+        loading.value = true
+        error.value = ''
+        clearSilentRefreshTimer()
+
+        try {
+          const loaded = await getLocationsCached(currentLang)
+          if (token !== loadToken) {
+            return
+          }
+          locations.value = Array.isArray(loaded) ? loaded : []
+          await nextTick()
+          if (token !== loadToken) {
+            return
+          }
+          drawMap()
+          scheduleSilentRefresh(currentLang, token)
+        } catch (err) {
+          if (token !== loadToken) {
+            return
+          }
+          error.value = err.message || t('loadError')
+        } finally {
+          if (token === loadToken) {
+            loading.value = false
+          }
+        }
+      }
+
+      onMounted(loadLocations)
+      onBeforeUnmount(() => {
+        clearSilentRefreshTimer()
+        destroyMap()
+      })
+      watch([() => locale.value, () => activeProjectId.value, () => locationsVersion.value], loadLocations)
+
+      return { t, mapElement, locations, loading, error }
+    },
+    template: `
+      <section class="view-section map-view" :aria-busy="loading ? 'true' : 'false'">
+        <p v-if="loading" class="status" role="status" aria-live="polite">{{ t('loading') }}</p>
+        <p v-else-if="error" class="status error" role="alert">{{ error }}</p>
+        <p v-else-if="locations.length === 0" class="status" role="status" aria-live="polite">{{ t('noData') }}</p>
+
+        <div v-show="locations.length > 0" ref="mapElement" class="map-canvas" aria-label="locations map"></div>
+      </section>
+    `
+  }
+
+  const DetailView = {
+    props: {
+      id: {
+        type: String,
+        required: false,
+        default: ''
+      }
+    },
+    setup(props) {
+      const { t, locale } = useI18n()
+      const {
+        activeProjectId,
+        locationsVersion,
+        getLocationFromListCache,
+        getLocationDetailCached,
+        getLocationChildrenCached,
+      } = projectStore
+      const { authEnabled, authAuthenticated, authStatusLoading } = authStore
+      const location = ref(null)
+      const loading = ref(false)
+      const error = ref('')
+      const children = ref([])
+      const childrenLoading = ref(false)
+      const childrenError = ref('')
+      let locationLoadToken = 0
+      let childrenLoadToken = 0
+      const childLocations = computed(() => (Array.isArray(children.value) ? children.value : []))
+      const canEditDraft = computed(() => {
+        const draftId = location.value && location.value.draft_id !== undefined
+          ? Number.parseInt(String(location.value.draft_id), 10)
+          : Number.NaN
+        return Boolean(
+          location.value &&
+          location.value.source === 'draft' &&
+          !Number.isNaN(draftId)
+        )
+      })
+      const canCreateSubLocation = computed(() => {
+        if (!location.value || !location.value.uri) {
+          return false
+        }
+        return !authStatusLoading.value && (!authEnabled.value || authAuthenticated.value)
+      })
+      const canSaveImage = computed(() => Boolean(location.value && location.value.uri))
+      const detailMapElement = ref(null)
+      let detailMapInstance = null
+      let detailMapMarker = null
+      const showSaveImageWizard = ref(false)
+      const saveImageMapElement = ref(null)
+      const saveImageCoordinateMode = ref('map')
+      const saveImageLatitude = ref('')
+      const saveImageLongitude = ref('')
+      const saveImageCaption = ref('')
+      const saveImageCategorySearch = ref('')
+      const saveImageCategorySuggestions = ref([])
+      const saveImageCategoryLoading = ref(false)
+      const saveImageSubcategorySuggestions = ref([])
+      const saveImageSubcategoryLoading = ref(false)
+      const saveImageSelectedCategories = ref([])
+      const saveImageCategoryExistence = ref({})
+      const saveImageError = ref('')
+      let saveImageMapInstance = null
+      let saveImageMapMarker = null
+      const saveImageFallbackEntityCache = new Map()
+      const saveImageSubcategoryCache = new Map()
+      const saveImageCategoryExistenceRequestCache = new Map()
+      let saveImageFallbackToken = 0
+      let saveImageSubcategoryToken = 0
+      const saveImageUsesExifCoordinates = computed(() => saveImageCoordinateMode.value === 'exif')
+
+      function currentDetailCoordinates() {
+        if (!location.value) {
+          return null
+        }
+        const latitude = parseCoordinate(location.value.latitude)
+        const longitude = parseCoordinate(location.value.longitude)
+        if (latitude === null || longitude === null) {
+          return null
+        }
+        return [latitude, longitude]
+      }
+
+      const hasDetailMapCoordinates = computed(() => currentDetailCoordinates() !== null)
+
+      function destroyDetailMap() {
+        if (detailMapInstance) {
+          detailMapInstance.remove()
+          detailMapInstance = null
+          detailMapMarker = null
+        }
+      }
+
+      function ensureDetailMap() {
+        const coordinates = currentDetailCoordinates()
+        if (!detailMapElement.value || !coordinates) {
+          destroyDetailMap()
+          return
+        }
+
+        if (!detailMapInstance) {
+          detailMapInstance = L.map(detailMapElement.value).setView(coordinates, 12)
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+          }).addTo(detailMapInstance)
+        }
+
+        if (!detailMapMarker) {
+          detailMapMarker = L.circleMarker(coordinates, {
+            radius: 7,
+            color: '#0369a1',
+            fillColor: '#0369a1',
+            fillOpacity: 0.8,
+          }).addTo(detailMapInstance)
+        } else {
+          detailMapMarker.setLatLng(coordinates)
+        }
+
+        detailMapInstance.setView(coordinates, 12)
+        window.setTimeout(() => {
+          if (detailMapInstance) {
+            detailMapInstance.invalidateSize()
+          }
+        }, 0)
+      }
+
+      function destroySaveImageWizardMap() {
+        if (saveImageMapInstance) {
+          saveImageMapInstance.remove()
+          saveImageMapInstance = null
+          saveImageMapMarker = null
+        }
+      }
+
+      function _normalizeUploadCategory(value) {
+        if (typeof value !== 'string') {
+          return ''
+        }
+        const normalized = value
+          .trim()
+          .replace(/^category:/i, '')
+          .trim()
+          .replace(/\s+/g, '_')
+        return normalized
+      }
+
+      function _coordinatesFromLocation() {
+        if (!location.value || typeof location.value !== 'object') {
+          return null
+        }
+        const latitude = parseCoordinate(location.value.latitude)
+        const longitude = parseCoordinate(location.value.longitude)
+        if (latitude === null || longitude === null) {
+          return null
+        }
+        return { latitude, longitude }
+      }
+
+      function _locationWikidataQid() {
+        if (!location.value || typeof location.value !== 'object') {
+          return ''
+        }
+        const fromItem = extractWikidataId(String(location.value.wikidata_item || ''))
+        if (fromItem) {
+          return fromItem
+        }
+        return extractWikidataId(String(location.value.uri || ''))
+      }
+
+      function _geographicQidsFromLocationFields() {
+        if (!location.value || typeof location.value !== 'object') {
+          return []
+        }
+
+        const qids = []
+        const seen = new Set()
+        const addQid = (candidateValue) => {
+          const qid = extractWikidataId(String(candidateValue || ''))
+          if (!qid) {
+            return
+          }
+          if (seen.has(qid)) {
+            return
+          }
+          seen.add(qid)
+          qids.push(qid)
+        }
+
+        const directValue = location.value.location_p706
+        if (Array.isArray(directValue)) {
+          for (const entry of directValue) {
+            if (entry && typeof entry === 'object') {
+              addQid(entry.id || entry.value || entry.uri)
+            } else {
+              addQid(entry)
+            }
+          }
+        } else {
+          addQid(directValue)
+        }
+
+        const geographicEntities = location.value.geographic_entities
+        if (Array.isArray(geographicEntities)) {
+          for (const entry of geographicEntities) {
+            if (entry && typeof entry === 'object') {
+              addQid(entry.id || entry.value || entry.uri)
+            } else {
+              addQid(entry)
+            }
+          }
+        }
+
+        return qids
+      }
+
+      function _entityMunicipalityQid(entity) {
+        if (!entity || typeof entity !== 'object') {
+          return ''
+        }
+        const municipalityValue =
+          entity.municipality && typeof entity.municipality === 'object'
+            ? entity.municipality.id
+            : ''
+        return extractWikidataId(String(municipalityValue || ''))
+      }
+
+      async function _fetchWikidataEntityForFallback(qid) {
+        const normalizedQid = extractWikidataId(String(qid || ''))
+        if (!normalizedQid) {
+          return null
+        }
+
+        const cacheKey = `${normalizedQid}|${normalizeSupportedLocale(locale.value) || 'en'}`
+        if (saveImageFallbackEntityCache.has(cacheKey)) {
+          return saveImageFallbackEntityCache.get(cacheKey)
+        }
+
+        const requestPromise = (async () => {
+          try {
+            const payload = await fetchWikidataEntity(normalizedQid, locale.value)
+            return payload && typeof payload === 'object' ? payload : null
+          } catch (error) {
+            return null
+          }
+        })()
+        saveImageFallbackEntityCache.set(cacheKey, requestPromise)
+        return requestPromise
+      }
+
+      function _setSaveImageCoordinates(latitude, longitude, updateMapView = true) {
+        const parsedLatitude = Number(latitude)
+        const parsedLongitude = Number(longitude)
+        if (Number.isNaN(parsedLatitude) || Number.isNaN(parsedLongitude)) {
+          return
+        }
+
+        saveImageLatitude.value = parsedLatitude.toFixed(6)
+        saveImageLongitude.value = parsedLongitude.toFixed(6)
+
+        if (!saveImageMapInstance) {
+          return
+        }
+
+        const point = [parsedLatitude, parsedLongitude]
+        if (!saveImageMapMarker) {
+          saveImageMapMarker = L.marker(point).addTo(saveImageMapInstance)
+        } else {
+          saveImageMapMarker.setLatLng(point)
+        }
+
+        if (updateMapView) {
+          saveImageMapInstance.setView(point, Math.max(saveImageMapInstance.getZoom(), 13))
+        }
+      }
+
+      function ensureSaveImageWizardMap() {
+        if (!showSaveImageWizard.value || !saveImageMapElement.value) {
+          destroySaveImageWizardMap()
+          return
+        }
+
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        const hasSelectedCoordinates = latitude !== null && longitude !== null
+        const initialCoordinates = _coordinatesFromLocation()
+        const fallbackCenter = initialCoordinates
+          ? [initialCoordinates.latitude, initialCoordinates.longitude]
+          : [60.1699, 24.9384]
+        const center = hasSelectedCoordinates ? [latitude, longitude] : fallbackCenter
+
+        if (!saveImageMapInstance) {
+          saveImageMapInstance = L.map(saveImageMapElement.value).setView(center, hasSelectedCoordinates ? 13 : 6)
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+          }).addTo(saveImageMapInstance)
+
+          saveImageMapInstance.on('click', (event) => {
+            _setSaveImageCoordinates(event.latlng.lat, event.latlng.lng)
+          })
+        }
+
+        if (hasSelectedCoordinates) {
+          _setSaveImageCoordinates(latitude, longitude, false)
+          saveImageMapInstance.setView(center, Math.max(saveImageMapInstance.getZoom(), 13))
+        } else if (saveImageMapMarker) {
+          saveImageMapInstance.removeLayer(saveImageMapMarker)
+          saveImageMapMarker = null
+          saveImageMapInstance.setView(center, saveImageMapInstance.getZoom())
+        }
+
+        window.setTimeout(() => {
+          if (saveImageMapInstance) {
+            saveImageMapInstance.invalidateSize()
+          }
+        }, 0)
+      }
+
+      function _initializeSaveImageWizard() {
+        const currentFallbackToken = ++saveImageFallbackToken
+        saveImageError.value = ''
+        saveImageCoordinateMode.value = 'map'
+        saveImageCategorySearch.value = ''
+        saveImageCategorySuggestions.value = []
+        saveImageCategoryLoading.value = false
+        saveImageSubcategorySuggestions.value = []
+        saveImageSubcategoryLoading.value = false
+        saveImageSubcategoryToken += 1
+        saveImageSelectedCategories.value = []
+        saveImageCategoryExistence.value = {}
+        saveImageCategoryExistenceRequestCache.clear()
+
+        const locationCoordinates = _coordinatesFromLocation()
+        if (locationCoordinates) {
+          saveImageLatitude.value = locationCoordinates.latitude.toFixed(6)
+          saveImageLongitude.value = locationCoordinates.longitude.toFixed(6)
+        } else {
+          saveImageLatitude.value = ''
+          saveImageLongitude.value = ''
+        }
+
+        saveImageCaption.value = location.value ? locationDisplayName(location.value) : ''
+        const rawCommonsCategory =
+          location.value && typeof location.value === 'object'
+            ? String(location.value.commons_category || '')
+            : ''
+        let hasOwnCategory = false
+        for (const category of rawCommonsCategory.split(/[|,\n]/)) {
+          const normalized = _normalizeUploadCategory(category)
+          if (!normalized) {
+            continue
+          }
+          hasOwnCategory = true
+          _addSaveImageCategory(normalized)
+        }
+
+        if (!hasOwnCategory) {
+          void _loadSaveImageFallbackCategories(currentFallbackToken)
+        }
+      }
+
+      function displayUploadCategory(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return ''
+        }
+        return normalized.replace(/_/g, ' ')
+      }
+
+      function saveImageCategoryHref(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return ''
+        }
+        return `https://commons.wikimedia.org/wiki/Category:${encodeURIComponent(normalized)}`
+      }
+
+      function saveImageCategoryExists(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return null
+        }
+        const dedupeKey = normalized.toLowerCase()
+        const exists = saveImageCategoryExistence.value[dedupeKey]
+        return typeof exists === 'boolean' ? exists : null
+      }
+
+      function _setSaveImageCategoryExists(categoryName, exists) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized || typeof exists !== 'boolean') {
+          return
+        }
+        const dedupeKey = normalized.toLowerCase()
+        saveImageCategoryExistence.value = {
+          ...saveImageCategoryExistence.value,
+          [dedupeKey]: exists,
+        }
+      }
+
+      function _isSaveImageCategorySelected(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return false
+        }
+        const dedupeKey = normalized.toLowerCase()
+        return saveImageSelectedCategories.value.some(
+          (existingCategory) => String(existingCategory || '').toLowerCase() === dedupeKey,
+        )
+      }
+
+      async function _fetchCommonsCategoryExists(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return false
+        }
+
+        const url = new URL('https://commons.wikimedia.org/w/api.php')
+        url.searchParams.set('action', 'query')
+        url.searchParams.set('titles', `Category:${normalized}`)
+        url.searchParams.set('format', 'json')
+        url.searchParams.set('formatversion', '2')
+        url.searchParams.set('origin', '*')
+
+        const response = await fetch(url.toString(), { method: 'GET' })
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`)
+        }
+
+        const payload = await response.json()
+        if (payload && typeof payload === 'object' && payload.error && payload.error.info) {
+          throw new Error(String(payload.error.info))
+        }
+
+        const pages =
+          payload &&
+          typeof payload === 'object' &&
+          payload.query &&
+          typeof payload.query === 'object' &&
+          Array.isArray(payload.query.pages)
+            ? payload.query.pages
+            : []
+        const page = pages.length > 0 && pages[0] && typeof pages[0] === 'object' ? pages[0] : null
+        if (!page) {
+          return false
+        }
+        return !Object.prototype.hasOwnProperty.call(page, 'missing')
+      }
+
+      async function _ensureSaveImageCategoryExists(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return null
+        }
+
+        const dedupeKey = normalized.toLowerCase()
+        const known = saveImageCategoryExistence.value[dedupeKey]
+        if (typeof known === 'boolean') {
+          return known
+        }
+
+        if (saveImageCategoryExistenceRequestCache.has(dedupeKey)) {
+          return saveImageCategoryExistenceRequestCache.get(dedupeKey)
+        }
+
+        const requestPromise = (async () => {
+          try {
+            const exists = await _fetchCommonsCategoryExists(normalized)
+            if (_isSaveImageCategorySelected(normalized)) {
+              _setSaveImageCategoryExists(normalized, exists)
+            }
+            return exists
+          } catch (error) {
+            return null
+          } finally {
+            saveImageCategoryExistenceRequestCache.delete(dedupeKey)
+          }
+        })()
+        saveImageCategoryExistenceRequestCache.set(dedupeKey, requestPromise)
+        return requestPromise
+      }
+
+      function _refreshSaveImageCategoryExistenceState() {
+        const selectedCategories = Array.isArray(saveImageSelectedCategories.value)
+          ? saveImageSelectedCategories.value
+          : []
+        const selectedKeys = new Set()
+        for (const categoryName of selectedCategories) {
+          const normalized = _normalizeUploadCategory(categoryName)
+          if (!normalized) {
+            continue
+          }
+          const dedupeKey = normalized.toLowerCase()
+          selectedKeys.add(dedupeKey)
+          void _ensureSaveImageCategoryExists(normalized)
+        }
+
+        const filtered = {}
+        for (const [dedupeKey, exists] of Object.entries(saveImageCategoryExistence.value)) {
+          if (!selectedKeys.has(dedupeKey)) {
+            continue
+          }
+          filtered[dedupeKey] = exists
+        }
+        saveImageCategoryExistence.value = filtered
+      }
+
+      function _addSaveImageCategory(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return false
+        }
+
+        const dedupeKey = normalized.toLowerCase()
+        const exists = saveImageSelectedCategories.value.some(
+          (existingCategory) => existingCategory.toLowerCase() === dedupeKey,
+        )
+        if (exists) {
+          return false
+        }
+
+        saveImageSelectedCategories.value = [
+          ...saveImageSelectedCategories.value,
+          normalized,
+        ]
+        void _ensureSaveImageCategoryExists(normalized)
+        return true
+      }
+
+      function removeSaveImageCategory(categoryName) {
+        const normalized = _normalizeUploadCategory(categoryName)
+        if (!normalized) {
+          return
+        }
+        const dedupeKey = normalized.toLowerCase()
+        saveImageSelectedCategories.value = saveImageSelectedCategories.value.filter(
+          (existingCategory) => existingCategory.toLowerCase() !== dedupeKey,
+        )
+        if (Object.prototype.hasOwnProperty.call(saveImageCategoryExistence.value, dedupeKey)) {
+          const nextState = { ...saveImageCategoryExistence.value }
+          delete nextState[dedupeKey]
+          saveImageCategoryExistence.value = nextState
+        }
+      }
+
+      async function _loadSaveImageFallbackCategories(fallbackToken) {
+        if (!location.value || typeof location.value !== 'object') {
+          return
+        }
+
+        const locationP276Qid = extractWikidataId(String(location.value.location_p276 || ''))
+        const locationP131Qid = extractWikidataId(String(location.value.municipality_p131 || ''))
+        const geographicQids = _geographicQidsFromLocationFields()
+
+        if (geographicQids.length === 0) {
+          const locationQid = _locationWikidataQid()
+          if (locationQid) {
+            const currentEntity = await _fetchWikidataEntityForFallback(locationQid)
+            if (fallbackToken !== saveImageFallbackToken) {
+              return
+            }
+            if (currentEntity && Array.isArray(currentEntity.geographic_entities)) {
+              for (const geographicEntity of currentEntity.geographic_entities) {
+                const candidateQid = extractWikidataId(
+                  String(
+                    geographicEntity && typeof geographicEntity === 'object'
+                      ? geographicEntity.id || geographicEntity.value || geographicEntity.uri || ''
+                      : geographicEntity,
+                  ),
+                )
+                if (!candidateQid) {
+                  continue
+                }
+                if (!geographicQids.includes(candidateQid)) {
+                  geographicQids.push(candidateQid)
+                }
+              }
+            }
+          }
+        }
+
+        const orderedCandidateQids = []
+        const seenCandidateQids = new Set()
+        const addCandidateQid = (qid) => {
+          const normalizedQid = extractWikidataId(String(qid || ''))
+          if (!normalizedQid) {
+            return
+          }
+          if (seenCandidateQids.has(normalizedQid)) {
+            return
+          }
+          seenCandidateQids.add(normalizedQid)
+          orderedCandidateQids.push(normalizedQid)
+        }
+
+        addCandidateQid(locationP276Qid)
+        for (const geographicQid of geographicQids) {
+          addCandidateQid(geographicQid)
+        }
+        addCandidateQid(locationP131Qid)
+
+        if (orderedCandidateQids.length === 0) {
+          return
+        }
+
+        const entityByQid = {}
+        await Promise.all(
+          orderedCandidateQids.map(async (qid) => {
+            entityByQid[qid] = await _fetchWikidataEntityForFallback(qid)
+          }),
+        )
+
+        if (fallbackToken !== saveImageFallbackToken) {
+          return
+        }
+
+        if (saveImageSelectedCategories.value.length > 0) {
+          return
+        }
+
+        const relatedP131Qids = new Set()
+        if (locationP276Qid) {
+          const municipalityQid = _entityMunicipalityQid(entityByQid[locationP276Qid])
+          if (municipalityQid) {
+            relatedP131Qids.add(municipalityQid)
+          }
+        }
+        for (const geographicQid of geographicQids) {
+          const municipalityQid = _entityMunicipalityQid(entityByQid[geographicQid])
+          if (municipalityQid) {
+            relatedP131Qids.add(municipalityQid)
+          }
+        }
+
+        const skipAdministrativeFallback = Boolean(
+          locationP131Qid && relatedP131Qids.has(locationP131Qid),
+        )
+
+        const fallbackCategories = []
+        const pushCategory = (candidateCategory) => {
+          const normalizedCategory = _normalizeUploadCategory(candidateCategory)
+          if (!normalizedCategory) {
+            return
+          }
+          if (fallbackCategories.includes(normalizedCategory)) {
+            return
+          }
+          fallbackCategories.push(normalizedCategory)
+        }
+
+        if (locationP276Qid) {
+          pushCategory(
+            entityByQid[locationP276Qid] && typeof entityByQid[locationP276Qid] === 'object'
+              ? entityByQid[locationP276Qid].commons_category
+              : '',
+          )
+        }
+
+        for (const geographicQid of geographicQids) {
+          pushCategory(
+            entityByQid[geographicQid] && typeof entityByQid[geographicQid] === 'object'
+              ? entityByQid[geographicQid].commons_category
+              : '',
+          )
+        }
+
+        if (!skipAdministrativeFallback && locationP131Qid) {
+          pushCategory(
+            entityByQid[locationP131Qid] && typeof entityByQid[locationP131Qid] === 'object'
+              ? entityByQid[locationP131Qid].commons_category
+              : '',
+          )
+        }
+
+        for (const category of fallbackCategories) {
+          _addSaveImageCategory(category)
+        }
+      }
+
+      function _categoryFromCommonsSuggestion(item) {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        const name = typeof item.name === 'string' ? item.name : ''
+        const title = typeof item.title === 'string' ? item.title : ''
+        return _normalizeUploadCategory(name || title)
+      }
+
+      function _categoryFromCommonsSubcategory(item) {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        const commonsCategory = typeof item.commons_category === 'string' ? item.commons_category : ''
+        const name = typeof item.name === 'string' ? item.name : ''
+        const title = typeof item.title === 'string' ? item.title : ''
+        return _normalizeUploadCategory(commonsCategory || name || title)
+      }
+
+      async function _fetchSaveImageSubcategoriesForCategory(categoryName) {
+        const normalizedCategory = _normalizeUploadCategory(categoryName)
+        if (!normalizedCategory) {
+          return []
+        }
+        const cacheKey = normalizedCategory.toLowerCase()
+        if (saveImageSubcategoryCache.has(cacheKey)) {
+          return saveImageSubcategoryCache.get(cacheKey)
+        }
+
+        const requestPromise = (async () => {
+          try {
+            const payload = await fetchCommonsCategoryChildren(normalizedCategory, AUTOCOMPLETE_RESULT_LIMIT)
+            return Array.isArray(payload) ? payload : []
+          } catch (error) {
+            return []
+          }
+        })()
+        saveImageSubcategoryCache.set(cacheKey, requestPromise)
+        return requestPromise
+      }
+
+      async function loadSaveImageSubcategorySuggestions() {
+        const currentToken = ++saveImageSubcategoryToken
+        if (!showSaveImageWizard.value) {
+          return
+        }
+
+        const selectedCategories = Array.isArray(saveImageSelectedCategories.value)
+          ? [...saveImageSelectedCategories.value]
+          : []
+        if (selectedCategories.length === 0) {
+          saveImageSubcategorySuggestions.value = []
+          saveImageSubcategoryLoading.value = false
+          return
+        }
+
+        saveImageSubcategoryLoading.value = true
+        const childrenByParent = await Promise.all(
+          selectedCategories.map((categoryName) => _fetchSaveImageSubcategoriesForCategory(categoryName)),
+        )
+
+        if (currentToken !== saveImageSubcategoryToken || !showSaveImageWizard.value) {
+          return
+        }
+
+        const selectedDedupeKeys = new Set(
+          selectedCategories.map((categoryName) => _normalizeUploadCategory(categoryName).toLowerCase()).filter(Boolean),
+        )
+        const suggestions = []
+        const seen = new Set()
+        for (const children of childrenByParent) {
+          for (const child of children) {
+            const categoryName = _categoryFromCommonsSubcategory(child)
+            if (!categoryName) {
+              continue
+            }
+            const dedupeKey = categoryName.toLowerCase()
+            if (selectedDedupeKeys.has(dedupeKey) || seen.has(dedupeKey)) {
+              continue
+            }
+            seen.add(dedupeKey)
+            suggestions.push(categoryName)
+          }
+        }
+
+        saveImageSubcategorySuggestions.value = suggestions
+        saveImageSubcategoryLoading.value = false
+      }
+
+      const searchSaveImageCategoriesDebounced = debounce(async (searchTerm) => {
+        saveImageCategoryLoading.value = true
+        try {
+          const payload = await searchCommonsCategories(searchTerm, AUTOCOMPLETE_RESULT_LIMIT)
+          const suggestions = Array.isArray(payload) ? payload : []
+          const uniqueSuggestions = []
+          const seen = new Set()
+          for (const suggestion of suggestions) {
+            const categoryName = _categoryFromCommonsSuggestion(suggestion)
+            if (!categoryName) {
+              continue
+            }
+            const alreadySelected = saveImageSelectedCategories.value.some(
+              (selectedCategory) => selectedCategory.toLowerCase() === categoryName.toLowerCase(),
+            )
+            if (alreadySelected) {
+              continue
+            }
+            const dedupeKey = categoryName.toLowerCase()
+            if (seen.has(dedupeKey)) {
+              continue
+            }
+            seen.add(dedupeKey)
+            uniqueSuggestions.push(categoryName)
+          }
+          saveImageCategorySuggestions.value = uniqueSuggestions
+        } catch (error) {
+          saveImageCategorySuggestions.value = []
+        } finally {
+          saveImageCategoryLoading.value = false
+        }
+      }, 250)
+
+      function onSaveImageCategoryInput() {
+        const query = saveImageCategorySearch.value.trim()
+        if (!query) {
+          saveImageCategorySuggestions.value = []
+          saveImageCategoryLoading.value = false
+          return
+        }
+        searchSaveImageCategoriesDebounced(query)
+      }
+
+      function onSaveImageCategoryFocus() {
+        if (saveImageCategorySearch.value.trim()) {
+          onSaveImageCategoryInput()
+        }
+      }
+
+      function hideSaveImageCategorySuggestionsSoon() {
+        window.setTimeout(() => {
+          saveImageCategorySuggestions.value = []
+        }, 140)
+      }
+
+      function selectSaveImageCategory(categoryName) {
+        _addSaveImageCategory(categoryName)
+        saveImageCategorySearch.value = ''
+        saveImageCategorySuggestions.value = []
+        saveImageCategoryLoading.value = false
+      }
+
+      function addSaveImageCategoriesFromInput() {
+        const query = saveImageCategorySearch.value.trim()
+        if (!query) {
+          return
+        }
+
+        const wasAdded = _addSaveImageCategory(query)
+        if (wasAdded) {
+          saveImageCategorySearch.value = ''
+        }
+        saveImageCategorySuggestions.value = []
+        saveImageCategoryLoading.value = false
+      }
+
+      function onSaveImageCategoryKeydown(event) {
+        if (!event || event.key !== 'Enter') {
+          return
+        }
+        event.preventDefault()
+        addSaveImageCategoriesFromInput()
+      }
+
+      function selectSaveImageSubcategorySuggestion(categoryName) {
+        _addSaveImageCategory(categoryName)
+      }
+
+      function _uploadWizardCategories() {
+        const uniqueCategories = []
+        const seen = new Set()
+
+        for (const category of saveImageSelectedCategories.value) {
+          const normalized = _normalizeUploadCategory(category)
+          if (!normalized) {
+            continue
+          }
+          const dedupeKey = normalized.toLowerCase()
+          if (seen.has(dedupeKey)) {
+            continue
+          }
+          seen.add(dedupeKey)
+          uniqueCategories.push(normalized)
+        }
+
+        return uniqueCategories
+      }
+
+      function buildUploadWizardUrl() {
+        const uploadUrl = new URL('https://commons.wikimedia.org/w/index.php')
+        uploadUrl.searchParams.set('title', 'Special:UploadWizard')
+        uploadUrl.searchParams.set('captionlang', normalizeSupportedLocale(locale.value) || 'en')
+
+        const caption = typeof saveImageCaption.value === 'string' ? saveImageCaption.value.trim() : ''
+        if (caption) {
+          uploadUrl.searchParams.set('caption', caption)
+        }
+
+        if (!saveImageUsesExifCoordinates.value) {
+          const latitude = parseCoordinate(saveImageLatitude.value)
+          const longitude = parseCoordinate(saveImageLongitude.value)
+          if (latitude !== null && longitude !== null) {
+            uploadUrl.searchParams.set('lat', String(latitude))
+            uploadUrl.searchParams.set('lon', String(longitude))
+          }
+        }
+
+        const categories = _uploadWizardCategories()
+        if (categories.length > 0) {
+          uploadUrl.searchParams.set('categories', categories.join('|'))
+        }
+
+        return uploadUrl.toString()
+      }
+
+      const uploadWizardUrl = computed(() => buildUploadWizardUrl())
+
+      function openSaveImageWizard() {
+        if (!canSaveImage.value) {
+          return
+        }
+        _initializeSaveImageWizard()
+        showSaveImageWizard.value = true
+      }
+
+      function closeSaveImageWizard() {
+        saveImageFallbackToken += 1
+        saveImageSubcategoryToken += 1
+        showSaveImageWizard.value = false
+        saveImageError.value = ''
+        saveImageCategorySuggestions.value = []
+        saveImageCategoryLoading.value = false
+        saveImageSubcategorySuggestions.value = []
+        saveImageSubcategoryLoading.value = false
+        destroySaveImageWizardMap()
+      }
+
+      function openCommonsUploadWizard() {
+        saveImageError.value = ''
+        if (!saveImageUsesExifCoordinates.value) {
+          const latitude = parseCoordinate(saveImageLatitude.value)
+          const longitude = parseCoordinate(saveImageLongitude.value)
+          if (latitude === null || longitude === null) {
+            saveImageError.value = t('saveImageCoordinatesRequired')
+            return
+          }
+        }
+        window.open(buildUploadWizardUrl(), '_blank', 'noopener,noreferrer')
+        closeSaveImageWizard()
+      }
+
+      async function loadChildren() {
+        if (!props.id) {
+          children.value = []
+          childrenLoading.value = false
+          childrenError.value = ''
+          return
+        }
+
+        const currentToken = ++childrenLoadToken
+        childrenLoading.value = true
+        childrenError.value = ''
+
+        try {
+          const loadedChildren = await getLocationChildrenCached(props.id, locale.value)
+          if (currentToken !== childrenLoadToken) {
+            return
+          }
+          children.value = Array.isArray(loadedChildren) ? loadedChildren : []
+          if (location.value && typeof location.value === 'object') {
+            location.value = {
+              ...location.value,
+              children: children.value,
+            }
+          }
+        } catch (err) {
+          if (currentToken !== childrenLoadToken) {
+            return
+          }
+          children.value = []
+          childrenError.value = err.message || t('loadError')
+        } finally {
+          if (currentToken === childrenLoadToken) {
+            childrenLoading.value = false
+          }
+        }
+      }
+
+      async function loadLocation() {
+        const currentLoadToken = ++locationLoadToken
+        if (!props.id) {
+          location.value = null
+          loading.value = false
+          error.value = ''
+          children.value = []
+          childrenLoading.value = false
+          childrenError.value = ''
+          destroyDetailMap()
+          return
+        }
+
+        childrenLoadToken += 1
+        error.value = ''
+        childrenError.value = ''
+
+        const listCachedLocation = getLocationFromListCache(props.id, locale.value)
+        if (listCachedLocation) {
+          location.value = listCachedLocation
+          children.value = Array.isArray(listCachedLocation.children) ? listCachedLocation.children : []
+          loading.value = false
+          await nextTick()
+          ensureDetailMap()
+        } else {
+          location.value = null
+          children.value = []
+          loading.value = true
+          destroyDetailMap()
+        }
+
+        // Load children asynchronously so detail metadata is rendered without waiting for child query.
+        void loadChildren()
+
+        try {
+          const loadedLocation = await getLocationDetailCached(
+            props.id,
+            locale.value,
+            { force: Boolean(listCachedLocation) },
+          )
+          if (currentLoadToken !== locationLoadToken) {
+            return
+          }
+          location.value = loadedLocation
+          if (loadedLocation && typeof loadedLocation === 'object' && Array.isArray(loadedLocation.children)) {
+            children.value = loadedLocation.children
+          }
+          loading.value = false
+          await nextTick()
+          ensureDetailMap()
+        } catch (err) {
+          if (currentLoadToken !== locationLoadToken) {
+            return
+          }
+          childrenLoadToken += 1
+          loading.value = false
+          if (listCachedLocation) {
+            return
+          }
+          error.value = err.message || t('loadError')
+          location.value = null
+          children.value = []
+          childrenLoading.value = false
+          childrenError.value = ''
+          destroyDetailMap()
+        }
+      }
+
+      function openDraftEditor() {
+        if (!canEditDraft.value) {
+          return
+        }
+        window.dispatchEvent(
+          new CustomEvent('open-draft-editor', {
+            detail: { draftId: location.value.draft_id }
+          })
+        )
+      }
+
+      function openSubLocationCreator() {
+        if (!canCreateSubLocation.value) {
+          return
+        }
+        window.dispatchEvent(
+          new CustomEvent('open-create-sub-location', {
+            detail: {
+              parentUri: location.value.uri,
+              parentName: location.value.name,
+              parentLatitude: location.value.latitude,
+              parentLongitude: location.value.longitude,
+            }
+          })
+        )
+      }
+
+      function resolveLocationId(item) {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        if (typeof item.id === 'string' && item.id.trim()) {
+          return item.id
+        }
+        if (typeof item.uri === 'string' && item.uri.trim()) {
+          return normalizeLocationId(item.uri)
+        }
+        return ''
+      }
+
+      function isInternalChildLocation(item) {
+        if (!item || typeof item !== 'object') {
+          return false
+        }
+        const uri = typeof item.uri === 'string' ? item.uri.trim() : ''
+        if (!uri) {
+          return false
+        }
+        const normalizedUri = normalizeLocationUri(uri)
+        return (
+          normalizedUri.startsWith('https://www.wikidata.org/entity/') ||
+          normalizedUri.startsWith('https://draft.local/location/')
+        )
+      }
+
+      function parentLocationId() {
+        if (!location.value) {
+          return ''
+        }
+        if (typeof location.value.parent_id === 'string' && location.value.parent_id.trim()) {
+          return location.value.parent_id
+        }
+        if (typeof location.value.parent_uri === 'string' && location.value.parent_uri.trim()) {
+          return normalizeLocationId(location.value.parent_uri)
+        }
+        return ''
+      }
+
+      function isHttpUrl(value) {
+        if (typeof value !== 'string') {
+          return false
+        }
+        const trimmed = value.trim()
+        return trimmed.startsWith('http://') || trimmed.startsWith('https://')
+      }
+
+      function isWikidataEntityUri(value) {
+        if (typeof value !== 'string') {
+          return false
+        }
+        return /^https?:\/\/www\.wikidata\.org\/entity\/Q\d+$/i.test(value.trim())
+      }
+
+      function wikidataQid(value) {
+        return extractWikidataId(typeof value === 'string' ? value : '')
+      }
+
+      function wikidataEntityUrl(value) {
+        const qid = wikidataQid(value)
+        return qid ? `https://www.wikidata.org/entity/${qid}` : ''
+      }
+
+      function isQidText(value) {
+        return /^Q\d+$/i.test((value || '').trim())
+      }
+
+      function wikidataLinkText(value) {
+        const qid = wikidataQid(value)
+        if (qid) {
+          return qid
+        }
+        return typeof value === 'string' ? value.trim() : ''
+      }
+
+      function displayUriLabel(value) {
+        const qid = wikidataQid(value)
+        if (qid) {
+          return qid
+        }
+        return typeof value === 'string' ? value.trim() : ''
+      }
+
+      function sourceUriLabel(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        const uri = typeof item.uri === 'string' ? item.uri.trim() : ''
+        const qid = wikidataQid(uri)
+        const name = typeof item.name === 'string' ? item.name.trim() : ''
+        if (name && qid && name.toUpperCase() !== qid.toUpperCase()) {
+          return `${name} (${qid})`
+        }
+        if (name) {
+          return name
+        }
+        return displayUriLabel(uri)
+      }
+
+      function wikidataItemLabel(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        const rawValue = typeof item.wikidata_item === 'string' ? item.wikidata_item.trim() : ''
+        const qid = wikidataQid(rawValue)
+        const name = typeof item.name === 'string' ? item.name.trim() : ''
+        if (name && qid && name.toUpperCase() !== qid.toUpperCase()) {
+          return `${name} (${qid})`
+        }
+        if (name) {
+          return name
+        }
+        if (qid) {
+          return qid
+        }
+        return rawValue
+      }
+
+      function parentUriLabel(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        const parentUri = typeof item.parent_uri === 'string' ? item.parent_uri.trim() : ''
+        if (!parentUri) {
+          return t('noValue')
+        }
+        const locationUri = typeof item.location_p276 === 'string' ? item.location_p276.trim() : ''
+        const locationLabel = typeof item.location_p276_label === 'string' ? item.location_p276_label.trim() : ''
+        if (
+          locationUri &&
+          normalizeLocationUri(parentUri) === normalizeLocationUri(locationUri) &&
+          locationLabel
+        ) {
+          return linkedEntityLabel(locationUri, locationLabel)
+        }
+        return displayUriLabel(parentUri)
+      }
+
+      function linkedEntityLabel(uriValue, labelValue = '') {
+        const label = typeof labelValue === 'string' ? labelValue.trim() : ''
+        if (label && !isQidText(label)) {
+          return label
+        }
+        const qid = wikidataQid(uriValue || label)
+        if (qid) {
+          return qid
+        }
+        if (label) {
+          return label
+        }
+        return typeof uriValue === 'string' ? uriValue.trim() : ''
+      }
+
+      function linkedEntityHref(uriValue, labelValue = '', wikipediaUrl = '') {
+        const label = typeof labelValue === 'string' ? labelValue.trim() : ''
+        if (isHttpUrl(wikipediaUrl) && label && !isQidText(label)) {
+          return wikipediaUrl.trim()
+        }
+        const wikidataUrl = wikidataEntityUrl(uriValue || label)
+        if (wikidataUrl) {
+          return wikidataUrl
+        }
+        if (isHttpUrl(uriValue)) {
+          return uriValue.trim()
+        }
+        return ''
+      }
+
+      function combineStreetAndHouseNumber(streetValue, houseNumberValue) {
+        const street = typeof streetValue === 'string' ? streetValue.trim() : ''
+        const houseNumber = typeof houseNumberValue === 'string' ? houseNumberValue.trim() : ''
+        if (street && houseNumber) {
+          return `${street} ${houseNumber}`
+        }
+        return street || houseNumber
+      }
+
+      function externalIdHref(idType, value) {
+        if (typeof value !== 'string') {
+          return ''
+        }
+        const normalizedValue = value.trim()
+        if (!normalizedValue) {
+          return ''
+        }
+        if (isHttpUrl(normalizedValue)) {
+          return normalizedValue
+        }
+
+        if (idType === 'yso') {
+          if (/^p\d+$/i.test(normalizedValue)) {
+            return `https://www.yso.fi/onto/yso/${normalizedValue.toLowerCase()}`
+          }
+          if (/^\d+$/.test(normalizedValue)) {
+            return `https://www.yso.fi/onto/yso/p${normalizedValue}`
+          }
+          return `https://www.yso.fi/onto/yso/${encodeURIComponent(normalizedValue)}`
+        }
+        if (idType === 'yle-topic') {
+          return `https://yle.fi/aihe/t/${encodeURIComponent(normalizedValue)}`
+        }
+        if (idType === 'kanto') {
+          return `https://urn.fi/URN:NBN:fi:au:finaf:${encodeURIComponent(normalizedValue)}`
+        }
+        if (idType === 'protected-buildings-register') {
+          return `https://www.kyppi.fi/to.aspx?id=100.${encodeURIComponent(normalizedValue)}`
+        }
+        if (idType === 'rky') {
+          return `https://www.rky.fi/read/asp/r_kohde_det.aspx?KOHDE_ID=${encodeURIComponent(normalizedValue)}`
+        }
+        return ''
+      }
+
+      function linkedEntityValues(item, valueField, labelField, wikipediaField, valuesField = '') {
+        if (!item || typeof item !== 'object') {
+          return []
+        }
+
+        const values = []
+        const seenKeys = new Set()
+        const addValue = (rawValue, rawLabel = '', rawWikipediaUrl = '') => {
+          const value = typeof rawValue === 'string' ? rawValue.trim() : ''
+          const label = typeof rawLabel === 'string' ? rawLabel.trim() : ''
+          const wikipedia_url = typeof rawWikipediaUrl === 'string' ? rawWikipediaUrl.trim() : ''
+          if (!value && !label && !wikipedia_url) {
+            return
+          }
+
+          const dedupeKey = `${value.toLowerCase()}|${label.toLowerCase()}|${wikipedia_url.toLowerCase()}`
+          if (seenKeys.has(dedupeKey)) {
+            return
+          }
+          seenKeys.add(dedupeKey)
+          values.push({ value, label, wikipedia_url })
+        }
+
+        if (valuesField && Array.isArray(item[valuesField])) {
+          for (const entry of item[valuesField]) {
+            if (!entry || typeof entry !== 'object') {
+              continue
+            }
+            addValue(entry.value, entry.label, entry.wikipedia_url)
+          }
+        }
+
+        addValue(item[valueField], item[labelField], item[wikipediaField])
+        return values
+      }
+
+      const architectP84Entries = computed(() =>
+        linkedEntityValues(
+          location.value,
+          'architect_p84',
+          'architect_p84_label',
+          'architect_p84_wikipedia_url',
+          'architect_p84_values',
+        )
+      )
+
+      function formatWikidataDate(value) {
+        if (typeof value !== 'string') {
+          return ''
+        }
+
+        const trimmed = value.trim()
+        if (!trimmed) {
+          return ''
+        }
+
+        const parsed = parseWikidataDateParts(trimmed)
+        if (!parsed) {
+          return trimmed.replace(/^\+/, '')
+        }
+
+        const year = parsed.year
+        const month = String(parsed.month).padStart(2, '0')
+        const day = String(parsed.day).padStart(2, '0')
+        if (year >= 1 && year <= 9999) {
+          const isoDate = `${String(year).padStart(4, '0')}-${month}-${day}T00:00:00Z`
+          const date = new Date(isoDate)
+          if (!Number.isNaN(date.getTime())) {
+            return new Intl.DateTimeFormat(locale.value, {
+              timeZone: 'UTC',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            }).format(date)
+          }
+        }
+
+        return `${String(year).replace(/^\+/, '')}-${month}-${day}`
+      }
+
+      function formatImageCount(value) {
+        return formatCountValue(value, locale.value, t('noValue'))
+      }
+
+      function hasImageCount(value) {
+        return value !== null && value !== undefined && value !== ''
+      }
+
+      function preferredImageSource(item) {
+        return preferredCommonsImageSource(item)
+      }
+
+      function preferredImageCount(item) {
+        return preferredCommonsImageCount(item)
+      }
+
+      function preferredImageHref(item) {
+        return preferredCommonsImageHref(item)
+      }
+
+      function commonsImagesLabel(item) {
+        const sourceKey = preferredImageSource(item)
+        if (!sourceKey) {
+          return ''
+        }
+        const sourceLabel = sourceKey === 'view-it' ? t('imageSourceViewIt') : t('imageSourcePetScan')
+        return t('commonsImagesWithSource', { source: sourceLabel })
+      }
+
+      function formatCoordinates(latitude, longitude) {
+        return formatCoordinatePair(latitude, longitude, locale.value)
+      }
+
+      function locationDisplayName(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        if (typeof item.name === 'string' && item.name.trim()) {
+          return item.name.trim()
+        }
+        if (typeof item.uri === 'string' && item.uri.trim()) {
+          return item.uri.trim()
+        }
+        return t('noValue')
+      }
+
+      const hasMediaMetadata = computed(() => {
+        if (!location.value) {
+          return false
+        }
+        return Boolean(
+          location.value.commons_category ||
+          preferredImageSource(location.value)
+        )
+      })
+
+      const hasAdditionalProperties = computed(() => {
+        if (!location.value) {
+          return false
+        }
+        const item = location.value
+        return Boolean(
+          item.yso_id_p2347 ||
+          item.kanto_id_p8980 ||
+          item.protected_buildings_register_in_finland_id_p5310 ||
+          item.rky_national_built_heritage_environment_id_p4009 ||
+          item.permanent_building_number_vtj_prt_p3824 ||
+          item.protected_buildings_register_in_finland_building_id_p5313 ||
+          item.helsinki_persistent_building_id_ratu_p8355
+        )
+      })
+
+      function detailsAriaLabel(nameValue) {
+        return t('openDetailsFor', { name: displayValue(nameValue, t('noValue')) })
+      }
+
+      watch(
+        [() => props.id, () => locale.value, () => activeProjectId.value, () => locationsVersion.value],
+        loadLocation,
+        { immediate: true }
+      )
+      watch(
+        () => props.id,
+        () => {
+          if (showSaveImageWizard.value) {
+            closeSaveImageWizard()
+          }
+        }
+      )
+      watch(
+        [
+          () => showSaveImageWizard.value,
+          () => saveImageCoordinateMode.value,
+          () => saveImageLatitude.value,
+          () => saveImageLongitude.value,
+        ],
+        async ([isOpen, coordinateMode]) => {
+          if (!isOpen || coordinateMode === 'exif') {
+            destroySaveImageWizardMap()
+            return
+          }
+          await nextTick()
+          ensureSaveImageWizardMap()
+        }
+      )
+      watch(
+        [
+          () => showSaveImageWizard.value,
+          () => saveImageSelectedCategories.value.map((categoryName) => String(categoryName || '').toLowerCase()).join('|'),
+        ],
+        ([isOpen]) => {
+          if (!isOpen) {
+            saveImageSubcategoryToken += 1
+            saveImageSubcategorySuggestions.value = []
+            saveImageSubcategoryLoading.value = false
+            return
+          }
+          _refreshSaveImageCategoryExistenceState()
+          void loadSaveImageSubcategorySuggestions()
+        }
+      )
+      onBeforeUnmount(() => {
+        destroyDetailMap()
+        destroySaveImageWizardMap()
+      })
+
+      return {
+        t,
+        location,
+        loading,
+        error,
+        childLocations,
+        childrenLoading,
+        childrenError,
+        canEditDraft,
+        canCreateSubLocation,
+        canSaveImage,
+        detailMapElement,
+        hasDetailMapCoordinates,
+        openDraftEditor,
+        openSubLocationCreator,
+        showSaveImageWizard,
+        saveImageMapElement,
+        saveImageCoordinateMode,
+        saveImageUsesExifCoordinates,
+        saveImageLatitude,
+        saveImageLongitude,
+        saveImageCaption,
+        saveImageCategorySearch,
+        saveImageCategorySuggestions,
+        saveImageCategoryLoading,
+        saveImageSubcategorySuggestions,
+        saveImageSubcategoryLoading,
+        saveImageSelectedCategories,
+        saveImageCategoryExists,
+        saveImageError,
+        uploadWizardUrl,
+        openSaveImageWizard,
+        closeSaveImageWizard,
+        openCommonsUploadWizard,
+        onSaveImageCategoryInput,
+        onSaveImageCategoryFocus,
+        onSaveImageCategoryKeydown,
+        addSaveImageCategoriesFromInput,
+        hideSaveImageCategorySuggestionsSoon,
+        selectSaveImageCategory,
+        selectSaveImageSubcategorySuggestion,
+        removeSaveImageCategory,
+        displayUploadCategory,
+        saveImageCategoryHref,
+        resolveLocationId,
+        isInternalChildLocation,
+        parentLocationId,
+        isHttpUrl,
+        isWikidataEntityUri,
+        wikidataEntityUrl,
+        wikidataLinkText,
+        displayUriLabel,
+        linkedEntityLabel,
+        linkedEntityHref,
+        sourceUriLabel,
+        wikidataItemLabel,
+        parentUriLabel,
+        architectP84Entries,
+        formatWikidataDate,
+        formatImageCount,
+        hasImageCount,
+        preferredImageSource,
+        preferredImageCount,
+        preferredImageHref,
+        commonsImagesLabel,
+        formatCoordinates,
+        locationDisplayName,
+        hasMediaMetadata,
+        hasAdditionalProperties,
+        detailsAriaLabel,
+        handleImageLoadError,
+        externalIdHref,
+        combineStreetAndHouseNumber,
+        displayValue,
+      }
+    },
+    template: `
+      <section class="view-section detail-view" :aria-busy="loading ? 'true' : 'false'">
+        <p v-if="!id" class="status" role="status" aria-live="polite">{{ t('detailHint') }}</p>
+        <p v-else-if="loading" class="status" role="status" aria-live="polite">{{ t('loading') }}</p>
+        <p v-else-if="error" class="status error" role="alert">{{ error }}</p>
+
+        <article v-else-if="location" class="detail-card">
+          <header class="detail-header">
+            <div class="detail-header-main">
+              <h2>{{ locationDisplayName(location) }}</h2>
+              <p v-if="location.description" class="detail-description">{{ location.description }}</p>
+            </div>
+            <div v-if="canSaveImage" class="detail-header-actions">
+              <button type="button" class="secondary-btn" @click="openSaveImageWizard">
+                <span class="btn-with-icon">
+                  <span class="btn-icon" aria-hidden="true">&#128247;</span>
+                  <span>{{ t('saveImage') }}</span>
+                </span>
+              </button>
+            </div>
+          </header>
+          <div
+            v-if="(location.image_thumb_url || location.image_url) || hasDetailMapCoordinates"
+            class="detail-media-layout"
+          >
+            <figure v-if="location.image_thumb_url || location.image_url" class="detail-image">
+              <img
+                class="thumb-image"
+                :src="location.image_thumb_url || location.image_url"
+                :alt="location.image_name || locationDisplayName(location)"
+                loading="lazy"
+                @error="(event) => handleImageLoadError(event, location.image_url)"
+              />
+            </figure>
+            <div v-if="hasDetailMapCoordinates" class="detail-mini-map-wrap">
+              <p class="detail-mini-map-title">{{ t('locationOnMap') }}</p>
+              <div
+                ref="detailMapElement"
+                class="map-canvas detail-mini-map"
+                :aria-label="t('locationOnMap')"
+              ></div>
+              <p class="detail-mini-map-coordinates">
+                <strong>{{ t('coordinates') }}:</strong>
+                <span>{{ formatCoordinates(location.latitude, location.longitude) }}</span>
+              </p>
+            </div>
+          </div>
+          <section class="detail-section">
+            <h3>{{ t('basicInformation') }}</h3>
+            <dl class="meta-list detail-meta-list">
+              <div v-if="location.location_type" class="meta-row">
+                <dt>{{ t('locationType') }}</dt>
+                <dd>{{ location.location_type }}</dd>
+              </div>
+              <div v-if="location.wikidata_item" class="meta-row">
+                <dt>{{ t('wikidataItem') }}</dt>
+                <dd>
+                  <a
+                    v-if="wikidataEntityUrl(location.wikidata_item)"
+                    :href="wikidataEntityUrl(location.wikidata_item)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ wikidataItemLabel(location) }}
+                  </a>
+                  <span v-else>{{ wikidataItemLabel(location) }}</span>
+                </dd>
+              </div>
+              <div v-if="!hasDetailMapCoordinates" class="meta-row">
+                <dt>{{ t('coordinates') }}</dt>
+                <dd>{{ formatCoordinates(location.latitude, location.longitude) }}</dd>
+              </div>
+              <div v-if="location.postal_code" class="meta-row">
+                <dt>{{ t('postalCodeP281') }}</dt>
+                <dd>{{ location.postal_code }}</dd>
+              </div>
+              <div v-if="location.municipality_p131" class="meta-row">
+                <dt>{{ t('locatedInAdministrativeTerritorialEntityP131') }}</dt>
+                <dd>
+                  <a
+                    v-if="linkedEntityHref(location.municipality_p131, location.municipality_p131_label, location.municipality_p131_wikipedia_url)"
+                    :href="linkedEntityHref(location.municipality_p131, location.municipality_p131_label, location.municipality_p131_wikipedia_url)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ linkedEntityLabel(location.municipality_p131, location.municipality_p131_label) }}
+                  </a>
+                  <span v-else>{{ linkedEntityLabel(location.municipality_p131, location.municipality_p131_label) }}</span>
+                </dd>
+              </div>
+              <div v-if="location.located_on_street_p669" class="meta-row">
+                <dt>{{ t('locatedOnStreetP669') }}</dt>
+                <dd>
+                  <template v-if="location.located_on_street_p669">
+                    <a
+                      v-if="linkedEntityHref(location.located_on_street_p669, location.located_on_street_p669_label, location.located_on_street_p669_wikipedia_url)"
+                      :href="linkedEntityHref(location.located_on_street_p669, location.located_on_street_p669_label, location.located_on_street_p669_wikipedia_url)"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {{ combineStreetAndHouseNumber(linkedEntityLabel(location.located_on_street_p669, location.located_on_street_p669_label), location.house_number_p670) }}
+                    </a>
+                    <span v-else>
+                      {{ combineStreetAndHouseNumber(linkedEntityLabel(location.located_on_street_p669, location.located_on_street_p669_label), location.house_number_p670) }}
+                    </span>
+                  </template>
+                </dd>
+              </div>
+              <div v-else-if="location.address_text" class="meta-row">
+                <dt>{{ t('streetAddressP6375') }}</dt>
+                <dd>{{ location.address_text }}</dd>
+              </div>
+              <div v-if="location.instance_of_p31" class="meta-row">
+                <dt>{{ t('instanceOfP31') }}</dt>
+                <dd>
+                  <a
+                    v-if="linkedEntityHref(location.instance_of_p31, location.instance_of_p31_label, location.instance_of_p31_wikipedia_url)"
+                    :href="linkedEntityHref(location.instance_of_p31, location.instance_of_p31_label, location.instance_of_p31_wikipedia_url)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ linkedEntityLabel(location.instance_of_p31, location.instance_of_p31_label) }}
+                  </a>
+                  <span v-else>{{ linkedEntityLabel(location.instance_of_p31, location.instance_of_p31_label) }}</span>
+                </dd>
+              </div>
+              <div v-if="location.architectural_style_p149" class="meta-row">
+                <dt>{{ t('architecturalStyleP149') }}</dt>
+                <dd>
+                  <a
+                    v-if="linkedEntityHref(location.architectural_style_p149, location.architectural_style_p149_label, location.architectural_style_p149_wikipedia_url)"
+                    :href="linkedEntityHref(location.architectural_style_p149, location.architectural_style_p149_label, location.architectural_style_p149_wikipedia_url)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ linkedEntityLabel(location.architectural_style_p149, location.architectural_style_p149_label) }}
+                  </a>
+                  <span v-else>{{ linkedEntityLabel(location.architectural_style_p149, location.architectural_style_p149_label) }}</span>
+                </dd>
+              </div>
+              <div v-if="location.heritage_designation_p1435" class="meta-row">
+                <dt>{{ t('heritageDesignationP1435') }}</dt>
+                <dd>
+                  <a
+                    v-if="linkedEntityHref(location.heritage_designation_p1435, location.heritage_designation_p1435_label, location.heritage_designation_p1435_wikipedia_url)"
+                    :href="linkedEntityHref(location.heritage_designation_p1435, location.heritage_designation_p1435_label, location.heritage_designation_p1435_wikipedia_url)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ linkedEntityLabel(location.heritage_designation_p1435, location.heritage_designation_p1435_label) }}
+                  </a>
+                  <span v-else>{{ linkedEntityLabel(location.heritage_designation_p1435, location.heritage_designation_p1435_label) }}</span>
+                </dd>
+              </div>
+              <div v-if="location.route_instruction_p2795" class="meta-row">
+                <dt>{{ t('routeInstructionP2795') }}</dt>
+                <dd>{{ location.route_instruction_p2795 }}</dd>
+              </div>
+              <div v-if="location.parent_uri" class="meta-row">
+                <dt>{{ t('parentLocation') }}</dt>
+                <dd>
+                  <RouterLink
+                    v-if="parentLocationId()"
+                    :to="{ name: 'detail', params: { id: parentLocationId() } }"
+                    :aria-label="detailsAriaLabel(location.parent_uri)"
+                  >
+                    {{ parentUriLabel(location) }}
+                  </RouterLink>
+                  <span v-else>{{ parentUriLabel(location) }}</span>
+                </dd>
+              </div>
+              <div v-if="location.uri" class="meta-row">
+                <dt>{{ isWikidataEntityUri(location.uri) ? t('wikidataIdLabel') : t('sourceUri') }}</dt>
+                <dd>
+                  <a
+                    v-if="isHttpUrl(location.uri)"
+                    :href="location.uri"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ sourceUriLabel(location) }}
+                  </a>
+                  <span v-else>{{ sourceUriLabel(location) }}</span>
+                </dd>
+              </div>
+              <div v-if="location.inception_p571" class="meta-row">
+                <dt>{{ t('inceptionP571') }}</dt>
+                <dd>{{ formatWikidataDate(location.inception_p571) }}</dd>
+              </div>
+              <div v-if="location.location_p276" class="meta-row">
+                <dt>{{ t('locationP276') }}</dt>
+                <dd>
+                  <a
+                    v-if="linkedEntityHref(location.location_p276, location.location_p276_label, location.location_p276_wikipedia_url)"
+                    :href="linkedEntityHref(location.location_p276, location.location_p276_label, location.location_p276_wikipedia_url)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ linkedEntityLabel(location.location_p276, location.location_p276_label) }}
+                  </a>
+                  <span v-else>{{ linkedEntityLabel(location.location_p276, location.location_p276_label) }}</span>
+                </dd>
+              </div>
+              <div v-if="architectP84Entries.length > 0" class="meta-row">
+                <dt>{{ t('architectP84') }}</dt>
+                <dd>
+                  <template v-for="(architect, index) in architectP84Entries" :key="index">
+                    <a
+                      v-if="linkedEntityHref(architect.value, architect.label, architect.wikipedia_url)"
+                      :href="linkedEntityHref(architect.value, architect.label, architect.wikipedia_url)"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {{ linkedEntityLabel(architect.value, architect.label) }}
+                    </a>
+                    <span v-else>{{ linkedEntityLabel(architect.value, architect.label) }}</span>
+                    <span v-if="index < architectP84Entries.length - 1">, </span>
+                  </template>
+                </dd>
+              </div>
+              <div v-if="location.official_closure_date_p3999" class="meta-row">
+                <dt>{{ t('officialClosureDateP3999') }}</dt>
+                <dd>{{ formatWikidataDate(location.official_closure_date_p3999) }}</dd>
+              </div>
+              <div v-if="location.state_of_use_p5817" class="meta-row">
+                <dt>{{ t('stateOfUseP5817') }}</dt>
+                <dd>
+                  <a
+                    v-if="linkedEntityHref(location.state_of_use_p5817, location.state_of_use_p5817_label, location.state_of_use_p5817_wikipedia_url)"
+                    :href="linkedEntityHref(location.state_of_use_p5817, location.state_of_use_p5817_label, location.state_of_use_p5817_wikipedia_url)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ linkedEntityLabel(location.state_of_use_p5817, location.state_of_use_p5817_label) }}
+                  </a>
+                  <span v-else>{{ linkedEntityLabel(location.state_of_use_p5817, location.state_of_use_p5817_label) }}</span>
+                </dd>
+              </div>
+            </dl>
+          </section>
+          <section v-if="hasAdditionalProperties" class="detail-section">
+            <h3>{{ t('additionalProperties') }}</h3>
+            <dl class="meta-list detail-meta-list">
+              <div v-if="location.yso_id_p2347" class="meta-row">
+                <dt>{{ t('ysoIdP2347') }}</dt>
+                <dd>
+                  <a
+                    v-if="externalIdHref('yso', location.yso_id_p2347)"
+                    :href="externalIdHref('yso', location.yso_id_p2347)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ location.yso_id_p2347 }}
+                  </a>
+                  <span v-else>{{ location.yso_id_p2347 }}</span>
+                </dd>
+              </div>
+              <div v-if="location.kanto_id_p8980" class="meta-row">
+                <dt>{{ t('kantoIdP8980') }}</dt>
+                <dd>
+                  <a
+                    v-if="externalIdHref('kanto', location.kanto_id_p8980)"
+                    :href="externalIdHref('kanto', location.kanto_id_p8980)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ location.kanto_id_p8980 }}
+                  </a>
+                  <span v-else>{{ location.kanto_id_p8980 }}</span>
+                </dd>
+              </div>
+              <div v-if="location.protected_buildings_register_in_finland_id_p5310" class="meta-row">
+                <dt>{{ t('protectedBuildingsRegisterInFinlandIdP5310') }}</dt>
+                <dd>
+                  <a
+                    v-if="externalIdHref('protected-buildings-register', location.protected_buildings_register_in_finland_id_p5310)"
+                    :href="externalIdHref('protected-buildings-register', location.protected_buildings_register_in_finland_id_p5310)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ location.protected_buildings_register_in_finland_id_p5310 }}
+                  </a>
+                  <span v-else>{{ location.protected_buildings_register_in_finland_id_p5310 }}</span>
+                </dd>
+              </div>
+              <div v-if="location.rky_national_built_heritage_environment_id_p4009" class="meta-row">
+                <dt>{{ t('rkyNationalBuiltHeritageEnvironmentIdP4009') }}</dt>
+                <dd>
+                  <a
+                    v-if="externalIdHref('rky', location.rky_national_built_heritage_environment_id_p4009)"
+                    :href="externalIdHref('rky', location.rky_national_built_heritage_environment_id_p4009)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ location.rky_national_built_heritage_environment_id_p4009 }}
+                  </a>
+                  <span v-else>{{ location.rky_national_built_heritage_environment_id_p4009 }}</span>
+                </dd>
+              </div>
+              <div v-if="location.permanent_building_number_vtj_prt_p3824" class="meta-row">
+                <dt>{{ t('permanentBuildingNumberVtjPrtP3824') }}</dt>
+                <dd>{{ location.permanent_building_number_vtj_prt_p3824 }}</dd>
+              </div>
+              <div v-if="location.protected_buildings_register_in_finland_building_id_p5313" class="meta-row">
+                <dt>{{ t('protectedBuildingsRegisterInFinlandBuildingIdP5313') }}</dt>
+                <dd>{{ location.protected_buildings_register_in_finland_building_id_p5313 }}</dd>
+              </div>
+              <div v-if="location.helsinki_persistent_building_id_ratu_p8355" class="meta-row">
+                <dt>{{ t('helsinkiPersistentBuildingIdRatuP8355') }}</dt>
+                <dd>{{ location.helsinki_persistent_building_id_ratu_p8355 }}</dd>
+              </div>
+            </dl>
+          </section>
+          <section v-if="hasMediaMetadata" class="detail-section">
+            <h3>{{ t('mediaAndCounts') }}</h3>
+            <dl class="meta-list detail-meta-list">
+              <div v-if="location.commons_category" class="meta-row">
+                <dt>{{ t('commonsCategory') }}</dt>
+                <dd>
+                  <a
+                    v-if="isHttpUrl(location.commons_category_url)"
+                    :href="location.commons_category_url"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ location.commons_category }}
+                  </a>
+                  <span v-else>{{ location.commons_category }}</span>
+                </dd>
+              </div>
+              <div v-if="preferredImageSource(location)" class="meta-row">
+                <dt>{{ commonsImagesLabel(location) }}</dt>
+                <dd>
+                  <a
+                    v-if="preferredImageHref(location)"
+                    :href="preferredImageHref(location)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ formatImageCount(preferredImageCount(location)) }}
+                  </a>
+                  <span v-else>{{ formatImageCount(preferredImageCount(location)) }}</span>
+                </dd>
+              </div>
+            </dl>
+          </section>
+          <section class="detail-tree">
+            <h3>{{ t('subLocations') }}</h3>
+            <p v-if="childrenError" class="status error" role="alert">{{ childrenError }}</p>
+            <p v-else-if="childrenLoading && childLocations.length === 0" class="status" role="status" aria-live="polite">{{ t('loading') }}</p>
+            <p v-else-if="childLocations.length === 0" class="status">{{ t('noSubLocations') }}</p>
+            <ul v-else class="tree-list">
+              <li v-for="(child, index) in childLocations" :key="resolveLocationId(child) || child.uri || ('child-' + index)">
+                <RouterLink
+                  v-if="isInternalChildLocation(child) && resolveLocationId(child)"
+                  :to="{ name: 'detail', params: { id: resolveLocationId(child) } }"
+                  :aria-label="detailsAriaLabel(child.name || child.uri)"
+                >
+                  {{ locationDisplayName(child) }}
+                </RouterLink>
+                <a
+                  v-else-if="isHttpUrl(child.uri)"
+                  :href="child.uri"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {{ locationDisplayName(child) }}
+                </a>
+                <span v-else>{{ locationDisplayName(child) }}</span>
+              </li>
+            </ul>
+          </section>
+          <div class="detail-actions">
+            <button v-if="canCreateSubLocation" type="button" class="secondary-btn" @click="openSubLocationCreator">
+              {{ t('createSubLocation') }}
+            </button>
+            <button v-if="canEditDraft" type="button" class="secondary-btn" @click="openDraftEditor">
+              {{ t('editLocationData') }}
+            </button>
+            <RouterLink to="/">{{ t('backToList') }}</RouterLink>
+          </div>
+
+          <div v-if="showSaveImageWizard" class="dialog-backdrop" @click.self="closeSaveImageWizard">
+            <section class="dialog-card dialog-card-wide" role="dialog" aria-modal="true">
+              <h2>{{ t('saveImageWizardTitle') }}</h2>
+              <fieldset class="dialog-fieldset">
+                <div class="wizard-section">
+                  <h3>{{ t('saveImageWizardLocationStep') }}</h3>
+                  <p class="dialog-help">{{ t('saveImageWizardLocationHelp') }}</p>
+                  <div class="form-field">
+                    <span>{{ t('saveImageCoordinateSource') }}</span>
+                    <div class="toggle-switch" role="radiogroup" :aria-label="t('saveImageCoordinateSource')">
+                      <label class="toggle-option" :class="{ active: saveImageCoordinateMode === 'map' }">
+                        <input v-model="saveImageCoordinateMode" type="radio" value="map" />
+                        <span>{{ t('saveImageCoordinateSourceMap') }}</span>
+                      </label>
+                      <label class="toggle-option" :class="{ active: saveImageCoordinateMode === 'exif' }">
+                        <input v-model="saveImageCoordinateMode" type="radio" value="exif" />
+                        <span>{{ t('saveImageCoordinateSourceExif') }}</span>
+                      </label>
+                    </div>
+                  </div>
+                  <template v-if="!saveImageUsesExifCoordinates">
+                    <div ref="saveImageMapElement" class="map-canvas picker-map" aria-label="upload wizard coordinate picker map"></div>
+                    <p class="dialog-help">
+                      {{ t('coordinates') }}:
+                      {{ displayValue(saveImageLatitude, t('noValue')) }},
+                      {{ displayValue(saveImageLongitude, t('noValue')) }}
+                    </p>
+                  </template>
+                  <p v-else class="dialog-help">{{ t('saveImageExifCoordinatesHint') }}</p>
+                </div>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageCaption') }}</span>
+                  <input v-model="saveImageCaption" type="text" maxlength="255" />
+                </label>
+
+                <div class="form-field">
+                  <span>{{ t('saveImageCategories') }}</span>
+                  <ul v-if="saveImageSelectedCategories.length > 0" class="category-chip-list">
+                    <li v-for="category in saveImageSelectedCategories" :key="category" class="category-chip">
+                      <a
+                        :href="saveImageCategoryHref(category)"
+                        target="_blank"
+                        rel="noreferrer"
+                        class="category-chip-link"
+                        :class="{ missing: saveImageCategoryExists(category) === false }"
+                      >
+                        {{ displayUploadCategory(category) }}
+                      </a>
+                      <button
+                        type="button"
+                        class="chip-remove"
+                        :aria-label="t('removeCategory')"
+                        @click="removeSaveImageCategory(category)"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  </ul>
+                  <div class="save-image-category-entry">
+                    <input
+                      v-model="saveImageCategorySearch"
+                      type="text"
+                      :placeholder="t('commonsPlaceholder')"
+                      @input="onSaveImageCategoryInput"
+                      @focus="onSaveImageCategoryFocus"
+                      @blur="hideSaveImageCategorySuggestionsSoon"
+                      @keydown="onSaveImageCategoryKeydown"
+                    />
+                    <button
+                      type="button"
+                      class="secondary-btn"
+                      :disabled="!saveImageCategorySearch.trim()"
+                      @click.stop="addSaveImageCategoriesFromInput"
+                    >
+                      {{ t('addCategory') }}
+                    </button>
+                  </div>
+                  <ul v-if="saveImageCategorySuggestions.length > 0" class="autocomplete-list">
+                    <li v-for="category in saveImageCategorySuggestions" :key="category">
+                      <button type="button" class="autocomplete-option" @mousedown.prevent.stop @click.stop="selectSaveImageCategory(category)">
+                        {{ displayUploadCategory(category) }}
+                      </button>
+                    </li>
+                  </ul>
+                  <p v-if="saveImageCategoryLoading" class="dialog-help">{{ t('searching') }}</p>
+                  <p
+                    v-else-if="saveImageCategorySearch.trim() && !saveImageCategoryLoading && saveImageCategorySuggestions.length === 0"
+                    class="autocomplete-empty"
+                  >
+                    {{ t('saveImageCategorySuggestionsEmpty') }}
+                  </p>
+                  <div v-if="saveImageSubcategorySuggestions.length > 0" class="save-image-subcategory-suggestions">
+                    <p class="dialog-help">{{ t('saveImageSubcategorySuggestions') }}</p>
+                    <ul class="category-chip-list">
+                      <li v-for="category in saveImageSubcategorySuggestions" :key="'subcategory-' + category">
+                        <button type="button" class="subcategory-suggestion-btn" @click="selectSaveImageSubcategorySuggestion(category)">
+                          + {{ displayUploadCategory(category) }}
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                  <p
+                    v-else-if="saveImageSubcategoryLoading && saveImageSelectedCategories.length > 0"
+                    class="dialog-help"
+                  >
+                    {{ t('searching') }}
+                  </p>
+                  <p class="dialog-help">{{ t('saveImageCategoriesHelp') }}</p>
+                </div>
+
+                <div class="wizard-url-preview">
+                  <p class="dialog-help"><strong>{{ t('saveImageUrlPreview') }}</strong></p>
+                  <p class="dialog-help">{{ uploadWizardUrl }}</p>
+                </div>
+
+                <p v-if="saveImageError" class="status error" role="alert">{{ saveImageError }}</p>
+              </fieldset>
+              <div class="dialog-actions">
+                <button type="button" class="secondary-btn" @click="closeSaveImageWizard">
+                  {{ t('cancel') }}
+                </button>
+                <button type="button" class="primary-btn" @click="openCommonsUploadWizard">
+                  {{ t('saveImageOpenUploadWizard') }}
+                </button>
+              </div>
+            </section>
+          </div>
+        </article>
+      </section>
+    `
+  }
+
+  const routes = [
+    { path: '/', name: 'list', component: ListView },
+    { path: '/map', name: 'map', component: MapView },
+    { path: '/location/:id', name: 'detail', component: DetailView, props: true }
+  ]
+
+  const router = createRouter({
+    history: createWebHashHistory(),
+    routes
+  })
+
+  const AppRoot = {
+    components: { LanguageSwitcher },
+    setup() {
+      const { t, locale } = useI18n()
+      const route = useRoute()
+      const {
+        projects,
+        activeProjectId,
+        locationsVersion,
+        projectsLoading,
+        projectError,
+        setActiveProject,
+        loadProjects,
+        createProjectRecord,
+        notifyLocationsChanged,
+        getLocationsCached,
+        getLocationFromListCache,
+        getLocationDetailCached,
+      } = projectStore
+
+      const detailHref = computed(() => (route.name === 'detail' ? route.fullPath : '/'))
+      const {
+        authEnabled,
+        authAuthenticated,
+        authUsername,
+        authLoginUrl,
+        authLogoutUrl,
+        authStatusLoading,
+      } = authStore
+      const showCreateDialog = ref(false)
+      const showCradleGuideDialog = ref(false)
+      const formName = ref('')
+      const formDescription = ref('')
+      const formDatasourceType = ref('sparql')
+      const customEndpointPresetId = '__custom__'
+      const defaultPreset =
+        PREDEFINED_ENDPOINTS.find((item) => item.id === 'wikidata') ||
+        PREDEFINED_ENDPOINTS.find((item) => item.url === configuredSparqlDefaultEndpoint) ||
+        PREDEFINED_ENDPOINTS[0] ||
+        null
+      const formSparqlEndpoint = ref(defaultPreset ? defaultPreset.url : configuredSparqlDefaultEndpoint)
+      const formEndpointPreset = ref(defaultPreset ? defaultPreset.id : customEndpointPresetId)
+      const formSparqlQuery = ref(defaultProjectQuery)
+      const formError = ref('')
+      const formSaving = ref(false)
+      const showCreateLocationDialog = ref(false)
+      const createWizardStep = ref('choose')
+      const createWizardMode = ref('')
+      const newWikidataWizardStep = ref('basic')
+      const wizardChoiceLocked = ref(false)
+      const wizardSaving = ref(false)
+      const wizardError = ref('')
+      const wizardExistingWikidataItem = ref('')
+      const wizardExistingSuggestions = ref([])
+      const wizardExistingLoading = ref(false)
+      const wikidataTextLanguageOptions = [...SUPPORTED_LOCALES]
+      function defaultWikidataTextLanguage() {
+        return normalizeSupportedLocale(locale.value) || 'en'
+      }
+      const newWikidataLabel = ref('')
+      const newWikidataLabelLanguage = ref(defaultWikidataTextLanguage())
+      const newWikidataDescription = ref('')
+      const newWikidataDescriptionLanguage = ref(defaultWikidataTextLanguage())
+      const newWikidataInstanceOf = ref('')
+      const newWikidataInstanceSearch = ref('')
+      const newWikidataInstanceSuggestions = ref([])
+      const newWikidataInstanceLoading = ref(false)
+      const newWikidataCountryP17 = ref('')
+      const newWikidataCountrySearch = ref('')
+      const newWikidataCountrySuggestions = ref([])
+      const newWikidataCountryLoading = ref(false)
+      const newWikidataMunicipalityP131 = ref('')
+      const newWikidataMunicipalitySearch = ref('')
+      const newWikidataMunicipalitySuggestions = ref([])
+      const newWikidataMunicipalityLoading = ref(false)
+      const newWikidataLatitude = ref('')
+      const newWikidataLongitude = ref('')
+      const newWikidataArchitectP84 = ref('')
+      const newWikidataArchitectSearch = ref('')
+      const newWikidataArchitectSuggestions = ref([])
+      const newWikidataArchitectLoading = ref(false)
+      const newWikidataInceptionP571 = ref('')
+      const newWikidataArchitectSourceUrl = ref('')
+      const newWikidataInceptionSourceUrl = ref('')
+      const newWikidataHeritageP1435 = ref('')
+      const newWikidataHeritageSearch = ref('')
+      const newWikidataHeritageSuggestions = ref([])
+      const newWikidataHeritageLoading = ref(false)
+      const newWikidataHeritageSourceUrl = ref('')
+      const newWikidataAddressTextP6375 = ref('')
+      const newWikidataAddressTextLanguageP6375 = ref(defaultWikidataTextLanguage())
+      const newWikidataPostalCodeP281 = ref('')
+      const newWikidataCommonsCategoryP373 = ref('')
+      const newWikidataCommonsSearch = ref('')
+      const newWikidataCommonsSuggestions = ref([])
+      const newWikidataCommonsLoading = ref(false)
+      const newWikidataArchitecturalStyleP149 = ref('')
+      const newWikidataArchitecturalStyleSearch = ref('')
+      const newWikidataArchitecturalStyleSuggestions = ref([])
+      const newWikidataArchitecturalStyleLoading = ref(false)
+      const newWikidataOfficialClosureDateP3999 = ref('')
+      const newWikidataOfficialClosureDateSourceUrl = ref('')
+      const newWikidataRouteInstructionP2795 = ref('')
+      const newWikidataRouteInstructionLanguageP2795 = ref(defaultWikidataTextLanguage())
+      const locationDialogMode = ref('create')
+      const editingDraftId = ref(null)
+      const draftLoading = ref(false)
+      const draftWikidataItem = ref('')
+      const draftWikidataSuggestions = ref([])
+      const draftWikidataSearchLoading = ref(false)
+      const draftParentUri = ref('')
+      const draftParentSearch = ref('')
+      const draftParentSuggestions = ref([])
+      const draftParentLoading = ref(false)
+      const draftName = ref('')
+      const draftDescription = ref('')
+      const draftType = ref('')
+      const draftTypeSearch = ref('')
+      const draftTypeSuggestions = ref([])
+      const draftTypeLoading = ref(false)
+      const draftLatitude = ref('')
+      const draftLongitude = ref('')
+      const draftAddressText = ref('')
+      const draftPostalCode = ref('')
+      const draftMunicipalityP131 = ref('')
+      const draftMunicipalitySearch = ref('')
+      const draftMunicipalitySuggestions = ref([])
+      const draftMunicipalityLoading = ref(false)
+      const draftCommonsCategory = ref('')
+      const draftCommonsSearch = ref('')
+      const draftCommonsSuggestions = ref([])
+      const draftCommonsLoading = ref(false)
+      const wikidataEntity = ref(null)
+      const wikidataLookupLoading = ref(false)
+      const wikidataLookupError = ref('')
+      const coordinatePreviewMapElement = ref(null)
+      const showCoordinatePickerDialog = ref(false)
+      const coordinatePickerTarget = ref('draft')
+      const coordinatePickerMapElement = ref(null)
+      const coordinateSearchQuery = ref('')
+      const coordinateSearchResults = ref([])
+      const coordinateSearchLoading = ref(false)
+      const coordinateSearchError = ref('')
+      const draftError = ref('')
+      const draftSaving = ref(false)
+      const parentCandidateLocations = ref([])
+      const parentCandidatesContext = ref('')
+      let wikidataLookupToken = 0
+      const isEditMode = computed(() => locationDialogMode.value === 'edit' && editingDraftId.value !== null)
+      const isWizardChoiceStep = computed(() => !isEditMode.value && createWizardStep.value === 'choose')
+      const isWizardExistingMode = computed(() => !isEditMode.value && createWizardMode.value === 'existing-wikidata' && createWizardStep.value === 'form')
+      const isWizardNewMode = computed(() => !isEditMode.value && createWizardMode.value === 'new-wikidata' && createWizardStep.value === 'form')
+      const isWizardNewBasicStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'basic')
+      const isWizardNewLocationStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'location')
+      const showLocalDraftForm = computed(() => isEditMode.value || createWizardMode.value === 'local-draft')
+      const canReturnToWizardChoice = computed(() => !isEditMode.value && !wizardChoiceLocked.value && createWizardStep.value === 'form')
+      const canCreateLocation = computed(() => !authStatusLoading.value && (!authEnabled.value || authAuthenticated.value))
+      const showCradleGuideButton = computed(() => authEnabled.value && !authAuthenticated.value && !authStatusLoading.value)
+      const isCreateActionBusy = computed(() => draftLoading.value || draftSaving.value || wizardSaving.value)
+      const cradleUrl = 'https://cradle.toolforge.org/#/subject/building_(wikikuvaajat)'
+      const locationDialogTitle = computed(() => {
+        if (isEditMode.value) {
+          return t('editLocationTitle')
+        }
+        if (isWizardChoiceStep.value) {
+          return t('createLocationTypeStepTitle')
+        }
+        if (isWizardExistingMode.value) {
+          return t('addExistingWikidataTitle')
+        }
+        if (isWizardNewMode.value) {
+          return t('createNewWikidataTitle')
+        }
+        return t('createLocationTitle')
+      })
+      const locationDialogSubmitLabel = computed(() => {
+        if (isEditMode.value) {
+          return t('saveChanges')
+        }
+        if (isWizardExistingMode.value) {
+          return t('addToList')
+        }
+        if (isWizardNewMode.value) {
+          if (isWizardNewBasicStep.value) {
+            return t('next')
+          }
+          return t('createWikidataItem')
+        }
+        return t('create')
+      })
+      const isWikidataLocked = computed(() => {
+        return Boolean(extractWikidataId(draftWikidataItem.value) && wikidataEntity.value)
+      })
+      const areWikidataFieldsReadOnly = computed(() => isWikidataLocked.value)
+      const emptyValueLabel = computed(() => t('noValue'))
+      const manualTypeDisplay = computed(() => draftTypeSearch.value.trim() || draftType.value.trim())
+      const manualMunicipalityDisplay = computed(() => draftMunicipalitySearch.value.trim() || draftMunicipalityP131.value.trim())
+      const manualCommonsDisplay = computed(() => draftCommonsSearch.value.trim() || draftCommonsCategory.value.trim())
+      const wikidataTypeDisplay = computed(() => {
+        if (!wikidataEntity.value || !wikidataEntity.value.instance_of) {
+          return ''
+        }
+        const item = wikidataEntity.value.instance_of
+        return item.label ? `${item.label} (${item.id})` : item.id
+      })
+      const wikidataMunicipalityDisplay = computed(() => {
+        if (!wikidataEntity.value || !wikidataEntity.value.municipality) {
+          return ''
+        }
+        const item = wikidataEntity.value.municipality
+        return item.label ? `${item.label} (${item.id})` : item.id
+      })
+      const wikidataCommonsDisplay = computed(() => {
+        if (!wikidataEntity.value || !wikidataEntity.value.commons_category) {
+          return ''
+        }
+        return `Category:${wikidataEntity.value.commons_category}`
+      })
+      const wikidataAddressDisplay = computed(() => wikidataEntity.value?.address_text || '')
+      const wikidataPostalDisplay = computed(() => wikidataEntity.value?.postal_code || '')
+      const nameDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftName.value, wikidataEntity.value?.label || ''))
+      const descriptionDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftDescription.value, wikidataEntity.value?.description || ''))
+      const typeDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftType.value, wikidataEntity.value?.instance_of?.id || ''))
+      const addressDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftAddressText.value, wikidataEntity.value?.address_text || ''))
+      const postalDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftPostalCode.value, wikidataEntity.value?.postal_code || ''))
+      const municipalityDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftMunicipalityP131.value, wikidataEntity.value?.municipality?.id || ''))
+      const commonsDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftCommonsCategory.value, wikidataEntity.value?.commons_category || ''))
+      const coordinatesDiffers = computed(() => {
+        if (!isWikidataLocked.value) {
+          return false
+        }
+        return coordinatesDiffer(
+          draftLatitude.value,
+          draftLongitude.value,
+          wikidataEntity.value?.latitude,
+          wikidataEntity.value?.longitude,
+        )
+      })
+      const showManualNameDiff = computed(() => nameDiffers.value && hasTextValue(draftName.value))
+      const showManualDescriptionDiff = computed(() => descriptionDiffers.value && hasTextValue(draftDescription.value))
+      const showManualTypeDiff = computed(() => typeDiffers.value && hasTextValue(draftType.value))
+      const showManualAddressDiff = computed(() => addressDiffers.value && hasTextValue(draftAddressText.value))
+      const showManualPostalDiff = computed(() => postalDiffers.value && hasTextValue(draftPostalCode.value))
+      const showManualMunicipalityDiff = computed(() => municipalityDiffers.value && hasTextValue(draftMunicipalityP131.value))
+      const showManualCommonsDiff = computed(() => commonsDiffers.value && hasTextValue(draftCommonsCategory.value))
+      const showManualCoordinatesDiff = computed(() => {
+        const hasLocalCoordinateInput = hasTextValue(draftLatitude.value) && hasTextValue(draftLongitude.value)
+        return coordinatesDiffers.value && hasLocalCoordinateInput
+      })
+      const showNameField = computed(() => !isWikidataLocked.value)
+      const showDescriptionField = computed(() => !isWikidataLocked.value)
+      const showTypeField = computed(() => !isWikidataLocked.value)
+      const showLatitudeField = computed(() => !isWikidataLocked.value)
+      const showLongitudeField = computed(() => !isWikidataLocked.value)
+      const showCoordinateInputRow = computed(() => showLatitudeField.value || showLongitudeField.value)
+      const showAddressField = computed(() => !isWikidataLocked.value)
+      const showPostalField = computed(() => !isWikidataLocked.value)
+      const showMunicipalityField = computed(() => !isWikidataLocked.value)
+      const showPostalMunicipalityRow = computed(() => showPostalField.value || showMunicipalityField.value)
+      const showCommonsField = computed(() => !isWikidataLocked.value)
+      const showNameInfo = computed(() => isWikidataLocked.value && showManualNameDiff.value)
+      const showDescriptionInfo = computed(() => isWikidataLocked.value && showManualDescriptionDiff.value)
+      const showTypeInfo = computed(() => isWikidataLocked.value && showManualTypeDiff.value)
+      const showCoordinatesInfo = computed(() => isWikidataLocked.value && showManualCoordinatesDiff.value)
+      const showAddressInfo = computed(() => isWikidataLocked.value && showManualAddressDiff.value)
+      const showPostalInfo = computed(() => isWikidataLocked.value && showManualPostalDiff.value)
+      const showMunicipalityInfo = computed(() => isWikidataLocked.value && showManualMunicipalityDiff.value)
+      const showCommonsInfo = computed(() => isWikidataLocked.value && showManualCommonsDiff.value)
+      function coordinatePickerFields() {
+        if (coordinatePickerTarget.value === 'new-wikidata') {
+          return {
+            latitudeRef: newWikidataLatitude,
+            longitudeRef: newWikidataLongitude,
+          }
+        }
+        return {
+          latitudeRef: draftLatitude,
+          longitudeRef: draftLongitude,
+        }
+      }
+      const coordinatePickerLatitudeValue = computed(() => coordinatePickerFields().latitudeRef.value)
+      const coordinatePickerLongitudeValue = computed(() => coordinatePickerFields().longitudeRef.value)
+      const coordinatePickerLatitudeDisplay = computed(() => (
+        hasTextValue(coordinatePickerLatitudeValue.value)
+          ? String(coordinatePickerLatitudeValue.value).trim()
+          : '-'
+      ))
+      const coordinatePickerLongitudeDisplay = computed(() => (
+        hasTextValue(coordinatePickerLongitudeValue.value)
+          ? String(coordinatePickerLongitudeValue.value).trim()
+          : '-'
+      ))
+      const hasValidCoordinates = computed(() => {
+        const lat = Number.parseFloat(String(coordinatePickerLatitudeValue.value))
+        const lon = Number.parseFloat(String(coordinatePickerLongitudeValue.value))
+        return !Number.isNaN(lat) && !Number.isNaN(lon)
+      })
+
+      let coordinatePickerMapInstance = null
+      let coordinatePickerMarker = null
+      let coordinatePreviewMapInstance = null
+      let coordinatePreviewManualMarker = null
+      let coordinatePreviewWikidataMarker = null
+
+      const searchTypeSuggestionsDebounced = debounce(async (searchTerm) => {
+        draftTypeLoading.value = true
+        try {
+          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
+          draftTypeSuggestions.value = Array.isArray(items) ? items : []
+        } catch (error) {
+          draftTypeSuggestions.value = []
+        } finally {
+          draftTypeLoading.value = false
+        }
+      }, 250)
+
+      const searchWikidataItemSuggestionsDebounced = debounce(async (searchTerm) => {
+        draftWikidataSearchLoading.value = true
+        try {
+          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
+          draftWikidataSuggestions.value = Array.isArray(items) ? items : []
+        } catch (error) {
+          draftWikidataSuggestions.value = []
+        } finally {
+          draftWikidataSearchLoading.value = false
+        }
+      }, 250)
+
+      const searchMunicipalitySuggestionsDebounced = debounce(async (searchTerm) => {
+        draftMunicipalityLoading.value = true
+        try {
+          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
+          draftMunicipalitySuggestions.value = Array.isArray(items) ? items : []
+        } catch (error) {
+          draftMunicipalitySuggestions.value = []
+        } finally {
+          draftMunicipalityLoading.value = false
+        }
+      }, 250)
+
+      const searchCommonsSuggestionsDebounced = debounce(async (searchTerm) => {
+        draftCommonsLoading.value = true
+        try {
+          const items = await searchCommonsCategories(searchTerm, AUTOCOMPLETE_RESULT_LIMIT)
+          draftCommonsSuggestions.value = Array.isArray(items) ? items : []
+        } catch (error) {
+          draftCommonsSuggestions.value = []
+        } finally {
+          draftCommonsLoading.value = false
+        }
+      }, 250)
+
+      function createWikidataSuggestionSearch(targetSuggestionsRef, targetLoadingRef) {
+        return debounce(async (searchTerm) => {
+          targetLoadingRef.value = true
+          try {
+            const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
+            targetSuggestionsRef.value = Array.isArray(items) ? items : []
+          } catch (error) {
+            targetSuggestionsRef.value = []
+          } finally {
+            targetLoadingRef.value = false
+          }
+        }, 250)
+      }
+
+      function createCommonsSuggestionSearch(targetSuggestionsRef, targetLoadingRef) {
+        return debounce(async (searchTerm) => {
+          targetLoadingRef.value = true
+          try {
+            const items = await searchCommonsCategories(searchTerm, AUTOCOMPLETE_RESULT_LIMIT)
+            targetSuggestionsRef.value = Array.isArray(items) ? items : []
+          } catch (error) {
+            targetSuggestionsRef.value = []
+          } finally {
+            targetLoadingRef.value = false
+          }
+        }, 250)
+      }
+
+      const searchWizardExistingSuggestionsDebounced = createWikidataSuggestionSearch(
+        wizardExistingSuggestions,
+        wizardExistingLoading,
+      )
+      const searchNewInstanceSuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataInstanceSuggestions,
+        newWikidataInstanceLoading,
+      )
+      const searchNewCountrySuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataCountrySuggestions,
+        newWikidataCountryLoading,
+      )
+      const searchNewMunicipalitySuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataMunicipalitySuggestions,
+        newWikidataMunicipalityLoading,
+      )
+      const searchNewArchitectSuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataArchitectSuggestions,
+        newWikidataArchitectLoading,
+      )
+      const searchNewHeritageSuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataHeritageSuggestions,
+        newWikidataHeritageLoading,
+      )
+      const searchNewStyleSuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataArchitecturalStyleSuggestions,
+        newWikidataArchitecturalStyleLoading,
+      )
+      const searchNewCommonsSuggestionsDebounced = createCommonsSuggestionSearch(
+        newWikidataCommonsSuggestions,
+        newWikidataCommonsLoading,
+      )
+
+      function resolveWizardQid(rawValue, searchValue = '') {
+        return extractWikidataId(rawValue || searchValue || '')
+      }
+
+      function parentCandidatesKey() {
+        return `${locale.value}|${locationsVersion.value}`
+      }
+
+      async function loadParentCandidates(force = false) {
+        const contextKey = parentCandidatesKey()
+        if (!force && parentCandidatesContext.value === contextKey && parentCandidateLocations.value.length > 0) {
+          return parentCandidateLocations.value
+        }
+
+        const loaded = await getLocationsCached(locale.value, { force })
+        parentCandidateLocations.value = Array.isArray(loaded) ? loaded : []
+        parentCandidatesContext.value = contextKey
+        return parentCandidateLocations.value
+      }
+
+      function toParentCandidateList(candidates, searchTerm) {
+        const normalizedSearch = searchTerm.trim().toLowerCase()
+        const results = []
+        for (const item of candidates) {
+          if (!item || typeof item !== 'object') {
+            continue
+          }
+          if (isEditMode.value && Number.parseInt(String(item.draft_id), 10) === editingDraftId.value) {
+            continue
+          }
+          const uri = normalizeLocationUri(String(item.uri || ''))
+          if (!uri) {
+            continue
+          }
+          const label = locationOptionLabel(item).toLowerCase()
+          if (normalizedSearch && !label.includes(normalizedSearch)) {
+            continue
+          }
+          results.push(item)
+          if (results.length >= AUTOCOMPLETE_RESULT_LIMIT) {
+            break
+          }
+        }
+        return results
+      }
+
+      const searchParentSuggestionsDebounced = debounce(async (searchTerm) => {
+        draftParentLoading.value = true
+        try {
+          const candidates = await loadParentCandidates()
+          draftParentSuggestions.value = toParentCandidateList(candidates, searchTerm)
+        } catch (error) {
+          draftParentSuggestions.value = []
+        } finally {
+          draftParentLoading.value = false
+        }
+      }, 220)
+
+      function wikidataLookupEntityFromLocation(location, fallbackQid = '') {
+        if (!location || typeof location !== 'object') {
+          return null
+        }
+
+        const uri = normalizeLocationUri(String(location.uri || ''))
+        const qid = extractWikidataId(uri || String(location.wikidata_item || fallbackQid || ''))
+        if (!qid) {
+          return null
+        }
+
+        const latitude = parseCoordinate(location.latitude)
+        const longitude = parseCoordinate(location.longitude)
+        const municipalityId = extractWikidataId(
+          String(location.municipality_p131 || location.location_p276 || '')
+        )
+        const municipalityLabel = String(
+          location.municipality_p131_label || location.location_p276_label || ''
+        ).trim()
+        const instanceOfId = extractWikidataId(
+          String(location.instance_of_p31 || location.location_type || '')
+        )
+        const instanceOfLabel = String(location.instance_of_p31_label || location.location_type || '').trim()
+
+        return {
+          id: qid,
+          uri: uri || `https://www.wikidata.org/entity/${qid}`,
+          label: String(location.name || qid).trim() || qid,
+          description: String(location.description || '').trim(),
+          latitude,
+          longitude,
+          instance_of: instanceOfId
+            ? { id: instanceOfId, label: instanceOfLabel || instanceOfId }
+            : null,
+          municipality: municipalityId
+            ? { id: municipalityId, label: municipalityLabel || municipalityId }
+            : null,
+          commons_category: String(location.commons_category || '').trim(),
+          address_text: String(location.address_text || '').trim(),
+          postal_code: String(location.postal_code || '').trim(),
+        }
+      }
+
+      const wikidataLookupDebounced = debounce(async (entityId) => {
+        const qid = extractWikidataId(entityId)
+        if (!qid) {
+          return
+        }
+        const currentToken = ++wikidataLookupToken
+        const wikidataUri = `https://www.wikidata.org/entity/${qid}`
+        wikidataLookupLoading.value = true
+        wikidataLookupError.value = ''
+
+        const listCached = getLocationFromListCache(wikidataUri, locale.value)
+        const listInitialEntity = wikidataLookupEntityFromLocation(listCached, qid)
+        if (listInitialEntity) {
+          wikidataEntity.value = listInitialEntity
+          draftWikidataItem.value = listInitialEntity.id
+        }
+
+        try {
+          const detailLocation = await getLocationDetailCached(
+            wikidataUri,
+            locale.value,
+            { force: true },
+          )
+          if (currentToken !== wikidataLookupToken) {
+            return
+          }
+          const detailEntity = wikidataLookupEntityFromLocation(detailLocation, qid)
+          if (!detailEntity) {
+            throw new Error(t('wikidataLookupFailed'))
+          }
+          wikidataEntity.value = detailEntity
+          draftWikidataItem.value = detailEntity.id
+          draftWikidataSuggestions.value = []
+          draftTypeSuggestions.value = []
+          draftMunicipalitySuggestions.value = []
+          draftCommonsSuggestions.value = []
+        } catch (error) {
+          if (currentToken !== wikidataLookupToken) {
+            return
+          }
+          if (!listInitialEntity) {
+            wikidataEntity.value = null
+          }
+          wikidataLookupError.value = error.message || t('wikidataLookupFailed')
+        } finally {
+          if (currentToken === wikidataLookupToken) {
+            wikidataLookupLoading.value = false
+          }
+        }
+      }, 320)
+
+      const activeProjectModel = computed({
+        get: () => activeProjectId.value,
+        set: (nextValue) => {
+          setActiveProject(nextValue)
+        }
+      })
+
+      async function loadAuthStatus() {
+        authStatusLoading.value = true
+        try {
+          const payload = await fetchAuthStatus()
+          const isPayloadObject = payload && typeof payload === 'object'
+          authEnabled.value = isPayloadObject ? Boolean(payload.enabled) : false
+          authAuthenticated.value = isPayloadObject ? Boolean(payload.authenticated) : false
+          authUsername.value = isPayloadObject ? String(payload.username || '') : ''
+          authLoginUrl.value = isPayloadObject
+            ? String(payload.login_url || '/auth/login/mediawiki/?next=/')
+            : '/auth/login/mediawiki/?next=/'
+          authLogoutUrl.value = isPayloadObject
+            ? String(payload.logout_url || '/auth/logout/?next=/')
+            : '/auth/logout/?next=/'
+        } catch (error) {
+          authEnabled.value = false
+          authAuthenticated.value = false
+          authUsername.value = ''
+        } finally {
+          authStatusLoading.value = false
+        }
+      }
+
+      function startWikimediaLogin() {
+        window.location.href = authLoginUrl.value || '/auth/login/mediawiki/?next=/'
+      }
+
+      function logoutWikimedia() {
+        window.location.href = authLogoutUrl.value || '/auth/logout/?next=/'
+      }
+
+      function openCradleGuideDialog() {
+        showCradleGuideDialog.value = true
+      }
+
+      function closeCradleGuideDialog() {
+        showCradleGuideDialog.value = false
+      }
+
+      function openCradle() {
+        window.open(cradleUrl, '_blank', 'noopener,noreferrer')
+      }
+
+      function openCreateDialog() {
+        formName.value = ''
+        formDescription.value = ''
+        formDatasourceType.value = 'sparql'
+        formEndpointPreset.value = defaultPreset ? defaultPreset.id : customEndpointPresetId
+        formSparqlEndpoint.value = defaultPreset ? defaultPreset.url : configuredSparqlDefaultEndpoint
+        formSparqlQuery.value = sampleQueryForEndpoint(formEndpointPreset.value)
+        formError.value = ''
+        showCreateDialog.value = true
+      }
+
+      function applyEndpointPreset() {
+        if (formEndpointPreset.value === customEndpointPresetId) {
+          return
+        }
+        const selectedPreset = PREDEFINED_ENDPOINTS.find((item) => item.id === formEndpointPreset.value)
+        if (selectedPreset) {
+          formSparqlEndpoint.value = selectedPreset.url
+          formSparqlQuery.value = sampleQueryForEndpoint(selectedPreset.id)
+        }
+      }
+
+      function closeCreateDialog() {
+        if (!formSaving.value) {
+          showCreateDialog.value = false
+        }
+      }
+
+      function resetDraftForm() {
+        wikidataEntity.value = null
+        wikidataLookupLoading.value = false
+        wikidataLookupError.value = ''
+        draftWikidataItem.value = ''
+        draftWikidataSuggestions.value = []
+        draftWikidataSearchLoading.value = false
+        draftParentUri.value = ''
+        draftParentSearch.value = ''
+        draftParentSuggestions.value = []
+        draftParentLoading.value = false
+        draftName.value = ''
+        draftDescription.value = ''
+        draftType.value = ''
+        draftTypeSearch.value = ''
+        draftTypeSuggestions.value = []
+        draftTypeLoading.value = false
+        draftLatitude.value = ''
+        draftLongitude.value = ''
+        draftAddressText.value = ''
+        draftPostalCode.value = ''
+        draftMunicipalityP131.value = ''
+        draftMunicipalitySearch.value = ''
+        draftMunicipalitySuggestions.value = []
+        draftMunicipalityLoading.value = false
+        draftCommonsCategory.value = ''
+        draftCommonsSearch.value = ''
+        draftCommonsSuggestions.value = []
+        draftCommonsLoading.value = false
+        coordinateSearchQuery.value = ''
+        coordinateSearchResults.value = []
+        coordinateSearchLoading.value = false
+        coordinateSearchError.value = ''
+        draftError.value = ''
+        destroyCoordinatePreviewMap()
+      }
+
+      function resetWikidataCreationForm() {
+        newWikidataWizardStep.value = 'basic'
+        wizardError.value = ''
+        wizardSaving.value = false
+        wizardExistingWikidataItem.value = ''
+        wizardExistingSuggestions.value = []
+        wizardExistingLoading.value = false
+        newWikidataLabel.value = ''
+        newWikidataLabelLanguage.value = defaultWikidataTextLanguage()
+        newWikidataDescription.value = ''
+        newWikidataDescriptionLanguage.value = defaultWikidataTextLanguage()
+        newWikidataInstanceOf.value = ''
+        newWikidataInstanceSearch.value = ''
+        newWikidataInstanceSuggestions.value = []
+        newWikidataInstanceLoading.value = false
+        newWikidataCountryP17.value = ''
+        newWikidataCountrySearch.value = ''
+        newWikidataCountrySuggestions.value = []
+        newWikidataCountryLoading.value = false
+        newWikidataMunicipalityP131.value = ''
+        newWikidataMunicipalitySearch.value = ''
+        newWikidataMunicipalitySuggestions.value = []
+        newWikidataMunicipalityLoading.value = false
+        newWikidataLatitude.value = ''
+        newWikidataLongitude.value = ''
+        newWikidataArchitectP84.value = ''
+        newWikidataArchitectSearch.value = ''
+        newWikidataArchitectSuggestions.value = []
+        newWikidataArchitectLoading.value = false
+        newWikidataInceptionP571.value = ''
+        newWikidataArchitectSourceUrl.value = ''
+        newWikidataInceptionSourceUrl.value = ''
+        newWikidataHeritageP1435.value = ''
+        newWikidataHeritageSearch.value = ''
+        newWikidataHeritageSuggestions.value = []
+        newWikidataHeritageLoading.value = false
+        newWikidataHeritageSourceUrl.value = ''
+        newWikidataAddressTextP6375.value = ''
+        newWikidataAddressTextLanguageP6375.value = defaultWikidataTextLanguage()
+        newWikidataPostalCodeP281.value = ''
+        newWikidataCommonsCategoryP373.value = ''
+        newWikidataCommonsSearch.value = ''
+        newWikidataCommonsSuggestions.value = []
+        newWikidataCommonsLoading.value = false
+        newWikidataArchitecturalStyleP149.value = ''
+        newWikidataArchitecturalStyleSearch.value = ''
+        newWikidataArchitecturalStyleSuggestions.value = []
+        newWikidataArchitecturalStyleLoading.value = false
+        newWikidataOfficialClosureDateP3999.value = ''
+        newWikidataOfficialClosureDateSourceUrl.value = ''
+        newWikidataRouteInstructionP2795.value = ''
+        newWikidataRouteInstructionLanguageP2795.value = defaultWikidataTextLanguage()
+      }
+
+      function chooseCreateWizardMode(mode) {
+        createWizardMode.value = mode
+        newWikidataWizardStep.value = 'basic'
+        createWizardStep.value = 'form'
+        wizardError.value = ''
+      }
+
+      function returnToCreateWizardChoice() {
+        if (wizardChoiceLocked.value || isCreateActionBusy.value) {
+          return
+        }
+        createWizardMode.value = ''
+        newWikidataWizardStep.value = 'basic'
+        createWizardStep.value = 'choose'
+        wizardError.value = ''
+        draftError.value = ''
+      }
+
+      function goToNewWikidataLocationStep() {
+        if (!isWizardNewMode.value || newWikidataWizardStep.value !== 'basic') {
+          return
+        }
+        wizardError.value = ''
+        const label = newWikidataLabel.value.trim()
+        const description = newWikidataDescription.value.trim()
+        const instanceQid = resolveWizardQid(newWikidataInstanceOf.value, newWikidataInstanceSearch.value)
+        if (!label) {
+          wizardError.value = t('locationNameRequired')
+          return
+        }
+        if (!description) {
+          wizardError.value = t('locationDescriptionRequired')
+          return
+        }
+        if (!instanceQid) {
+          wizardError.value = t('locationTypeRequired')
+          return
+        }
+        newWikidataWizardStep.value = 'location'
+      }
+
+      function returnToNewWikidataBasicStep() {
+        if (!isWizardNewMode.value || newWikidataWizardStep.value !== 'location' || isCreateActionBusy.value) {
+          return
+        }
+        wizardError.value = ''
+        newWikidataWizardStep.value = 'basic'
+      }
+
+      function openCreateLocationDialog(initialParent = null) {
+        if (!canCreateLocation.value) {
+          return
+        }
+
+        const hasParentContext =
+          initialParent &&
+          typeof initialParent === 'object' &&
+          (
+            Object.prototype.hasOwnProperty.call(initialParent, 'parentUri') ||
+            Object.prototype.hasOwnProperty.call(initialParent, 'parentName') ||
+            Object.prototype.hasOwnProperty.call(initialParent, 'parentLatitude') ||
+            Object.prototype.hasOwnProperty.call(initialParent, 'parentLongitude')
+          )
+        const parentContext = hasParentContext ? initialParent : null
+
+        locationDialogMode.value = 'create'
+        editingDraftId.value = null
+        draftLoading.value = false
+        draftSaving.value = false
+        wizardSaving.value = false
+        resetDraftForm()
+        resetWikidataCreationForm()
+        wizardChoiceLocked.value = Boolean(parentContext)
+        if (wizardChoiceLocked.value) {
+          createWizardMode.value = 'local-draft'
+          createWizardStep.value = 'form'
+        } else {
+          createWizardMode.value = ''
+          createWizardStep.value = 'choose'
+        }
+        if (parentContext) {
+          const parentUri = normalizeLocationUri(String(parentContext.parentUri || ''))
+          if (parentUri) {
+            draftParentUri.value = parentUri
+            const parentName = typeof parentContext.parentName === 'string' ? parentContext.parentName.trim() : ''
+            draftParentSearch.value = parentName ? `${parentName} (${parentUri})` : parentUri
+          }
+
+          const parentLatitude = parseCoordinate(parentContext.parentLatitude)
+          const parentLongitude = parseCoordinate(parentContext.parentLongitude)
+          if (parentLatitude !== null && parentLongitude !== null) {
+            draftLatitude.value = String(parentLatitude)
+            draftLongitude.value = String(parentLongitude)
+          }
+        }
+        showCreateLocationDialog.value = true
+      }
+
+      function applyDraftPayloadToForm(draft) {
+        draftWikidataItem.value = String(draft.wikidata_item || '').trim()
+        draftParentUri.value = normalizeLocationUri(String(draft.parent_uri || ''))
+        draftParentSearch.value = draftParentUri.value
+        draftName.value = String(draft.name || '')
+        draftDescription.value = String(draft.description || '')
+        draftType.value = String(draft.location_type || '')
+        draftTypeSearch.value = String(draft.location_type || '')
+        draftLatitude.value = draft.latitude === null || draft.latitude === undefined ? '' : String(draft.latitude)
+        draftLongitude.value = draft.longitude === null || draft.longitude === undefined ? '' : String(draft.longitude)
+        draftAddressText.value = String(draft.address_text || '')
+        draftPostalCode.value = String(draft.postal_code || '')
+        draftMunicipalityP131.value = String(draft.municipality_p131 || '')
+        draftMunicipalitySearch.value = String(draft.municipality_p131 || '')
+        draftCommonsCategory.value = String(draft.commons_category || '')
+        draftCommonsSearch.value = String(draft.commons_category || '')
+      }
+
+      async function syncDraftParentSearchLabel() {
+        if (!draftParentUri.value) {
+          draftParentSearch.value = ''
+          return
+        }
+        try {
+          const candidates = await loadParentCandidates()
+          const normalizedParent = normalizeLocationUri(draftParentUri.value)
+          const match = candidates.find(
+            (item) => normalizeLocationUri(String(item && item.uri ? item.uri : '')) === normalizedParent
+          )
+          if (match) {
+            draftParentSearch.value = locationOptionLabel(match)
+            return
+          }
+        } catch (error) {
+          // Keep URI fallback text if candidates are unavailable.
+        }
+        draftParentSearch.value = draftParentUri.value
+      }
+
+      async function openEditLocationDialog(draftId) {
+        const parsedDraftId = Number.parseInt(String(draftId), 10)
+        if (Number.isNaN(parsedDraftId)) {
+          return
+        }
+
+        locationDialogMode.value = 'edit'
+        editingDraftId.value = parsedDraftId
+        wizardChoiceLocked.value = true
+        createWizardMode.value = 'local-draft'
+        createWizardStep.value = 'form'
+        draftLoading.value = true
+        resetDraftForm()
+        resetWikidataCreationForm()
+        showCreateLocationDialog.value = true
+
+        try {
+          const draft = await fetchDraft(parsedDraftId)
+          applyDraftPayloadToForm(draft)
+          await syncDraftParentSearchLabel()
+        } catch (error) {
+          draftError.value = error.message || t('loadError')
+        } finally {
+          draftLoading.value = false
+        }
+      }
+
+      function handleOpenDraftEditorEvent(event) {
+        const detail = event && event.detail ? event.detail : null
+        const draftId = detail ? detail.draftId : null
+        if (draftId === null || draftId === undefined) {
+          return
+        }
+        openEditLocationDialog(draftId)
+      }
+
+      function handleOpenCreateSubLocationEvent(event) {
+        const detail = event && event.detail ? event.detail : null
+        if (!canCreateLocation.value) {
+          return
+        }
+        openCreateLocationDialog(detail)
+      }
+
+      function closeCreateLocationDialog() {
+        if (!draftSaving.value && !draftLoading.value && !wizardSaving.value) {
+          showCreateLocationDialog.value = false
+          locationDialogMode.value = 'create'
+          editingDraftId.value = null
+          createWizardMode.value = ''
+          createWizardStep.value = 'choose'
+          wizardChoiceLocked.value = false
+          draftLoading.value = false
+          wizardSaving.value = false
+          wizardError.value = ''
+          destroyCoordinatePreviewMap()
+        }
+      }
+
+      function onDraftWikidataInput() {
+        const inputValue = draftWikidataItem.value.trim()
+        if (!inputValue) {
+          draftWikidataSuggestions.value = []
+          return
+        }
+
+        const qid = extractWikidataId(inputValue)
+        if (qid) {
+          draftWikidataSuggestions.value = []
+          return
+        }
+
+        searchWikidataItemSuggestionsDebounced(inputValue)
+      }
+
+      function selectDraftWikidataItem(option) {
+        draftWikidataItem.value = option.id
+        draftWikidataSuggestions.value = []
+      }
+
+      function hideWikidataSuggestionsSoon() {
+        window.setTimeout(() => {
+          draftWikidataSuggestions.value = []
+        }, 120)
+      }
+
+      function onDraftParentInput() {
+        draftParentUri.value = ''
+        if (!draftParentSearch.value.trim()) {
+          draftParentSuggestions.value = []
+          return
+        }
+        searchParentSuggestionsDebounced(draftParentSearch.value)
+      }
+
+      async function onDraftParentFocus() {
+        if (!draftParentSearch.value.trim()) {
+          return
+        }
+        draftParentLoading.value = true
+        try {
+          const candidates = await loadParentCandidates()
+          draftParentSuggestions.value = toParentCandidateList(candidates, draftParentSearch.value)
+        } catch (error) {
+          draftParentSuggestions.value = []
+        } finally {
+          draftParentLoading.value = false
+        }
+      }
+
+      function selectDraftParent(option) {
+        draftParentUri.value = normalizeLocationUri(String(option && option.uri ? option.uri : ''))
+        draftParentSearch.value = locationOptionLabel(option)
+        draftParentSuggestions.value = []
+      }
+
+      function clearDraftParent() {
+        draftParentUri.value = ''
+        draftParentSearch.value = ''
+        draftParentSuggestions.value = []
+      }
+
+      function hideParentSuggestionsSoon() {
+        window.setTimeout(() => {
+          draftParentSuggestions.value = []
+        }, 120)
+      }
+
+      function onDraftTypeInput() {
+        if (areWikidataFieldsReadOnly.value) {
+          return
+        }
+        draftType.value = ''
+        if (!draftTypeSearch.value.trim()) {
+          draftTypeSuggestions.value = []
+          return
+        }
+        searchTypeSuggestionsDebounced(draftTypeSearch.value.trim())
+      }
+
+      function selectDraftType(option) {
+        draftType.value = option.id
+        draftTypeSearch.value = `${option.label} (${option.id})`
+        draftTypeSuggestions.value = []
+      }
+
+      function hideTypeSuggestionsSoon() {
+        window.setTimeout(() => {
+          draftTypeSuggestions.value = []
+        }, 120)
+      }
+
+      function onDraftMunicipalityInput() {
+        if (areWikidataFieldsReadOnly.value) {
+          return
+        }
+        draftMunicipalityP131.value = ''
+        if (!draftMunicipalitySearch.value.trim()) {
+          draftMunicipalitySuggestions.value = []
+          return
+        }
+        searchMunicipalitySuggestionsDebounced(draftMunicipalitySearch.value.trim())
+      }
+
+      function selectDraftMunicipality(option) {
+        draftMunicipalityP131.value = option.id
+        draftMunicipalitySearch.value = `${option.label} (${option.id})`
+        draftMunicipalitySuggestions.value = []
+      }
+
+      function hideMunicipalitySuggestionsSoon() {
+        window.setTimeout(() => {
+          draftMunicipalitySuggestions.value = []
+        }, 120)
+      }
+
+      function onDraftCommonsInput() {
+        if (areWikidataFieldsReadOnly.value) {
+          return
+        }
+        draftCommonsCategory.value = ''
+        if (!draftCommonsSearch.value.trim()) {
+          draftCommonsSuggestions.value = []
+          return
+        }
+        searchCommonsSuggestionsDebounced(draftCommonsSearch.value.trim())
+      }
+
+      function selectDraftCommons(option) {
+        draftCommonsCategory.value = option.name
+        draftCommonsSearch.value = option.title
+        draftCommonsSuggestions.value = []
+      }
+
+      function hideCommonsSuggestionsSoon() {
+        window.setTimeout(() => {
+          draftCommonsSuggestions.value = []
+        }, 120)
+      }
+
+      function hideSuggestionsSoon(targetSuggestionsRef) {
+        window.setTimeout(() => {
+          targetSuggestionsRef.value = []
+        }, 120)
+      }
+
+      function selectWikidataSuggestion(option, targetIdRef, targetSearchRef, targetSuggestionsRef) {
+        targetIdRef.value = option.id
+        targetSearchRef.value = `${option.label} (${option.id})`
+        targetSuggestionsRef.value = []
+      }
+
+      function onWizardExistingWikidataInput() {
+        const inputValue = wizardExistingWikidataItem.value.trim()
+        if (!inputValue) {
+          wizardExistingSuggestions.value = []
+          return
+        }
+
+        if (extractWikidataId(inputValue)) {
+          wizardExistingSuggestions.value = []
+          return
+        }
+
+        searchWizardExistingSuggestionsDebounced(inputValue)
+      }
+
+      function selectWizardExistingWikidataItem(option) {
+        wizardExistingWikidataItem.value = option.id
+        wizardExistingSuggestions.value = []
+      }
+
+      function hideWizardExistingSuggestionsSoon() {
+        hideSuggestionsSoon(wizardExistingSuggestions)
+      }
+
+      function onNewWikidataInstanceInput() {
+        newWikidataInstanceOf.value = ''
+        if (!newWikidataInstanceSearch.value.trim()) {
+          newWikidataInstanceSuggestions.value = []
+          return
+        }
+        searchNewInstanceSuggestionsDebounced(newWikidataInstanceSearch.value.trim())
+      }
+
+      function selectNewWikidataInstance(option) {
+        selectWikidataSuggestion(
+          option,
+          newWikidataInstanceOf,
+          newWikidataInstanceSearch,
+          newWikidataInstanceSuggestions,
+        )
+      }
+
+      function hideNewWikidataInstanceSuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataInstanceSuggestions)
+      }
+
+      function onNewWikidataCountryInput() {
+        newWikidataCountryP17.value = ''
+        if (!newWikidataCountrySearch.value.trim()) {
+          newWikidataCountrySuggestions.value = []
+          return
+        }
+        searchNewCountrySuggestionsDebounced(newWikidataCountrySearch.value.trim())
+      }
+
+      function selectNewWikidataCountry(option) {
+        selectWikidataSuggestion(
+          option,
+          newWikidataCountryP17,
+          newWikidataCountrySearch,
+          newWikidataCountrySuggestions,
+        )
+      }
+
+      function hideNewWikidataCountrySuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataCountrySuggestions)
+      }
+
+      function onNewWikidataMunicipalityInput() {
+        newWikidataMunicipalityP131.value = ''
+        if (!newWikidataMunicipalitySearch.value.trim()) {
+          newWikidataMunicipalitySuggestions.value = []
+          return
+        }
+        searchNewMunicipalitySuggestionsDebounced(newWikidataMunicipalitySearch.value.trim())
+      }
+
+      function selectNewWikidataMunicipality(option) {
+        selectWikidataSuggestion(
+          option,
+          newWikidataMunicipalityP131,
+          newWikidataMunicipalitySearch,
+          newWikidataMunicipalitySuggestions,
+        )
+      }
+
+      function hideNewWikidataMunicipalitySuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataMunicipalitySuggestions)
+      }
+
+      function onNewWikidataArchitectInput() {
+        newWikidataArchitectP84.value = ''
+        if (!newWikidataArchitectSearch.value.trim()) {
+          newWikidataArchitectSuggestions.value = []
+          return
+        }
+        searchNewArchitectSuggestionsDebounced(newWikidataArchitectSearch.value.trim())
+      }
+
+      function selectNewWikidataArchitect(option) {
+        selectWikidataSuggestion(
+          option,
+          newWikidataArchitectP84,
+          newWikidataArchitectSearch,
+          newWikidataArchitectSuggestions,
+        )
+      }
+
+      function hideNewWikidataArchitectSuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataArchitectSuggestions)
+      }
+
+      function onNewWikidataHeritageInput() {
+        newWikidataHeritageP1435.value = ''
+        if (!newWikidataHeritageSearch.value.trim()) {
+          newWikidataHeritageSuggestions.value = []
+          return
+        }
+        searchNewHeritageSuggestionsDebounced(newWikidataHeritageSearch.value.trim())
+      }
+
+      function selectNewWikidataHeritage(option) {
+        selectWikidataSuggestion(
+          option,
+          newWikidataHeritageP1435,
+          newWikidataHeritageSearch,
+          newWikidataHeritageSuggestions,
+        )
+      }
+
+      function hideNewWikidataHeritageSuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataHeritageSuggestions)
+      }
+
+      function onNewWikidataArchitecturalStyleInput() {
+        newWikidataArchitecturalStyleP149.value = ''
+        if (!newWikidataArchitecturalStyleSearch.value.trim()) {
+          newWikidataArchitecturalStyleSuggestions.value = []
+          return
+        }
+        searchNewStyleSuggestionsDebounced(newWikidataArchitecturalStyleSearch.value.trim())
+      }
+
+      function selectNewWikidataArchitecturalStyle(option) {
+        selectWikidataSuggestion(
+          option,
+          newWikidataArchitecturalStyleP149,
+          newWikidataArchitecturalStyleSearch,
+          newWikidataArchitecturalStyleSuggestions,
+        )
+      }
+
+      function hideNewWikidataArchitecturalStyleSuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataArchitecturalStyleSuggestions)
+      }
+
+      function onNewWikidataCommonsInput() {
+        newWikidataCommonsCategoryP373.value = ''
+        if (!newWikidataCommonsSearch.value.trim()) {
+          newWikidataCommonsSuggestions.value = []
+          return
+        }
+        searchNewCommonsSuggestionsDebounced(newWikidataCommonsSearch.value.trim())
+      }
+
+      function selectNewWikidataCommons(option) {
+        newWikidataCommonsCategoryP373.value = option.name
+        newWikidataCommonsSearch.value = option.title
+        newWikidataCommonsSuggestions.value = []
+      }
+
+      function hideNewWikidataCommonsSuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataCommonsSuggestions)
+      }
+
+      async function submitExistingWikidataSelection() {
+        wizardError.value = ''
+        if (authEnabled.value && !authAuthenticated.value) {
+          wizardError.value = t('authRequiredForWikidataWrites')
+          return
+        }
+        const qid = extractWikidataId(wizardExistingWikidataItem.value)
+        if (!qid) {
+          wizardError.value = t('wikidataItemRequired')
+          return
+        }
+
+        wizardSaving.value = true
+        try {
+          await addExistingWikidataItem({ wikidata_item: qid })
+          showCreateLocationDialog.value = false
+          notifyLocationsChanged()
+        } catch (error) {
+          wizardError.value = error.message || t('loadError')
+        } finally {
+          wizardSaving.value = false
+        }
+      }
+
+      async function submitNewWikidataItem() {
+        wizardError.value = ''
+        if (authEnabled.value && !authAuthenticated.value) {
+          wizardError.value = t('authRequiredForWikidataWrites')
+          return
+        }
+
+        const label = newWikidataLabel.value.trim()
+        const labelLanguage = normalizeSupportedLocale(newWikidataLabelLanguage.value) || defaultWikidataTextLanguage()
+        const description = newWikidataDescription.value.trim()
+        const descriptionLanguage = normalizeSupportedLocale(newWikidataDescriptionLanguage.value) || defaultWikidataTextLanguage()
+        const instanceQid = resolveWizardQid(newWikidataInstanceOf.value, newWikidataInstanceSearch.value)
+        const countryQid = resolveWizardQid(newWikidataCountryP17.value, newWikidataCountrySearch.value)
+        const municipalityQid = resolveWizardQid(newWikidataMunicipalityP131.value, newWikidataMunicipalitySearch.value)
+        const heritageQid = resolveWizardQid(newWikidataHeritageP1435.value, newWikidataHeritageSearch.value)
+        const heritageSourceUrl = newWikidataHeritageSourceUrl.value.trim()
+        const addressLanguage = normalizeSupportedLocale(newWikidataAddressTextLanguageP6375.value) || defaultWikidataTextLanguage()
+
+        if (!label) {
+          wizardError.value = t('locationNameRequired')
+          return
+        }
+        if (!description) {
+          wizardError.value = t('locationDescriptionRequired')
+          return
+        }
+        if (!instanceQid) {
+          wizardError.value = t('locationTypeRequired')
+          return
+        }
+        if (!countryQid) {
+          wizardError.value = t('countrySelectionRequired')
+          return
+        }
+        if (!municipalityQid) {
+          wizardError.value = t('municipalitySelectionRequired')
+          return
+        }
+
+        const latitude = Number.parseFloat(String(newWikidataLatitude.value))
+        const longitude = Number.parseFloat(String(newWikidataLongitude.value))
+        if (Number.isNaN(latitude)) {
+          wizardError.value = t('latitudeRequired')
+          return
+        }
+        if (Number.isNaN(longitude)) {
+          wizardError.value = t('longitudeRequired')
+          return
+        }
+
+        if (heritageQid && !heritageSourceUrl) {
+          wizardError.value = t('sourceUrlRequiredForHeritage')
+          return
+        }
+
+        const payload = {
+          label,
+          label_language: labelLanguage,
+          description,
+          description_language: descriptionLanguage,
+          instance_of_p31: instanceQid,
+          country_p17: countryQid,
+          municipality_p131: municipalityQid,
+          latitude,
+          longitude,
+          heritage_designation_p1435: heritageQid,
+          heritage_source_url: heritageSourceUrl,
+          address_text_p6375: newWikidataAddressTextP6375.value.trim(),
+          address_text_language_p6375: addressLanguage,
+          commons_category_p373: newWikidataCommonsCategoryP373.value.trim(),
+        }
+
+        wizardSaving.value = true
+        try {
+          await createWikidataItem(payload, locale.value)
+          showCreateLocationDialog.value = false
+          notifyLocationsChanged()
+        } catch (error) {
+          wizardError.value = error.message || t('loadError')
+        } finally {
+          wizardSaving.value = false
+        }
+      }
+
+      function currentManualCoordinates() {
+        const latitude = parseCoordinate(draftLatitude.value)
+        const longitude = parseCoordinate(draftLongitude.value)
+        if (latitude === null || longitude === null) {
+          return null
+        }
+        return { latitude, longitude }
+      }
+
+      function currentWikidataCoordinates() {
+        if (!wikidataEntity.value) {
+          return null
+        }
+        const latitude = parseCoordinate(wikidataEntity.value.latitude)
+        const longitude = parseCoordinate(wikidataEntity.value.longitude)
+        if (latitude === null || longitude === null) {
+          return null
+        }
+        return { latitude, longitude }
+      }
+
+      function destroyCoordinatePickerMap() {
+        if (coordinatePickerMapInstance) {
+          coordinatePickerMapInstance.remove()
+          coordinatePickerMapInstance = null
+          coordinatePickerMarker = null
+        }
+      }
+
+      function destroyCoordinatePreviewMap() {
+        if (coordinatePreviewMapInstance) {
+          coordinatePreviewMapInstance.remove()
+          coordinatePreviewMapInstance = null
+          coordinatePreviewManualMarker = null
+          coordinatePreviewWikidataMarker = null
+        }
+      }
+
+      function ensureCoordinatePreviewMap() {
+        if (!showCreateLocationDialog.value || !coordinatePreviewMapElement.value) {
+          destroyCoordinatePreviewMap()
+          return
+        }
+
+        const manualCoords = currentManualCoordinates()
+        const wikidataCoords = currentWikidataCoordinates()
+        const points = []
+        if (manualCoords) {
+          points.push([manualCoords.latitude, manualCoords.longitude])
+        }
+        if (isWikidataLocked.value && wikidataCoords) {
+          points.push([wikidataCoords.latitude, wikidataCoords.longitude])
+        }
+
+        const defaultCenter = points[0] || [60.1699, 24.9384]
+        if (!coordinatePreviewMapInstance) {
+          coordinatePreviewMapInstance = L.map(coordinatePreviewMapElement.value).setView(defaultCenter, points.length ? 12 : 5)
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+          }).addTo(coordinatePreviewMapInstance)
+        }
+
+        if (coordinatePreviewManualMarker) {
+          coordinatePreviewMapInstance.removeLayer(coordinatePreviewManualMarker)
+          coordinatePreviewManualMarker = null
+        }
+        if (coordinatePreviewWikidataMarker) {
+          coordinatePreviewMapInstance.removeLayer(coordinatePreviewWikidataMarker)
+          coordinatePreviewWikidataMarker = null
+        }
+
+        if (manualCoords) {
+          coordinatePreviewManualMarker = L.circleMarker([manualCoords.latitude, manualCoords.longitude], {
+            radius: 7,
+            color: '#0369a1',
+            fillColor: '#0369a1',
+            fillOpacity: 0.8,
+          }).addTo(coordinatePreviewMapInstance)
+        }
+
+        if (isWikidataLocked.value && wikidataCoords) {
+          coordinatePreviewWikidataMarker = L.circleMarker([wikidataCoords.latitude, wikidataCoords.longitude], {
+            radius: 7,
+            color: '#dc2626',
+            fillColor: '#dc2626',
+            fillOpacity: 0.8,
+          }).addTo(coordinatePreviewMapInstance)
+        }
+
+        if (points.length > 1) {
+          coordinatePreviewMapInstance.fitBounds(points, { padding: [24, 24] })
+        } else if (points.length === 1) {
+          coordinatePreviewMapInstance.setView(points[0], 12)
+        } else {
+          coordinatePreviewMapInstance.setView(defaultCenter, 5)
+        }
+      }
+
+      function setCoordinateSelection(latitude, longitude, zoom = null, fillAdministrativeFields = false) {
+        const { latitudeRef, longitudeRef } = coordinatePickerFields()
+        latitudeRef.value = Number(latitude).toFixed(6)
+        longitudeRef.value = Number(longitude).toFixed(6)
+
+        if (!coordinatePickerMapInstance) {
+          return
+        }
+
+        if (!coordinatePickerMarker) {
+          coordinatePickerMarker = L.marker([latitude, longitude]).addTo(coordinatePickerMapInstance)
+        } else {
+          coordinatePickerMarker.setLatLng([latitude, longitude])
+        }
+
+        if (zoom !== null) {
+          coordinatePickerMapInstance.setView([latitude, longitude], zoom)
+        }
+
+        if (fillAdministrativeFields && coordinatePickerTarget.value === 'new-wikidata') {
+          void fillNewWikidataAdministrativeFieldsFromCoordinates(latitude, longitude)
+        }
+      }
+
+      function initCoordinatePickerMap() {
+        destroyCoordinatePickerMap()
+        if (!coordinatePickerMapElement.value) {
+          return
+        }
+
+        const lat = Number.parseFloat(String(coordinatePickerLatitudeValue.value))
+        const lon = Number.parseFloat(String(coordinatePickerLongitudeValue.value))
+        const initialLat = Number.isNaN(lat) ? 60.1699 : lat
+        const initialLon = Number.isNaN(lon) ? 24.9384 : lon
+        const initialZoom = Number.isNaN(lat) || Number.isNaN(lon) ? 5 : 12
+
+        coordinatePickerMapInstance = L.map(coordinatePickerMapElement.value).setView([initialLat, initialLon], initialZoom)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(coordinatePickerMapInstance)
+
+        coordinatePickerMapInstance.on('click', (event) => {
+          const latitude = event.latlng.lat
+          const longitude = event.latlng.lng
+          setCoordinateSelection(latitude, longitude, null, true)
+        })
+
+        if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+          setCoordinateSelection(lat, lon)
+        }
+      }
+
+      async function openCoordinatePickerDialog(target = 'draft') {
+        const normalizedTarget = target === 'new-wikidata' ? 'new-wikidata' : 'draft'
+        if (normalizedTarget === 'draft' && areWikidataFieldsReadOnly.value) {
+          return
+        }
+        coordinatePickerTarget.value = normalizedTarget
+        showCoordinatePickerDialog.value = true
+        coordinateSearchError.value = ''
+        await nextTick()
+        initCoordinatePickerMap()
+      }
+
+      function closeCoordinatePickerDialog() {
+        showCoordinatePickerDialog.value = false
+        destroyCoordinatePickerMap()
+        coordinatePickerTarget.value = 'draft'
+      }
+
+      async function runCoordinateSearch() {
+        coordinateSearchError.value = ''
+        const query = coordinateSearchQuery.value.trim()
+        if (!query) {
+          coordinateSearchResults.value = []
+          return
+        }
+
+        coordinateSearchLoading.value = true
+        try {
+          const results = await searchGeocodePlaces(query, AUTOCOMPLETE_RESULT_LIMIT)
+          coordinateSearchResults.value = Array.isArray(results) ? results : []
+        } catch (error) {
+          coordinateSearchResults.value = []
+          coordinateSearchError.value = error.message || t('loadError')
+        } finally {
+          coordinateSearchLoading.value = false
+        }
+      }
+
+      function chooseCoordinateSearchResult(item) {
+        setCoordinateSelection(item.latitude, item.longitude, 13, true)
+      }
+
+      async function fillNewWikidataAdministrativeFieldsFromCoordinates(latitude, longitude) {
+        if (
+          hasTextValue(newWikidataCountryP17.value) ||
+          hasTextValue(newWikidataCountrySearch.value) ||
+          hasTextValue(newWikidataMunicipalityP131.value) ||
+          hasTextValue(newWikidataMunicipalitySearch.value)
+        ) {
+          return
+        }
+
+        try {
+          const result = await reverseGeocodeCoordinates(latitude, longitude, locale.value)
+          if (result?.country?.id && result?.country?.label) {
+            newWikidataCountryP17.value = result.country.id
+            newWikidataCountrySearch.value = `${result.country.label} (${result.country.id})`
+          }
+          if (result?.municipality?.id && result?.municipality?.label) {
+            newWikidataMunicipalityP131.value = result.municipality.id
+            newWikidataMunicipalitySearch.value = `${result.municipality.label} (${result.municipality.id})`
+          }
+        } catch (error) {
+          void error
+        }
+      }
+
+      function runQueryTest() {
+        formError.value = ''
+
+        if (!formSparqlQuery.value.trim()) {
+          formError.value = t('projectQueryRequired')
+          return
+        }
+
+        const endpointUrl = formSparqlEndpoint.value.trim() || configuredSparqlDefaultEndpoint
+        const renderedQuery = renderQueryForTesting(formSparqlQuery.value, locale.value, 25)
+        openQueryInUi(endpointUrl, renderedQuery, formEndpointPreset.value)
+      }
+
+      async function submitProject() {
+        formError.value = ''
+
+        if (!formName.value.trim()) {
+          formError.value = t('projectNameRequired')
+          return
+        }
+        if (!formSparqlQuery.value.trim()) {
+          formError.value = t('projectQueryRequired')
+          return
+        }
+
+        formSaving.value = true
+        try {
+          await createProjectRecord({
+            name: formName.value.trim(),
+            description: formDescription.value.trim(),
+            datasource_type: formDatasourceType.value,
+            sparql_endpoint: formSparqlEndpoint.value.trim(),
+            sparql_query: formSparqlQuery.value,
+          })
+          showCreateDialog.value = false
+        } catch (error) {
+          formError.value = error.message || t('loadError')
+        } finally {
+          formSaving.value = false
+        }
+      }
+
+      async function submitCreateLocation() {
+        if (isWizardChoiceStep.value || isCreateActionBusy.value) {
+          return
+        }
+        if (!isEditMode.value && !canCreateLocation.value) {
+          const message = t('authRequiredForLocationWrites')
+          if (isWizardExistingMode.value || isWizardNewMode.value) {
+            wizardError.value = message
+          } else {
+            draftError.value = message
+          }
+          return
+        }
+        if (isWizardExistingMode.value) {
+          await submitExistingWikidataSelection()
+          return
+        }
+        if (isWizardNewMode.value) {
+          if (isWizardNewBasicStep.value) {
+            goToNewWikidataLocationStep()
+            return
+          }
+          await submitNewWikidataItem()
+          return
+        }
+        await submitLocationDraft()
+      }
+
+      async function submitLocationDraft() {
+        if (!isEditMode.value && !canCreateLocation.value) {
+          draftError.value = t('authRequiredForLocationWrites')
+          return
+        }
+        if (draftLoading.value) {
+          return
+        }
+        draftError.value = ''
+
+        const wikidataId = extractWikidataId(draftWikidataItem.value)
+        const lockedToWikidata = Boolean(wikidataId && wikidataEntity.value)
+        const localName = draftName.value.trim()
+        const localDescription = draftDescription.value.trim()
+        const localType = draftType.value.trim()
+        const localMunicipality = draftMunicipalityP131.value.trim()
+        const localCommonsCategory = draftCommonsCategory.value.trim()
+        const localAddress = draftAddressText.value.trim()
+        const localPostalCode = draftPostalCode.value.trim()
+        const effectiveParentUri = normalizeLocationUri(draftParentUri.value)
+        const localLatitudeRaw = String(draftLatitude.value).trim()
+        const localLongitudeRaw = String(draftLongitude.value).trim()
+        const effectiveName = localName || (lockedToWikidata ? (wikidataEntity.value.label || wikidataId) : '')
+        const effectiveDescription = localDescription || (lockedToWikidata ? (wikidataEntity.value.description || '') : '')
+        const effectiveType = localType || (
+          lockedToWikidata
+            ? (
+              wikidataEntity.value.instance_of && wikidataEntity.value.instance_of.id
+                ? wikidataEntity.value.instance_of.id
+                : 'wikidata'
+            )
+            : ''
+        )
+        const effectiveMunicipality = localMunicipality || (
+          lockedToWikidata
+            ? (
+              wikidataEntity.value.municipality && wikidataEntity.value.municipality.id
+                ? wikidataEntity.value.municipality.id
+                : ''
+            )
+            : ''
+        )
+        const effectiveCommonsCategory = localCommonsCategory || (lockedToWikidata ? (wikidataEntity.value.commons_category || '') : '')
+        const effectiveAddress = localAddress || (lockedToWikidata ? (wikidataEntity.value.address_text || '') : '')
+        const effectivePostalCode = localPostalCode || (lockedToWikidata ? (wikidataEntity.value.postal_code || '') : '')
+        const effectiveLatitudeRaw = localLatitudeRaw || (
+          lockedToWikidata && wikidataEntity.value && typeof wikidataEntity.value.latitude === 'number'
+            ? String(wikidataEntity.value.latitude)
+            : ''
+        )
+        const effectiveLongitudeRaw = localLongitudeRaw || (
+          lockedToWikidata && wikidataEntity.value && typeof wikidataEntity.value.longitude === 'number'
+            ? String(wikidataEntity.value.longitude)
+            : ''
+        )
+
+        if (!effectiveName) {
+          draftError.value = t('locationNameRequired')
+          return
+        }
+        if (!effectiveType) {
+          draftError.value = t('locationTypeRequired')
+          return
+        }
+        if (draftParentSearch.value.trim() && !effectiveParentUri) {
+          draftError.value = t('parentSelectionRequired')
+          return
+        }
+        if (!lockedToWikidata && draftMunicipalitySearch.value.trim() && !draftMunicipalityP131.value.trim()) {
+          draftError.value = t('municipalitySelectionRequired')
+          return
+        }
+        if (!lockedToWikidata && draftCommonsSearch.value.trim() && !draftCommonsCategory.value.trim()) {
+          draftError.value = t('commonsSelectionRequired')
+          return
+        }
+        if (!effectiveLatitudeRaw) {
+          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('latitudeRequired')
+          return
+        }
+        if (!effectiveLongitudeRaw) {
+          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('longitudeRequired')
+          return
+        }
+
+        const latitude = Number.parseFloat(effectiveLatitudeRaw)
+        const longitude = Number.parseFloat(effectiveLongitudeRaw)
+        if (Number.isNaN(latitude)) {
+          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('latitudeRequired')
+          return
+        }
+        if (Number.isNaN(longitude)) {
+          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('longitudeRequired')
+          return
+        }
+
+        const payload = {
+          name: effectiveName,
+          description: effectiveDescription,
+          location_type: effectiveType,
+          wikidata_item: wikidataId,
+          latitude,
+          longitude,
+          address_text: effectiveAddress,
+          postal_code: effectivePostalCode,
+          municipality_p131: effectiveMunicipality,
+          commons_category: effectiveCommonsCategory,
+          parent_uri: effectiveParentUri,
+        }
+
+        draftSaving.value = true
+        try {
+          if (isEditMode.value) {
+            if (editingDraftId.value === null) {
+              draftError.value = t('loadError')
+              return
+            }
+            await updateDraft(editingDraftId.value, payload)
+          } else {
+            await createDraft(payload)
+          }
+          showCreateLocationDialog.value = false
+          locationDialogMode.value = 'create'
+          editingDraftId.value = null
+          notifyLocationsChanged()
+        } catch (error) {
+          draftError.value = error.message || t('loadError')
+        } finally {
+          draftSaving.value = false
+        }
+      }
+
+      onMounted(() => {
+        loadProjects()
+        loadAuthStatus()
+        window.addEventListener('open-draft-editor', handleOpenDraftEditorEvent)
+        window.addEventListener('open-create-sub-location', handleOpenCreateSubLocationEvent)
+      })
+      onBeforeUnmount(() => {
+        window.removeEventListener('open-draft-editor', handleOpenDraftEditorEvent)
+        window.removeEventListener('open-create-sub-location', handleOpenCreateSubLocationEvent)
+        destroyCoordinatePickerMap()
+        destroyCoordinatePreviewMap()
+      })
+
+      watch(
+        () => draftWikidataItem.value,
+        (nextValue) => {
+          wikidataLookupError.value = ''
+          const qid = extractWikidataId(nextValue)
+          if (!qid) {
+            wikidataLookupToken += 1
+            wikidataEntity.value = null
+            wikidataLookupLoading.value = false
+            draftWikidataSuggestions.value = []
+            return
+          }
+          draftWikidataSuggestions.value = []
+          wikidataLookupDebounced(qid)
+        }
+      )
+      watch(
+        () => locale.value,
+        () => {
+          const qid = extractWikidataId(draftWikidataItem.value)
+          if (qid) {
+            wikidataLookupDebounced(qid)
+          }
+        }
+      )
+      watch(
+        [
+          () => showCreateLocationDialog.value,
+          () => draftLatitude.value,
+          () => draftLongitude.value,
+          () => (wikidataEntity.value && typeof wikidataEntity.value.latitude === 'number' ? wikidataEntity.value.latitude : ''),
+          () => (wikidataEntity.value && typeof wikidataEntity.value.longitude === 'number' ? wikidataEntity.value.longitude : ''),
+          () => isWikidataLocked.value,
+        ],
+        async ([isOpen]) => {
+          if (!isOpen) {
+            destroyCoordinatePreviewMap()
+            return
+          }
+          await nextTick()
+          ensureCoordinatePreviewMap()
+        }
+      )
+
+      return {
+        t,
+        detailHref,
+        authEnabled,
+        authAuthenticated,
+        authUsername,
+        authStatusLoading,
+        showCradleGuideDialog,
+        showCradleGuideButton,
+        cradleUrl,
+        projects,
+        activeProjectModel,
+        projectsLoading,
+        projectError,
+        showCreateDialog,
+        showCreateLocationDialog,
+        locationDialogTitle,
+        locationDialogSubmitLabel,
+        isEditMode,
+        isWizardChoiceStep,
+        isWizardExistingMode,
+        isWizardNewMode,
+        isWizardNewBasicStep,
+        isWizardNewLocationStep,
+        showLocalDraftForm,
+        canCreateLocation,
+        canReturnToWizardChoice,
+        isCreateActionBusy,
+        wizardSaving,
+        wizardError,
+        draftLoading,
+        coordinatePreviewMapElement,
+        showCoordinatePickerDialog,
+        coordinatePickerMapElement,
+        coordinateSearchQuery,
+        coordinateSearchResults,
+        coordinateSearchLoading,
+        coordinateSearchError,
+        coordinatePickerLatitudeDisplay,
+        coordinatePickerLongitudeDisplay,
+        hasValidCoordinates,
+        wikidataEntity,
+        wikidataLookupLoading,
+        wikidataLookupError,
+        isWikidataLocked,
+        areWikidataFieldsReadOnly,
+        emptyValueLabel,
+        manualTypeDisplay,
+        manualMunicipalityDisplay,
+        manualCommonsDisplay,
+        wikidataTypeDisplay,
+        wikidataAddressDisplay,
+        wikidataPostalDisplay,
+        wikidataMunicipalityDisplay,
+        wikidataCommonsDisplay,
+        showManualNameDiff,
+        showManualDescriptionDiff,
+        showManualTypeDiff,
+        showManualAddressDiff,
+        showManualPostalDiff,
+        showManualMunicipalityDiff,
+        showManualCommonsDiff,
+        showManualCoordinatesDiff,
+        showNameField,
+        showDescriptionField,
+        showTypeField,
+        showLatitudeField,
+        showLongitudeField,
+        showCoordinateInputRow,
+        showAddressField,
+        showPostalField,
+        showMunicipalityField,
+        showPostalMunicipalityRow,
+        showCommonsField,
+        showNameInfo,
+        showDescriptionInfo,
+        showTypeInfo,
+        showCoordinatesInfo,
+        showAddressInfo,
+        showPostalInfo,
+        showMunicipalityInfo,
+        showCommonsInfo,
+        formName,
+        formDescription,
+        formDatasourceType,
+        formEndpointPreset,
+        customEndpointPresetId,
+        predefinedEndpoints: PREDEFINED_ENDPOINTS,
+        formSparqlEndpoint,
+        formSparqlQuery,
+        formError,
+        formSaving,
+        wizardExistingWikidataItem,
+        wizardExistingSuggestions,
+        wizardExistingLoading,
+        wikidataTextLanguageOptions,
+        newWikidataLabel,
+        newWikidataLabelLanguage,
+        newWikidataDescription,
+        newWikidataDescriptionLanguage,
+        newWikidataInstanceSearch,
+        newWikidataInstanceSuggestions,
+        newWikidataInstanceLoading,
+        newWikidataCountrySearch,
+        newWikidataCountrySuggestions,
+        newWikidataCountryLoading,
+        newWikidataMunicipalitySearch,
+        newWikidataMunicipalitySuggestions,
+        newWikidataMunicipalityLoading,
+        newWikidataLatitude,
+        newWikidataLongitude,
+        newWikidataArchitectSearch,
+        newWikidataArchitectSuggestions,
+        newWikidataArchitectLoading,
+        newWikidataArchitectSourceUrl,
+        newWikidataInceptionP571,
+        newWikidataInceptionSourceUrl,
+        newWikidataHeritageSearch,
+        newWikidataHeritageSuggestions,
+        newWikidataHeritageLoading,
+        newWikidataHeritageSourceUrl,
+        newWikidataAddressTextP6375,
+        newWikidataAddressTextLanguageP6375,
+        newWikidataPostalCodeP281,
+        newWikidataCommonsSearch,
+        newWikidataCommonsSuggestions,
+        newWikidataCommonsLoading,
+        newWikidataArchitecturalStyleSearch,
+        newWikidataArchitecturalStyleSuggestions,
+        newWikidataArchitecturalStyleLoading,
+        newWikidataOfficialClosureDateP3999,
+        newWikidataOfficialClosureDateSourceUrl,
+        newWikidataRouteInstructionP2795,
+        newWikidataRouteInstructionLanguageP2795,
+        draftName,
+        draftDescription,
+        draftType,
+        draftWikidataSuggestions,
+        draftWikidataSearchLoading,
+        draftParentUri,
+        draftParentSearch,
+        draftParentSuggestions,
+        draftParentLoading,
+        draftTypeSearch,
+        draftTypeSuggestions,
+        draftTypeLoading,
+        draftWikidataItem,
+        draftLatitude,
+        draftLongitude,
+        draftAddressText,
+        draftPostalCode,
+        draftMunicipalityP131,
+        draftMunicipalitySearch,
+        draftMunicipalitySuggestions,
+        draftMunicipalityLoading,
+        draftCommonsCategory,
+        draftCommonsSearch,
+        draftCommonsSuggestions,
+        draftCommonsLoading,
+        draftError,
+        draftSaving,
+        openCreateDialog,
+        closeCreateDialog,
+        openCreateLocationDialog,
+        closeCreateLocationDialog,
+        chooseCreateWizardMode,
+        returnToCreateWizardChoice,
+        returnToNewWikidataBasicStep,
+        onWizardExistingWikidataInput,
+        selectWizardExistingWikidataItem,
+        hideWizardExistingSuggestionsSoon,
+        onNewWikidataInstanceInput,
+        selectNewWikidataInstance,
+        hideNewWikidataInstanceSuggestionsSoon,
+        onNewWikidataCountryInput,
+        selectNewWikidataCountry,
+        hideNewWikidataCountrySuggestionsSoon,
+        onNewWikidataMunicipalityInput,
+        selectNewWikidataMunicipality,
+        hideNewWikidataMunicipalitySuggestionsSoon,
+        onNewWikidataArchitectInput,
+        selectNewWikidataArchitect,
+        hideNewWikidataArchitectSuggestionsSoon,
+        onNewWikidataHeritageInput,
+        selectNewWikidataHeritage,
+        hideNewWikidataHeritageSuggestionsSoon,
+        onNewWikidataArchitecturalStyleInput,
+        selectNewWikidataArchitecturalStyle,
+        hideNewWikidataArchitecturalStyleSuggestionsSoon,
+        onNewWikidataCommonsInput,
+        selectNewWikidataCommons,
+        hideNewWikidataCommonsSuggestionsSoon,
+        onDraftWikidataInput,
+        selectDraftWikidataItem,
+        hideWikidataSuggestionsSoon,
+        onDraftParentInput,
+        onDraftParentFocus,
+        selectDraftParent,
+        hideParentSuggestionsSoon,
+        clearDraftParent,
+        openCoordinatePickerDialog,
+        closeCoordinatePickerDialog,
+        runCoordinateSearch,
+        chooseCoordinateSearchResult,
+        onDraftTypeInput,
+        selectDraftType,
+        hideTypeSuggestionsSoon,
+        onDraftMunicipalityInput,
+        selectDraftMunicipality,
+        hideMunicipalitySuggestionsSoon,
+        onDraftCommonsInput,
+        selectDraftCommons,
+        hideCommonsSuggestionsSoon,
+        applyEndpointPreset,
+        runQueryTest,
+        submitProject,
+        submitCreateLocation,
+        submitLocationDraft,
+        startWikimediaLogin,
+        logoutWikimedia,
+        openCradleGuideDialog,
+        closeCradleGuideDialog,
+        openCradle,
+        displayValue,
+        wikidataAutocompleteLabel,
+        extractWikidataId,
+        handleImageLoadError,
+      }
+    },
+    template: `
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="title-block">
+            <h1>{{ t('appTitle') }}</h1>
+          </div>
+
+          <div class="topbar-controls">
+            <span v-if="authEnabled && authAuthenticated && authUsername" class="auth-chip">
+              {{ t('signedInAs', { name: authUsername }) }}
+            </span>
+            <button
+              v-if="showCradleGuideButton"
+              type="button"
+              class="secondary-btn"
+              @click="openCradleGuideDialog"
+            >
+              {{ t('addLocationWithCradle') }}
+            </button>
+            <button
+              v-if="authEnabled && !authAuthenticated"
+              type="button"
+              class="secondary-btn"
+              :disabled="authStatusLoading"
+              @click="startWikimediaLogin"
+            >
+              {{ t('signInWikimedia') }}
+            </button>
+            <button
+              v-if="authEnabled && authAuthenticated"
+              type="button"
+              class="secondary-btn"
+              @click="logoutWikimedia"
+            >
+              {{ t('signOut') }}
+            </button>
+            <button v-if="canCreateLocation" type="button" class="secondary-btn" @click="openCreateLocationDialog()">
+              {{ t('newLocation') }}
+            </button>
+
+            <LanguageSwitcher />
+          </div>
+        </header>
+
+        <nav class="tabs">
+          <RouterLink to="/">{{ t('navList') }}</RouterLink>
+          <RouterLink to="/map">{{ t('navMap') }}</RouterLink>
+          <RouterLink :to="detailHref">{{ t('navDetail') }}</RouterLink>
+        </nav>
+
+        <main class="content">
+          <RouterView />
+        </main>
+
+        <div v-if="showCradleGuideDialog" class="dialog-backdrop" @click.self="closeCradleGuideDialog">
+          <section class="dialog-card" role="dialog" aria-modal="true">
+            <h2>{{ t('cradleGuideTitle') }}</h2>
+            <p class="dialog-help">{{ t('cradleGuideIntro') }}</p>
+            <ol class="cradle-guide-list">
+              <li>{{ t('cradleGuideStep1') }}</li>
+              <li>{{ t('cradleGuideStep2') }}</li>
+              <li>{{ t('cradleGuideStep3') }}</li>
+              <li>{{ t('cradleGuideStep4') }}</li>
+              <li>{{ t('cradleGuideStep5') }}</li>
+              <li>{{ t('cradleGuideStep6') }}</li>
+            </ol>
+            <p class="dialog-help">{{ cradleUrl }}</p>
+            <div class="dialog-actions">
+              <button type="button" class="secondary-btn" @click="closeCradleGuideDialog">{{ t('cancel') }}</button>
+              <button type="button" class="primary-btn" @click="openCradle">{{ t('openCradle') }}</button>
+            </div>
+          </section>
+        </div>
+
+        <div v-if="showCreateLocationDialog" class="dialog-backdrop" @click.self="closeCreateLocationDialog">
+          <section class="dialog-card" role="dialog" aria-modal="true">
+            <h2>{{ locationDialogTitle }}</h2>
+            <fieldset class="dialog-fieldset" :disabled="isCreateActionBusy">
+              <p v-if="draftLoading && showLocalDraftForm" class="status">{{ t('loading') }}</p>
+
+              <div v-if="isWizardChoiceStep" class="wizard-choice-grid">
+                <p class="dialog-help">{{ t('createWizardIntro') }}</p>
+                <button type="button" class="wizard-choice-card" @click="chooseCreateWizardMode('existing-wikidata')">
+                  <span class="wizard-choice-title">{{ t('createModeExistingTitle') }}</span>
+                  <span class="wizard-choice-description">{{ t('createModeExistingDesc') }}</span>
+                </button>
+                <button type="button" class="wizard-choice-card" @click="chooseCreateWizardMode('new-wikidata')">
+                  <span class="wizard-choice-title">{{ t('createModeNewWikidataTitle') }}</span>
+                  <span class="wizard-choice-description">{{ t('createModeNewWikidataDesc') }}</span>
+                </button>
+                <button type="button" class="wizard-choice-card" @click="chooseCreateWizardMode('local-draft')">
+                  <span class="wizard-choice-title">{{ t('createModeLocalTitle') }}</span>
+                  <span class="wizard-choice-description">{{ t('createModeLocalDesc') }}</span>
+                </button>
+              </div>
+
+              <template v-else-if="isWizardExistingMode">
+                <p class="dialog-help">{{ t('addExistingWikidataHelp') }}</p>
+                <label class="form-field">
+                  <span>{{ t('wikidataItem') }}</span>
+                  <input
+                    v-model="wizardExistingWikidataItem"
+                    type="text"
+                    :placeholder="t('wikidataItemPlaceholder')"
+                    @input="onWizardExistingWikidataInput"
+                    @blur="hideWizardExistingSuggestionsSoon"
+                  />
+                  <ul v-if="wizardExistingSuggestions.length > 0" class="autocomplete-list">
+                    <li v-for="item in wizardExistingSuggestions" :key="item.id">
+                      <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectWizardExistingWikidataItem(item)">
+                        {{ wikidataAutocompleteLabel(item) }}
+                      </button>
+                    </li>
+                  </ul>
+                  <p v-if="wizardExistingLoading" class="dialog-help">{{ t('searching') }}</p>
+                </label>
+              </template>
+
+              <template v-else-if="isWizardNewMode">
+                <p class="dialog-help">{{ t('createNewWikidataHelp') }}</p>
+                <div v-if="isWizardNewBasicStep" class="wizard-section">
+                  <h3>{{ t('basicInformation') }} (1/2)</h3>
+                  <div class="form-row form-row-language">
+                    <label class="form-field">
+                      <span>{{ t('locationName') }}</span>
+                      <input v-model="newWikidataLabel" type="text" maxlength="250" />
+                    </label>
+                    <label class="form-field form-field-language">
+                      <span>{{ t('language') }}</span>
+                      <select v-model="newWikidataLabelLanguage">
+                        <option
+                          v-for="langCode in wikidataTextLanguageOptions"
+                          :key="'label-language-' + langCode"
+                          :value="langCode"
+                        >
+                          {{ langCode.toUpperCase() }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="form-row form-row-language">
+                    <label class="form-field">
+                      <span>{{ t('locationDescription') }}</span>
+                      <input v-model="newWikidataDescription" type="text" maxlength="500" />
+                    </label>
+                    <label class="form-field form-field-language">
+                      <span>{{ t('language') }}</span>
+                      <select v-model="newWikidataDescriptionLanguage">
+                        <option
+                          v-for="langCode in wikidataTextLanguageOptions"
+                          :key="'description-language-' + langCode"
+                          :value="langCode"
+                        >
+                          {{ langCode.toUpperCase() }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <label class="form-field">
+                    <span>{{ t('instanceOfP31') }}</span>
+                    <input
+                      v-model="newWikidataInstanceSearch"
+                      type="text"
+                      :placeholder="t('typePlaceholder')"
+                      @input="onNewWikidataInstanceInput"
+                      @blur="hideNewWikidataInstanceSuggestionsSoon"
+                    />
+                    <ul v-if="newWikidataInstanceSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataInstanceSuggestions" :key="item.id">
+                        <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataInstance(item)">
+                          {{ wikidataAutocompleteLabel(item) }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataInstanceLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('heritageDesignationP1435') }}</span>
+                      <input
+                        v-model="newWikidataHeritageSearch"
+                        type="text"
+                        :placeholder="t('typePlaceholder')"
+                        @input="onNewWikidataHeritageInput"
+                        @blur="hideNewWikidataHeritageSuggestionsSoon"
+                      />
+                      <ul v-if="newWikidataHeritageSuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in newWikidataHeritageSuggestions" :key="item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataHeritage(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="newWikidataHeritageLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('sourceUrl') }}</span>
+                      <input
+                        v-model="newWikidataHeritageSourceUrl"
+                        type="url"
+                        :placeholder="t('sourceUrlPlaceholder')"
+                      />
+                    </label>
+                  </div>
+                  <label class="form-field">
+                    <span>{{ t('commonsCategory') }}</span>
+                    <input
+                      v-model="newWikidataCommonsSearch"
+                      type="text"
+                      :placeholder="t('commonsPlaceholder')"
+                      @input="onNewWikidataCommonsInput"
+                      @blur="hideNewWikidataCommonsSuggestionsSoon"
+                    />
+                    <ul v-if="newWikidataCommonsSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataCommonsSuggestions" :key="item.title">
+                        <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataCommons(item)">
+                          {{ item.title }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataCommonsLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
+                </div>
+                <div v-else-if="isWizardNewLocationStep" class="wizard-section">
+                  <h3>{{ t('locationAndCoordinates') }} (2/2)</h3>
+                  <div class="form-row single-action">
+                    <button type="button" class="secondary-btn" @click="openCoordinatePickerDialog('new-wikidata')">
+                      {{ t('pickCoordinates') }}
+                    </button>
+                  </div>
+                  <p class="dialog-help">
+                    {{ t('coordinates') }}: {{ displayValue(newWikidataLatitude, '-') }}, {{ displayValue(newWikidataLongitude, '-') }}
+                  </p>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('countryP17') }}</span>
+                      <input
+                        v-model="newWikidataCountrySearch"
+                        type="text"
+                        :placeholder="t('countryPlaceholder')"
+                        @input="onNewWikidataCountryInput"
+                        @blur="hideNewWikidataCountrySuggestionsSoon"
+                      />
+                      <ul v-if="newWikidataCountrySuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in newWikidataCountrySuggestions" :key="item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataCountry(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="newWikidataCountryLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('municipalityP131') }}</span>
+                      <input
+                        v-model="newWikidataMunicipalitySearch"
+                        type="text"
+                        :placeholder="t('municipalityPlaceholder')"
+                        @input="onNewWikidataMunicipalityInput"
+                        @blur="hideNewWikidataMunicipalitySuggestionsSoon"
+                      />
+                      <ul v-if="newWikidataMunicipalitySuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in newWikidataMunicipalitySuggestions" :key="item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataMunicipality(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="newWikidataMunicipalityLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                  </div>
+                  <div class="form-row form-row-language">
+                    <label class="form-field">
+                      <span>{{ t('addressText') }}</span>
+                      <input v-model="newWikidataAddressTextP6375" type="text" maxlength="255" />
+                    </label>
+                    <label class="form-field form-field-language">
+                      <span>{{ t('language') }}</span>
+                      <select v-model="newWikidataAddressTextLanguageP6375">
+                        <option
+                          v-for="langCode in wikidataTextLanguageOptions"
+                          :key="'address-language-' + langCode"
+                          :value="langCode"
+                        >
+                          {{ langCode.toUpperCase() }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('latitude') }}</span>
+                      <input v-model="newWikidataLatitude" type="number" step="any" />
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('longitude') }}</span>
+                      <input v-model="newWikidataLongitude" type="number" step="any" />
+                    </label>
+                  </div>
+                </div>
+
+              </template>
+
+              <template v-else-if="showLocalDraftForm">
+              <label class="form-field">
+              <span>{{ t('wikidataItem') }}</span>
+              <input
+                v-model="draftWikidataItem"
+                type="text"
+                :placeholder="t('wikidataItemPlaceholder')"
+                @input="onDraftWikidataInput"
+                @blur="hideWikidataSuggestionsSoon"
+              />
+              <ul v-if="draftWikidataSuggestions.length > 0" class="autocomplete-list">
+                <li v-for="item in draftWikidataSuggestions" :key="item.id">
+                  <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftWikidataItem(item)">
+                    {{ wikidataAutocompleteLabel(item) }}
+                  </button>
+                </li>
+              </ul>
+              <p v-if="draftWikidataSearchLoading" class="dialog-help">{{ t('searching') }}</p>
+              <p
+                v-else-if="draftWikidataItem.trim() && !draftWikidataSearchLoading && draftWikidataSuggestions.length === 0 && !extractWikidataId(draftWikidataItem)"
+                class="autocomplete-empty"
+              >
+                {{ t('autocompleteNoMatches') }}
+              </p>
+              </label>
+
+              <label class="form-field">
+                <span>{{ t('parentLocation') }}</span>
+                <input
+                  v-model="draftParentSearch"
+                  type="text"
+                  :placeholder="t('parentLocationPlaceholder')"
+                  @input="onDraftParentInput"
+                  @focus="onDraftParentFocus"
+                  @blur="hideParentSuggestionsSoon"
+                />
+                <ul v-if="draftParentSuggestions.length > 0" class="autocomplete-list">
+                  <li v-for="item in draftParentSuggestions" :key="item.id || item.uri">
+                    <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftParent(item)">
+                      {{ item.name || item.uri }}
+                    </button>
+                  </li>
+                </ul>
+                <p v-if="draftParentLoading" class="dialog-help">{{ t('searching') }}</p>
+                <p
+                  v-else-if="draftParentSearch.trim() && !draftParentLoading && draftParentSuggestions.length === 0 && !draftParentUri"
+                  class="autocomplete-empty"
+                >
+                  {{ t('autocompleteNoMatches') }}
+                </p>
+                <div class="inline-form-actions">
+                  <button v-if="draftParentUri" type="button" class="text-btn" @click="clearDraftParent">
+                    {{ t('clearParent') }}
+                  </button>
+                </div>
+              </label>
+
+              <p v-if="wikidataLookupLoading" class="status">{{ t('wikidataLookupLoading') }}</p>
+              <p v-else-if="wikidataLookupError" class="status error">{{ wikidataLookupError }}</p>
+              <div v-if="isWikidataLocked && wikidataEntity" class="wikidata-preview">
+              <p class="dialog-help">{{ isEditMode ? t('wikidataEditDiffNotice') : t('wikidataSourceNotice') }}</p>
+              <p><strong>{{ wikidataEntity.label }}</strong> ({{ wikidataEntity.id }})</p>
+              <div class="wikidata-summary-grid">
+                <p><strong>{{ t('locationName') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.label, emptyValueLabel) }}</p>
+                <p><strong>{{ t('locationDescription') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.description, emptyValueLabel) }}</p>
+                <p><strong>{{ t('locationType') }}:</strong> {{ displayValue(wikidataTypeDisplay, emptyValueLabel) }}</p>
+                <p>
+                  <strong>{{ t('coordinates') }}:</strong>
+                  {{ displayValue(wikidataEntity && wikidataEntity.latitude, emptyValueLabel) }},
+                  {{ displayValue(wikidataEntity && wikidataEntity.longitude, emptyValueLabel) }}
+                </p>
+                <p><strong>{{ t('addressText') }}:</strong> {{ displayValue(wikidataAddressDisplay, emptyValueLabel) }}</p>
+                <p><strong>{{ t('postalCode') }}:</strong> {{ displayValue(wikidataPostalDisplay, emptyValueLabel) }}</p>
+                <p><strong>{{ t('municipalityP131') }}:</strong> {{ displayValue(wikidataMunicipalityDisplay, emptyValueLabel) }}</p>
+                <p><strong>{{ t('commonsCategory') }}:</strong> {{ displayValue(wikidataCommonsDisplay, emptyValueLabel) }}</p>
+              </div>
+              <div v-if="wikidataEntity.image_thumb_url || wikidataEntity.image_url" class="wikidata-preview-image">
+                <p><strong>{{ t('image') }}:</strong> {{ displayValue(wikidataEntity.image_name, emptyValueLabel) }}</p>
+                <img
+                  class="thumb-image"
+                  :src="wikidataEntity.image_thumb_url || wikidataEntity.image_url"
+                  :alt="wikidataEntity.image_name || wikidataEntity.label || wikidataEntity.id"
+                  loading="lazy"
+                  @error="(event) => handleImageLoadError(event, wikidataEntity.image_url)"
+                />
+              </div>
+            </div>
+
+            <label v-if="showNameField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+              <span>{{ t('locationName') }}</span>
+              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+              <input v-model="draftName" type="text" maxlength="200" :disabled="areWikidataFieldsReadOnly" />
+            </label>
+            <div v-if="showNameInfo" class="value-compare" :class="{ 'is-different': showManualNameDiff }">
+              <span class="value-compare-title">{{ t('locationName') }}</span>
+              <template v-if="showManualNameDiff">
+                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftName, emptyValueLabel) }}</span>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.label, emptyValueLabel) }}</span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.label, emptyValueLabel) }}</span>
+              </template>
+            </div>
+
+            <label v-if="showDescriptionField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+              <span>{{ t('locationDescription') }}</span>
+              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+              <textarea v-model="draftDescription" rows="3" :disabled="areWikidataFieldsReadOnly"></textarea>
+            </label>
+            <div v-if="showDescriptionInfo" class="value-compare" :class="{ 'is-different': showManualDescriptionDiff }">
+              <span class="value-compare-title">{{ t('locationDescription') }}</span>
+              <template v-if="showManualDescriptionDiff">
+                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftDescription, emptyValueLabel) }}</span>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.description, emptyValueLabel) }}</span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.description, emptyValueLabel) }}</span>
+              </template>
+            </div>
+
+            <label v-if="showTypeField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+              <span>{{ t('locationType') }}</span>
+              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+              <input
+                v-model="draftTypeSearch"
+                type="text"
+                :placeholder="t('typePlaceholder')"
+                :disabled="areWikidataFieldsReadOnly"
+                @input="onDraftTypeInput"
+                @blur="hideTypeSuggestionsSoon"
+              />
+              <ul v-if="!areWikidataFieldsReadOnly && draftTypeSuggestions.length > 0" class="autocomplete-list">
+                <li v-for="item in draftTypeSuggestions" :key="item.id">
+                  <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftType(item)">
+                    {{ wikidataAutocompleteLabel(item) }}
+                  </button>
+                </li>
+              </ul>
+              <p v-if="!areWikidataFieldsReadOnly && draftTypeLoading" class="dialog-help">{{ t('searching') }}</p>
+              <p
+                v-else-if="!areWikidataFieldsReadOnly && draftTypeSearch.trim() && !draftTypeLoading && draftTypeSuggestions.length === 0 && !draftType"
+                class="autocomplete-empty"
+              >
+                {{ t('autocompleteNoMatches') }}
+              </p>
+            </label>
+            <div v-if="showTypeInfo" class="value-compare" :class="{ 'is-different': showManualTypeDiff }">
+              <span class="value-compare-title">{{ t('locationType') }}</span>
+              <template v-if="showManualTypeDiff">
+                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(manualTypeDisplay, emptyValueLabel) }}</span>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataTypeDisplay, emptyValueLabel) }}</span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataTypeDisplay, emptyValueLabel) }}</span>
+              </template>
+            </div>
+
+            <div v-if="showCoordinateInputRow" class="form-row">
+              <label v-if="showLatitudeField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+                <span>{{ t('latitude') }}</span>
+                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+                <input v-model="draftLatitude" type="number" step="any" :disabled="areWikidataFieldsReadOnly" />
+              </label>
+              <label v-if="showLongitudeField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+                <span>{{ t('longitude') }}</span>
+                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+                <input v-model="draftLongitude" type="number" step="any" :disabled="areWikidataFieldsReadOnly" />
+              </label>
+            </div>
+            <div v-if="showCoordinatesInfo" class="value-compare" :class="{ 'is-different': showManualCoordinatesDiff }">
+              <span class="value-compare-title">{{ t('coordinates') }}</span>
+              <template v-if="showManualCoordinatesDiff">
+                <span>
+                  <strong>{{ t('manualValue') }}:</strong>
+                  {{ displayValue(draftLatitude, emptyValueLabel) }}, {{ displayValue(draftLongitude, emptyValueLabel) }}
+                </span>
+                <span>
+                  <strong>{{ t('wikidataValue') }}:</strong>
+                  {{ displayValue(wikidataEntity && wikidataEntity.latitude, emptyValueLabel) }},
+                  {{ displayValue(wikidataEntity && wikidataEntity.longitude, emptyValueLabel) }}
+                </span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span>
+                  <strong>{{ t('wikidataValue') }}:</strong>
+                  {{ displayValue(wikidataEntity && wikidataEntity.latitude, emptyValueLabel) }},
+                  {{ displayValue(wikidataEntity && wikidataEntity.longitude, emptyValueLabel) }}
+                </span>
+              </template>
+            </div>
+            <div v-if="showCoordinateInputRow && !areWikidataFieldsReadOnly" class="form-row single-action">
+                <button
+                  type="button"
+                  class="secondary-btn"
+                  :disabled="areWikidataFieldsReadOnly"
+                  @click="openCoordinatePickerDialog('draft')"
+                >
+                  {{ t('pickCoordinates') }}
+                </button>
+            </div>
+            <div ref="coordinatePreviewMapElement" class="map-canvas coords-inline-map" aria-label="coordinates preview map"></div>
+            <p class="coord-legend">
+              <span class="legend-item">
+                <span class="legend-dot manual"></span>{{ t('coordMapLegendManual') }}
+              </span>
+              <span
+                v-if="isWikidataLocked && wikidataEntity && typeof wikidataEntity.latitude === 'number' && typeof wikidataEntity.longitude === 'number'"
+                class="legend-item"
+              >
+                <span class="legend-dot wikidata"></span>{{ t('coordMapLegendWikidata') }}
+              </span>
+            </p>
+
+            <label v-if="showAddressField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+              <span>{{ t('addressText') }}</span>
+              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+              <input v-model="draftAddressText" type="text" maxlength="255" :disabled="areWikidataFieldsReadOnly" />
+            </label>
+            <div v-if="showAddressInfo" class="value-compare" :class="{ 'is-different': showManualAddressDiff }">
+              <span class="value-compare-title">{{ t('addressText') }}</span>
+              <template v-if="showManualAddressDiff">
+                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftAddressText, emptyValueLabel) }}</span>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataAddressDisplay, emptyValueLabel) }}</span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataAddressDisplay, emptyValueLabel) }}</span>
+              </template>
+            </div>
+
+            <div v-if="showPostalMunicipalityRow" class="form-row">
+              <label v-if="showPostalField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+                <span>{{ t('postalCode') }}</span>
+                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+                <input v-model="draftPostalCode" type="text" maxlength="40" :disabled="areWikidataFieldsReadOnly" />
+              </label>
+              <label v-if="showMunicipalityField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+                <span>{{ t('municipalityP131') }}</span>
+                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+                <input
+                  v-model="draftMunicipalitySearch"
+                  type="text"
+                  maxlength="255"
+                  :placeholder="t('municipalityPlaceholder')"
+                  :disabled="areWikidataFieldsReadOnly"
+                  @input="onDraftMunicipalityInput"
+                  @blur="hideMunicipalitySuggestionsSoon"
+                />
+                <ul v-if="!areWikidataFieldsReadOnly && draftMunicipalitySuggestions.length > 0" class="autocomplete-list">
+                  <li v-for="item in draftMunicipalitySuggestions" :key="item.id">
+                    <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftMunicipality(item)">
+                      {{ wikidataAutocompleteLabel(item) }}
+                    </button>
+                  </li>
+                </ul>
+                <p v-if="!areWikidataFieldsReadOnly && draftMunicipalityLoading" class="dialog-help">{{ t('searching') }}</p>
+              </label>
+            </div>
+            <div v-if="showPostalInfo" class="value-compare" :class="{ 'is-different': showManualPostalDiff }">
+              <span class="value-compare-title">{{ t('postalCode') }}</span>
+              <template v-if="showManualPostalDiff">
+                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftPostalCode, emptyValueLabel) }}</span>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataPostalDisplay, emptyValueLabel) }}</span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataPostalDisplay, emptyValueLabel) }}</span>
+              </template>
+            </div>
+            <div v-if="showMunicipalityInfo" class="value-compare" :class="{ 'is-different': showManualMunicipalityDiff }">
+              <span class="value-compare-title">{{ t('municipalityP131') }}</span>
+              <template v-if="showManualMunicipalityDiff">
+                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(manualMunicipalityDisplay, emptyValueLabel) }}</span>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataMunicipalityDisplay, emptyValueLabel) }}</span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataMunicipalityDisplay, emptyValueLabel) }}</span>
+              </template>
+            </div>
+
+            <label v-if="showCommonsField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
+              <span>{{ t('commonsCategory') }}</span>
+              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
+              <input
+                v-model="draftCommonsSearch"
+                type="text"
+                maxlength="255"
+                :placeholder="t('commonsPlaceholder')"
+                :disabled="areWikidataFieldsReadOnly"
+                @input="onDraftCommonsInput"
+                @blur="hideCommonsSuggestionsSoon"
+              />
+              <ul v-if="!areWikidataFieldsReadOnly && draftCommonsSuggestions.length > 0" class="autocomplete-list">
+                <li v-for="item in draftCommonsSuggestions" :key="item.title">
+                  <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftCommons(item)">
+                    {{ item.title }}
+                  </button>
+                </li>
+              </ul>
+              <p v-if="!areWikidataFieldsReadOnly && draftCommonsLoading" class="dialog-help">{{ t('searching') }}</p>
+            </label>
+            <div v-if="showCommonsInfo" class="value-compare" :class="{ 'is-different': showManualCommonsDiff }">
+              <span class="value-compare-title">{{ t('commonsCategory') }}</span>
+              <template v-if="showManualCommonsDiff">
+                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(manualCommonsDisplay, emptyValueLabel) }}</span>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataCommonsDisplay, emptyValueLabel) }}</span>
+                <span class="diff-tag">{{ t('differentValue') }}</span>
+              </template>
+              <template v-else>
+                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataCommonsDisplay, emptyValueLabel) }}</span>
+              </template>
+            </div>
+            </template>
+            </fieldset>
+
+            <p v-if="wizardError && !showLocalDraftForm" class="status error">{{ wizardError }}</p>
+            <p v-if="draftError && showLocalDraftForm" class="status error">{{ draftError }}</p>
+
+            <div class="dialog-actions">
+              <button type="button" class="secondary-btn" :disabled="isCreateActionBusy" @click="closeCreateLocationDialog">{{ t('cancel') }}</button>
+              <button
+                v-if="isWizardNewLocationStep"
+                type="button"
+                class="secondary-btn"
+                :disabled="isCreateActionBusy"
+                @click="returnToNewWikidataBasicStep"
+              >
+                {{ t('back') }}
+              </button>
+              <button
+                v-else-if="canReturnToWizardChoice"
+                type="button"
+                class="secondary-btn"
+                :disabled="isCreateActionBusy"
+                @click="returnToCreateWizardChoice"
+              >
+                {{ t('back') }}
+              </button>
+              <button
+                v-if="!isWizardChoiceStep"
+                type="button"
+                class="primary-btn"
+                :disabled="isCreateActionBusy || !canCreateLocation"
+                @click="submitCreateLocation"
+              >
+                {{ (draftSaving || wizardSaving) ? t('saving') : locationDialogSubmitLabel }}
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <div v-if="showCoordinatePickerDialog" class="dialog-backdrop" @click.self="closeCoordinatePickerDialog">
+          <section class="dialog-card dialog-card-wide" role="dialog" aria-modal="true">
+            <h2>{{ t('coordinatePickerTitle') }}</h2>
+
+            <form class="inline-search" @submit.prevent="runCoordinateSearch">
+              <input
+                v-model="coordinateSearchQuery"
+                type="text"
+                :placeholder="t('placeSearch')"
+              />
+              <button type="submit" class="secondary-btn">{{ t('search') }}</button>
+            </form>
+
+            <p v-if="coordinateSearchLoading" class="status">{{ t('searching') }}</p>
+            <p v-if="coordinateSearchError" class="status error">{{ coordinateSearchError }}</p>
+            <p
+              v-if="!coordinateSearchLoading && coordinateSearchQuery.trim() && coordinateSearchResults.length === 0"
+              class="status"
+            >
+              {{ t('noSearchResults') }}
+            </p>
+
+            <ul v-if="coordinateSearchResults.length > 0" class="search-result-list">
+              <li v-for="item in coordinateSearchResults" :key="item.name + ':' + item.latitude + ':' + item.longitude">
+                <button type="button" class="autocomplete-option" @click="chooseCoordinateSearchResult(item)">
+                  {{ item.name }}
+                </button>
+              </li>
+            </ul>
+
+            <div ref="coordinatePickerMapElement" class="map-canvas picker-map" aria-label="coordinate picker map"></div>
+            <p class="dialog-help">{{ t('coordinates') }}: {{ coordinatePickerLatitudeDisplay }}, {{ coordinatePickerLongitudeDisplay }}</p>
+
+            <div class="dialog-actions">
+              <button type="button" class="secondary-btn" @click="closeCoordinatePickerDialog">{{ t('cancel') }}</button>
+              <button type="button" class="primary-btn" :disabled="!hasValidCoordinates" @click="closeCoordinatePickerDialog">
+                {{ t('useSelectedCoordinates') }}
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+    `
+  }
+
+  createApp(AppRoot).use(router).use(i18n).mount('#app')
+})()
