@@ -74,7 +74,7 @@ The backend extends it with label/description and coordinates needed by the list
 ## Backend environment variables (optional)
 
 - `SPARQL_ENDPOINT` (default: `https://query.wikidata.org/sparql`)
-- `SPARQL_DEFAULT_LIMIT` (default: `50`)
+- `SPARQL_DEFAULT_LIMIT` (default: `500`)
 - `SPARQL_TIMEOUT_SECONDS` (default: `15`)
 - `API_BASE_URL` (default: `/api`)
 - `CORS_ALLOWED_ORIGINS` (default: `http://localhost:8001`, only needed if you run frontend on another origin)
@@ -82,6 +82,8 @@ The backend extends it with label/description and coordinates needed by the list
 - `SOCIAL_AUTH_MEDIAWIKI_SECRET` (required for Wikimedia OAuth login and Wikidata write actions)
 - `SOCIAL_AUTH_MEDIAWIKI_URL` (default: `https://meta.wikimedia.org/w/index.php`)
 - `SOCIAL_AUTH_MEDIAWIKI_CALLBACK` (recommended: your exact callback URL, e.g. `http://127.0.0.1:8000/auth/complete/mediawiki/`)
+- `LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN` (optional local-dev fallback OAuth access token)
+- `LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET` (optional local-dev fallback OAuth access secret)
 - `WIKIDATA_COLLECTION_QID` (default: `Q138299296`)
 
 ## Wikimedia OAuth login (social-auth-app-django)
@@ -94,6 +96,20 @@ Backend uses the standard `social-auth-app-django` `mediawiki` OAuth1 backend.
 - Callback URL pattern: `/auth/complete/mediawiki/`
 
 `/api/auth/status/` reports `enabled=false` when `SOCIAL_AUTH_MEDIAWIKI_KEY` and `SOCIAL_AUTH_MEDIAWIKI_SECRET` are not configured.
+
+### Local development access token fallback
+
+For local development (`DEBUG=1`) you can configure OAuth token fallback for Wikidata write endpoints:
+
+- `LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN`
+- `LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET`
+
+Alias env names are also supported:
+
+- `WIKIMEDIA_OAUTH1_ACCESS_TOKEN`
+- `WIKIMEDIA_OAUTH1_ACCESS_SECRET` (or `WIKIMEDIA_OAUTH1_ACCESS_TOKEN_SECRET`)
+
+This is intended for endpoint-specific OAuth credentials (for example a consumer created with settings like "This consumer is for use only by Zache").
 
 ## Optional: run frontend subproject standalone
 

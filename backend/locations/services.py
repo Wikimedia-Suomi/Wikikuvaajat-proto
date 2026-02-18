@@ -46,6 +46,7 @@ class Location:
     description: str
     latitude: float
     longitude: float
+    date_modified: str = ''
     commons_category: str = ''
     image_name: str = ''
     image_url: str = ''
@@ -96,6 +97,7 @@ _NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search'
 _NOMINATIM_REVERSE_URL = 'https://nominatim.openstreetmap.org/reverse'
 _PETSCAN_API_URL = 'https://petscan.wmcloud.org/'
 _VIEW_IT_API_BASE_URL = 'https://view-it.toolforge.org/api'
+_CITOID_REST_API_URL = 'https://en.wikipedia.org/api/rest_v1/data/citation/mediawiki/'
 _COMMONS_THUMB_WIDTH = 320
 _PETSCAN_DEPTH = 3
 _WIKIDATA_CALENDAR_MODEL = 'http://www.wikidata.org/entity/Q1985727'
@@ -320,6 +322,7 @@ def _format_binding(binding: dict[str, Any]) -> Location:
     name = _binding_value(binding, ['itemLabel', 'label', 'name'])
     if not name:
         name = uri.rsplit('/', 1)[-1].replace('_', ' ')
+    date_modified = _binding_value(binding, ['dateModified'], '')
 
     lat_value = _binding_value(binding, ['lat', 'latitude'])
     lon_value = _binding_value(binding, ['lon', 'long', 'longitude'])
@@ -477,6 +480,7 @@ def _format_binding(binding: dict[str, Any]) -> Location:
         uri=uri,
         name=name,
         description=description,
+        date_modified=date_modified,
         latitude=latitude,
         longitude=longitude,
         commons_category=commons_category,
@@ -782,6 +786,7 @@ def _list_query(
     lang: str,
     limit: int,
     additional_wikidata_qids: list[str] | None = None,
+    query_comment: str = '',
 ) -> str:
     safe_langs = _sparql_label_languages(lang).replace('"', '')
     wikipedia_site_url = _wikipedia_site_url(lang)
@@ -800,8 +805,9 @@ def _list_query(
   }}
 '''
 
+    optional_comment = f'{query_comment}\n' if query_comment else ''
     return f'''
-PREFIX wd: <http://www.wikidata.org/entity/>
+{optional_comment}PREFIX wd: <http://www.wikidata.org/entity/>
 PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX p: <http://www.wikidata.org/prop/>
 PREFIX ps: <http://www.wikidata.org/prop/statement/>
@@ -811,7 +817,7 @@ PREFIX bd: <http://www.bigdata.com/rdf#>
 PREFIX schema: <http://schema.org/>
 
 SELECT DISTINCT
-  ?item ?coord ?itemLabel ?itemDescription ?commonsCategory ?imageName
+  ?item ?coord ?itemLabel ?itemDescription ?dateModified ?commonsCategory ?imageName
   ?inceptionP571
   ?locationP276 ?locationP276Label ?locationP276WikipediaUrl
   ?architectP84 ?architectP84Label ?architectP84WikipediaUrl
@@ -831,6 +837,7 @@ SELECT DISTINCT
 WHERE {{
   {item_selector}
   ?item wdt:P625 ?coord .
+  OPTIONAL {{ ?item schema:dateModified ?dateModified . }}
   OPTIONAL {{ ?item wdt:P373 ?commonsCategory . }}
   OPTIONAL {{ ?item wdt:P18 ?imageName . }}
   OPTIONAL {{ ?item wdt:P571 ?inceptionP571 . }}
@@ -910,6 +917,24 @@ LIMIT {limit}
 '''
 
 
+def build_locations_sparql_query(
+    lang: str | None = None,
+    limit: int | None = None,
+    additional_wikidata_qids: list[str] | None = None,
+    query_comment: str = '',
+) -> str:
+    query_limit = limit or settings.SPARQL_DEFAULT_LIMIT
+    normalized_additional_qids = _normalized_wikidata_qids(additional_wikidata_qids)
+    fallbacks = _language_fallbacks(lang, include_mul=False)
+    query_lang = fallbacks[0] if fallbacks else 'en'
+    return _list_query(
+        query_lang,
+        query_limit,
+        additional_wikidata_qids=normalized_additional_qids,
+        query_comment=query_comment,
+    )
+
+
 def _detail_query(uri: str, lang: str) -> str:
     safe_uri = _sparql_subject_uri(uri).replace('>', '%3E')
     safe_langs = _sparql_label_languages(lang).replace('"', '')
@@ -924,7 +949,7 @@ PREFIX bd: <http://www.bigdata.com/rdf#>
 PREFIX schema: <http://schema.org/>
 
 SELECT DISTINCT
-  ?item ?coord ?itemLabel ?itemDescription ?commonsCategory ?imageName
+  ?item ?coord ?itemLabel ?itemDescription ?dateModified ?commonsCategory ?imageName
   ?inceptionP571
   ?locationP276 ?locationP276Label ?locationP276WikipediaUrl
   ?architectP84 ?architectP84Label ?architectP84WikipediaUrl
@@ -944,6 +969,7 @@ SELECT DISTINCT
 WHERE {{
   VALUES ?item {{ <{safe_uri}> }}
   ?item wdt:P625 ?coord .
+  OPTIONAL {{ ?item schema:dateModified ?dateModified . }}
   OPTIONAL {{ ?item wdt:P373 ?commonsCategory . }}
   OPTIONAL {{ ?item wdt:P18 ?imageName . }}
   OPTIONAL {{ ?item wdt:P571 ?inceptionP571 . }}
@@ -1051,6 +1077,7 @@ def fetch_locations(
     lang: str | None = None,
     limit: int | None = None,
     additional_wikidata_qids: list[str] | None = None,
+    query_comment: str = '',
 ) -> list[dict[str, Any]]:
     query_limit = limit or settings.SPARQL_DEFAULT_LIMIT
     normalized_additional_qids = _normalized_wikidata_qids(additional_wikidata_qids)
@@ -1065,6 +1092,7 @@ def fetch_locations(
                     fallback_lang,
                     query_limit,
                     additional_wikidata_qids=normalized_additional_qids,
+                    query_comment=query_comment,
                 )
             )
         except SPARQLServiceError as exc:
@@ -1323,6 +1351,142 @@ def _external_json_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
         raise ExternalServiceError('External service returned unexpected payload.')
 
     return payload
+
+
+def _clean_citoid_text(value: Any) -> str:
+    if value is None:
+        return ''
+    text = str(value).strip()
+    if not text:
+        return ''
+    without_tags = re.sub(r'<[^>]+>', ' ', text)
+    return re.sub(r'\s+', ' ', without_tags).strip()
+
+
+def _citoid_author_text(value: Any) -> str:
+    raw_items = value if isinstance(value, list) else [value]
+    parts: list[str] = []
+    for raw_item in raw_items:
+        if isinstance(raw_item, str):
+            normalized = _clean_citoid_text(raw_item)
+            if normalized:
+                parts.append(normalized)
+            continue
+        if not isinstance(raw_item, dict):
+            continue
+
+        literal = _clean_citoid_text(
+            raw_item.get('literal') or raw_item.get('name') or raw_item.get('family') or ''
+        )
+        if not literal:
+            given = _clean_citoid_text(raw_item.get('given') or raw_item.get('givenName') or '')
+            family = _clean_citoid_text(raw_item.get('family') or raw_item.get('familyName') or '')
+            literal = _clean_citoid_text(f'{given} {family}'.strip())
+        if literal:
+            parts.append(literal)
+
+    unique_parts: list[str] = []
+    for item in parts:
+        if item not in unique_parts:
+            unique_parts.append(item)
+    return ', '.join(unique_parts)
+
+
+def _citoid_normalized_publication_date(value: Any) -> str:
+    if isinstance(value, list) and value:
+        return _citoid_normalized_publication_date(value[0])
+    if isinstance(value, dict):
+        for key in ('raw', 'literal', 'value', 'date'):
+            normalized = _citoid_normalized_publication_date(value.get(key))
+            if normalized:
+                return normalized
+        return ''
+
+    raw_value = _clean_citoid_text(value)
+    if not raw_value:
+        return ''
+    for pattern in (r'\d{4}-\d{2}-\d{2}', r'\d{4}-\d{2}', r'\d{4}'):
+        match = re.search(pattern, raw_value)
+        if match:
+            return match.group(0)
+    return ''
+
+
+def _first_citoid_item(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
+def fetch_citoid_metadata(source_url: str, lang: str | None = None) -> dict[str, str]:
+    normalized_url = str(source_url or '').strip()
+    if not normalized_url.startswith('http://') and not normalized_url.startswith('https://'):
+        raise ExternalServiceError('A valid source URL is required.')
+
+    encoded_url = quote(normalized_url, safe='')
+    request_url = f'{_CITOID_REST_API_URL}{encoded_url}'
+    request_started_at = perf_counter()
+    try:
+        response = requests.get(
+            request_url,
+            headers={
+                'Accept': 'application/json',
+                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+            },
+            timeout=_external_timeout_seconds(),
+        )
+        request_url = str(getattr(response, 'url', '') or request_url)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        _list_render_debug_log_external_fetch(
+            source='citoid',
+            url=request_url,
+            started_at=request_started_at,
+            error=exc,
+        )
+        raise ExternalServiceError(f'Citoid request failed: {exc}') from exc
+    _list_render_debug_log_external_fetch(
+        source='citoid',
+        url=request_url,
+        started_at=request_started_at,
+    )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        preview = response.text[:200].replace('\n', ' ').strip()
+        raise ExternalServiceError(f'Citoid service did not return JSON. preview={preview!r}') from exc
+
+    item = _first_citoid_item(payload)
+    if not item:
+        raise ExternalServiceError('Citoid did not return metadata for this URL.')
+
+    title = _clean_citoid_text(item.get('title') or item.get('headline') or '')
+    author = _citoid_author_text(item.get('author'))
+    publication_date = _citoid_normalized_publication_date(
+        item.get('date')
+        or item.get('issued')
+        or item.get('published')
+        or item.get('publication_date')
+    )
+    source_lang = _wikidata_language_code(
+        _clean_citoid_text(item.get('language') or item.get('lang') or ''),
+        fallback=_wikidata_language_code(str(lang or ''), fallback='en'),
+    )
+
+    return {
+        'source_url': normalized_url,
+        'source_title': title,
+        'source_title_language': source_lang,
+        'source_author': author,
+        'source_publication_date': publication_date,
+        'source_published_in_p1433': '',
+        'source_language_of_work_p407': '',
+    }
 
 
 def _extract_wikidata_qid(value: str) -> str:
@@ -1902,6 +2066,55 @@ def _wikidata_oauth_credentials(
     return consumer_key, consumer_secret, access_token, access_token_secret
 
 
+def _local_dev_access_token_enabled() -> bool:
+    if not getattr(settings, 'DEBUG', False):
+        return False
+    access_token = str(getattr(settings, 'LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN', '') or '').strip()
+    access_token_secret = str(getattr(settings, 'LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET', '') or '').strip()
+    return bool(access_token and access_token_secret)
+
+
+def _wikidata_local_dev_access_token_credentials() -> tuple[str, str]:
+    if not _local_dev_access_token_enabled():
+        raise WikidataWriteError(
+            'Wikidata local access token authentication is not configured. '
+            'Set LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN and LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET.'
+        )
+
+    access_token = str(getattr(settings, 'LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN', '') or '').strip()
+    access_token_secret = str(getattr(settings, 'LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET', '') or '').strip()
+    return access_token, access_token_secret
+
+
+def _wikidata_api_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(
+        {
+            'Accept': 'application/json',
+            'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+        }
+    )
+    return session
+
+
+def _wikidata_csrf_token(session: requests.Session) -> str:
+    csrf_token_payload = _wikidata_api_get(
+        session,
+        {
+            'action': 'query',
+            'meta': 'tokens',
+            'type': 'csrf',
+            'format': 'json',
+        },
+    )
+    csrf_query = csrf_token_payload.get('query', {})
+    csrf_tokens = csrf_query.get('tokens', {}) if isinstance(csrf_query, dict) else {}
+    csrf_token = str(csrf_tokens.get('csrftoken') or '').strip()
+    if not csrf_token:
+        raise WikidataWriteError('Could not fetch Wikidata CSRF token.')
+    return csrf_token
+
+
 def _wikidata_api_get(session: requests.Session, params: dict[str, Any]) -> dict[str, Any]:
     try:
         response = session.get(
@@ -1964,6 +2177,17 @@ def _wikidata_oauth_session(
     oauth_token: str = '',
     oauth_token_secret: str = '',
 ) -> tuple[requests.Session, str]:
+    access_token = str(oauth_token or '').strip()
+    access_token_secret = str(oauth_token_secret or '').strip()
+    if not access_token and not access_token_secret and _local_dev_access_token_enabled():
+        access_token, access_token_secret = _wikidata_local_dev_access_token_credentials()
+    if not access_token or not access_token_secret:
+        raise WikidataWriteError(
+            'Wikimedia OAuth credentials are missing for this session. '
+            'Sign in with Wikimedia OAuth before editing Wikidata, or configure '
+            'LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN and LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET in local development.'
+        )
+
     if OAuth1 is None:
         raise WikidataWriteError(
             'Wikidata OAuth1 support requires requests-oauthlib. '
@@ -1971,16 +2195,10 @@ def _wikidata_oauth_session(
         )
 
     consumer_key, consumer_secret, access_token, access_token_secret = _wikidata_oauth_credentials(
-        oauth_token=oauth_token,
-        oauth_token_secret=oauth_token_secret,
+        oauth_token=access_token,
+        oauth_token_secret=access_token_secret,
     )
-    session = requests.Session()
-    session.headers.update(
-        {
-            'Accept': 'application/json',
-            'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
-        }
-    )
+    session = _wikidata_api_session()
     session.auth = OAuth1(
         client_key=consumer_key,
         client_secret=consumer_secret,
@@ -1989,22 +2207,107 @@ def _wikidata_oauth_session(
         signature_type='auth_header',
     )
 
-    csrf_token_payload = _wikidata_api_get(
-        session,
-        {
-            'action': 'query',
-            'meta': 'tokens',
-            'type': 'csrf',
-            'format': 'json',
-        },
-    )
-    csrf_query = csrf_token_payload.get('query', {})
-    csrf_tokens = csrf_query.get('tokens', {}) if isinstance(csrf_query, dict) else {}
-    csrf_token = str(csrf_tokens.get('csrftoken') or '').strip()
-    if not csrf_token:
-        raise WikidataWriteError('Could not fetch Wikidata CSRF token.')
-
+    csrf_token = _wikidata_csrf_token(session)
     return session, csrf_token
+
+
+def _log_wikidata_userinfo_failure(response_text: str, status_code: int | None = None, detail: str = '') -> None:
+    status_part = f' status={status_code}' if status_code is not None else ''
+    detail_part = f' detail={detail}' if detail else ''
+    preview = str(response_text or '').replace('\n', ' ').strip()
+    print(f'[AUTH-DEBUG] MediaWiki userinfo fetch failed.{status_part}{detail_part} response={preview!r}', flush=True)
+
+
+def fetch_wikidata_authenticated_username(
+    oauth_token: str = '',
+    oauth_token_secret: str = '',
+) -> str:
+    access_token = str(oauth_token or '').strip()
+    access_token_secret = str(oauth_token_secret or '').strip()
+    if not access_token and not access_token_secret and _local_dev_access_token_enabled():
+        access_token, access_token_secret = _wikidata_local_dev_access_token_credentials()
+    if not access_token or not access_token_secret:
+        _log_wikidata_userinfo_failure('', detail='missing access token or access secret')
+        return ''
+
+    if OAuth1 is None:
+        raise WikidataWriteError(
+            'Wikidata OAuth1 support requires requests-oauthlib. '
+            'Install dependencies from backend/requirements.txt.'
+        )
+
+    try:
+        consumer_key, consumer_secret, access_token, access_token_secret = _wikidata_oauth_credentials(
+            oauth_token=access_token,
+            oauth_token_secret=access_token_secret,
+        )
+    except WikidataWriteError as exc:
+        _log_wikidata_userinfo_failure('', detail=f'oauth credentials invalid: {exc}')
+        raise
+    session = _wikidata_api_session()
+    session.auth = OAuth1(
+        client_key=consumer_key,
+        client_secret=consumer_secret,
+        resource_owner_key=access_token,
+        resource_owner_secret=access_token_secret,
+        signature_type='auth_header',
+    )
+    userinfo_params = {
+        'action': 'query',
+        'meta': 'userinfo',
+        'format': 'json',
+    }
+    try:
+        response = session.get(
+            _WIKIDATA_API_URL,
+            params=userinfo_params,
+            timeout=_external_timeout_seconds(),
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        failed_response = getattr(exc, 'response', None)
+        response_text = str(getattr(failed_response, 'text', '') or '')
+        response_status = getattr(failed_response, 'status_code', None)
+        _log_wikidata_userinfo_failure(response_text, response_status, detail=str(exc))
+        raise WikidataWriteError(f'Wikidata request failed: {exc}') from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        response_text = str(getattr(response, 'text', '') or '')
+        _log_wikidata_userinfo_failure(response_text, response.status_code, detail='non-json response')
+        preview = response_text[:200].replace('\n', ' ').strip()
+        raise WikidataWriteError(f'Wikidata service did not return JSON. preview={preview!r}') from exc
+
+    if not isinstance(payload, dict):
+        _log_wikidata_userinfo_failure(
+            json.dumps(payload, ensure_ascii=False, default=str),
+            response.status_code,
+            detail='unexpected payload type',
+        )
+        raise WikidataWriteError('Wikidata service returned unexpected payload.')
+
+    error_payload = payload.get('error')
+    if isinstance(error_payload, dict):
+        _log_wikidata_userinfo_failure(
+            json.dumps(payload, ensure_ascii=False),
+            response.status_code,
+            detail='api error',
+        )
+        code = str(error_payload.get('code') or '').strip() or 'unknown'
+        info = str(error_payload.get('info') or '').strip() or 'unknown error'
+        raise WikidataWriteError(f'Wikidata API error ({code}): {info}')
+
+    query = payload.get('query', {})
+    userinfo = query.get('userinfo', {}) if isinstance(query, dict) else {}
+    username = str((userinfo.get('name') or '') if isinstance(userinfo, dict) else '').strip()
+    if not username:
+        _log_wikidata_userinfo_failure(
+            json.dumps(payload, ensure_ascii=False),
+            response.status_code,
+            detail='username missing from userinfo response',
+        )
+    return username
 
 
 def _wikidata_numeric_qid(qid: str) -> int:
@@ -2108,12 +2411,20 @@ def _wikidata_today_datavalue() -> dict[str, Any]:
     }
 
 
-def _wikidata_source_snaks(source_url: str) -> dict[str, Any]:
+def _wikidata_source_snaks(
+    source_url: str,
+    source_title: str = '',
+    source_title_language: str = '',
+    source_author: str = '',
+    source_publication_date: str = '',
+    source_published_in_p1433: str = '',
+    source_language_of_work_p407: str = '',
+) -> dict[str, Any]:
     normalized_url = str(source_url or '').strip()
     if not normalized_url:
         return {}
 
-    return {
+    snaks: dict[str, Any] = {
         'P854': [
             {
                 'snaktype': 'value',
@@ -2130,14 +2441,87 @@ def _wikidata_source_snaks(source_url: str) -> dict[str, Any]:
         ],
     }
 
+    normalized_title = str(source_title or '').strip()
+    if normalized_title:
+        snaks['P1476'] = [
+            {
+                'snaktype': 'value',
+                'property': 'P1476',
+                'datavalue': {
+                    'value': _wikidata_monolingual_text_datavalue(
+                        normalized_title,
+                        source_title_language,
+                        fallback='en',
+                    ),
+                    'type': 'monolingualtext',
+                },
+            }
+        ]
+
+    normalized_author = str(source_author or '').strip()
+    if normalized_author:
+        snaks['P2093'] = [
+            {
+                'snaktype': 'value',
+                'property': 'P2093',
+                'datavalue': {'value': normalized_author, 'type': 'string'},
+            }
+        ]
+
+    normalized_publication_date = str(source_publication_date or '').strip()
+    if normalized_publication_date:
+        snaks['P577'] = [
+            {
+                'snaktype': 'value',
+                'property': 'P577',
+                'datavalue': {'value': _wikidata_time_datavalue(normalized_publication_date), 'type': 'time'},
+            }
+        ]
+
+    normalized_published_in_qid = _extract_wikidata_qid(str(source_published_in_p1433 or '').strip())
+    if normalized_published_in_qid:
+        snaks['P1433'] = [
+            {
+                'snaktype': 'value',
+                'property': 'P1433',
+                'datavalue': {'value': _wikidata_entity_datavalue(normalized_published_in_qid), 'type': 'wikibase-entityid'},
+            }
+        ]
+
+    normalized_language_of_work_qid = _extract_wikidata_qid(str(source_language_of_work_p407 or '').strip())
+    if normalized_language_of_work_qid:
+        snaks['P407'] = [
+            {
+                'snaktype': 'value',
+                'property': 'P407',
+                'datavalue': {'value': _wikidata_entity_datavalue(normalized_language_of_work_qid), 'type': 'wikibase-entityid'},
+            }
+        ]
+
+    return snaks
+
 
 def _set_claim_reference(
     session: requests.Session,
     csrf_token: str,
     claim_id: str,
     source_url: str,
+    source_title: str = '',
+    source_title_language: str = '',
+    source_author: str = '',
+    source_publication_date: str = '',
+    source_published_in_p1433: str = '',
+    source_language_of_work_p407: str = '',
 ) -> None:
-    snaks = _wikidata_source_snaks(source_url)
+    snaks = _wikidata_source_snaks(
+        source_url,
+        source_title=source_title,
+        source_title_language=source_title_language,
+        source_author=source_author,
+        source_publication_date=source_publication_date,
+        source_published_in_p1433=source_published_in_p1433,
+        source_language_of_work_p407=source_language_of_work_p407,
+    )
     if not snaks:
         return
 
@@ -2153,6 +2537,27 @@ def _set_claim_reference(
     )
 
 
+def _set_claim_qualifier(
+    session: requests.Session,
+    csrf_token: str,
+    claim_id: str,
+    property_id: str,
+    datavalue: Any,
+) -> None:
+    _wikidata_api_post(
+        session,
+        {
+            'action': 'wbsetqualifier',
+            'claim': claim_id,
+            'property': property_id,
+            'snaktype': 'value',
+            'value': json.dumps(datavalue, ensure_ascii=False, separators=(',', ':')),
+            'token': csrf_token,
+            'format': 'json',
+        },
+    )
+
+
 def _create_wikidata_claim(
     session: requests.Session,
     csrf_token: str,
@@ -2160,6 +2565,13 @@ def _create_wikidata_claim(
     property_id: str,
     datavalue: Any,
     source_url: str = '',
+    source_title: str = '',
+    source_title_language: str = '',
+    source_author: str = '',
+    source_publication_date: str = '',
+    source_published_in_p1433: str = '',
+    source_language_of_work_p407: str = '',
+    qualifiers: dict[str, Any] | None = None,
 ) -> str:
     payload = _wikidata_api_post(
         session,
@@ -2178,19 +2590,45 @@ def _create_wikidata_claim(
     if not claim_id:
         raise WikidataWriteError(f'Wikidata API did not return claim id for {property_id}.')
 
-    _set_claim_reference(session, csrf_token, claim_id, source_url)
+    _set_claim_reference(
+        session,
+        csrf_token,
+        claim_id,
+        source_url,
+        source_title=source_title,
+        source_title_language=source_title_language,
+        source_author=source_author,
+        source_publication_date=source_publication_date,
+        source_published_in_p1433=source_published_in_p1433,
+        source_language_of_work_p407=source_language_of_work_p407,
+    )
+
+    if qualifiers:
+        for qualifier_property, qualifier_value in qualifiers.items():
+            if qualifier_value is None:
+                continue
+            if isinstance(qualifier_value, str) and not qualifier_value.strip():
+                continue
+            _set_claim_qualifier(
+                session,
+                csrf_token,
+                claim_id,
+                qualifier_property,
+                qualifier_value,
+            )
     return claim_id
 
 
-def _entity_has_item_claim(claims: dict[str, Any], property_id: str, target_qid: str) -> bool:
+def _entity_item_claims(claims: dict[str, Any], property_id: str, target_qid: str) -> list[dict[str, Any]]:
     normalized_target = _extract_wikidata_qid(target_qid)
     if not normalized_target:
-        return False
+        return []
 
     entries = claims.get(property_id)
     if not isinstance(entries, list):
-        return False
+        return []
 
+    matching_claims: list[dict[str, Any]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -2203,7 +2641,79 @@ def _entity_has_item_claim(claims: dict[str, Any], property_id: str, target_qid:
         value = datavalue.get('value')
         entity_id = _entity_id_from_claim_value(value)
         if entity_id and entity_id == normalized_target:
+            matching_claims.append(entry)
+
+    return matching_claims
+
+
+def _entity_has_item_claim(claims: dict[str, Any], property_id: str, target_qid: str) -> bool:
+    return bool(_entity_item_claims(claims, property_id, target_qid))
+
+
+def _reference_has_string_snak(snaks: dict[str, Any], property_id: str, expected_value: str) -> bool:
+    normalized_expected = str(expected_value or '').strip()
+    if not normalized_expected:
+        return True
+    property_snaks = snaks.get(property_id)
+    if not isinstance(property_snaks, list):
+        return False
+    for item_snak in property_snaks:
+        if not isinstance(item_snak, dict):
+            continue
+        datavalue = item_snak.get('datavalue', {})
+        if not isinstance(datavalue, dict):
+            continue
+        if str(datavalue.get('value') or '').strip() == normalized_expected:
             return True
+    return False
+
+
+def _reference_has_entity_snak(snaks: dict[str, Any], property_id: str, expected_qid: str) -> bool:
+    normalized_expected_qid = _extract_wikidata_qid(expected_qid)
+    if not normalized_expected_qid:
+        return True
+    property_snaks = snaks.get(property_id)
+    if not isinstance(property_snaks, list):
+        return False
+    for item_snak in property_snaks:
+        if not isinstance(item_snak, dict):
+            continue
+        datavalue = item_snak.get('datavalue', {})
+        if not isinstance(datavalue, dict):
+            continue
+        entity_id = _entity_id_from_claim_value(datavalue.get('value'))
+        if entity_id == normalized_expected_qid:
+            return True
+    return False
+
+
+def _claim_has_matching_source_reference(
+    claim: dict[str, Any],
+    source_url: str,
+    source_published_in_p1433: str = '',
+    source_language_of_work_p407: str = '',
+) -> bool:
+    normalized_url = str(source_url or '').strip()
+    if not normalized_url:
+        return False
+
+    references = claim.get('references')
+    if not isinstance(references, list):
+        return False
+
+    for reference in references:
+        if not isinstance(reference, dict):
+            continue
+        snaks = reference.get('snaks', {})
+        if not isinstance(snaks, dict):
+            continue
+        if not _reference_has_string_snak(snaks, 'P854', normalized_url):
+            continue
+        if not _reference_has_entity_snak(snaks, 'P1433', source_published_in_p1433):
+            continue
+        if not _reference_has_entity_snak(snaks, 'P407', source_language_of_work_p407):
+            continue
+        return True
 
     return False
 
@@ -2213,6 +2723,14 @@ def ensure_wikidata_collection_membership(
     collection_qid: str | None = None,
     oauth_token: str = '',
     oauth_token_secret: str = '',
+    source_url: str = '',
+    source_title: str = '',
+    source_title_language: str = '',
+    source_author: str = '',
+    source_publication_date: str = '',
+    source_published_in_p1433: str = '',
+    source_language_of_work_p407: str = '',
+    reason_p958: str = '',
 ) -> dict[str, Any]:
     normalized_entity_qid = _extract_wikidata_qid(entity_id)
     if not normalized_entity_qid:
@@ -2241,7 +2759,17 @@ def ensure_wikidata_collection_membership(
     claims = entity.get('claims', {}) if isinstance(entity, dict) else {}
     claims = claims if isinstance(claims, dict) else {}
 
-    already_listed = _entity_has_item_claim(claims, 'P5008', normalized_collection_qid)
+    normalized_source_url = str(source_url or '').strip()
+    normalized_source_title = str(source_title or '').strip()
+    normalized_source_title_language = str(source_title_language or '').strip()
+    normalized_source_author = str(source_author or '').strip()
+    normalized_source_publication_date = str(source_publication_date or '').strip()
+    normalized_source_published_in_qid = _extract_wikidata_qid(str(source_published_in_p1433 or '').strip())
+    normalized_source_language_of_work_qid = _extract_wikidata_qid(str(source_language_of_work_p407 or '').strip())
+    normalized_reason_p958 = str(reason_p958 or '').strip()
+
+    matching_collection_claims = _entity_item_claims(claims, 'P5008', normalized_collection_qid)
+    already_listed = bool(matching_collection_claims)
     if not already_listed:
         _create_wikidata_claim(
             session=session,
@@ -2249,7 +2777,42 @@ def ensure_wikidata_collection_membership(
             entity_qid=normalized_entity_qid,
             property_id='P5008',
             datavalue=_wikidata_entity_datavalue(normalized_collection_qid),
+            source_url=normalized_source_url,
+            source_title=normalized_source_title,
+            source_title_language=normalized_source_title_language,
+            source_author=normalized_source_author,
+            source_publication_date=normalized_source_publication_date,
+            source_published_in_p1433=normalized_source_published_in_qid,
+            source_language_of_work_p407=normalized_source_language_of_work_qid,
+            qualifiers={'P958': normalized_reason_p958},
         )
+    elif normalized_source_url:
+        for claim in matching_collection_claims:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get('id') or '').strip()
+            if not claim_id:
+                continue
+            if _claim_has_matching_source_reference(
+                claim,
+                normalized_source_url,
+                source_published_in_p1433=normalized_source_published_in_qid,
+                source_language_of_work_p407=normalized_source_language_of_work_qid,
+            ):
+                continue
+
+            _set_claim_reference(
+                session,
+                csrf_token,
+                claim_id,
+                normalized_source_url,
+                source_title=normalized_source_title,
+                source_title_language=normalized_source_title_language,
+                source_author=normalized_source_author,
+                source_publication_date=normalized_source_publication_date,
+                source_published_in_p1433=normalized_source_published_in_qid,
+                source_language_of_work_p407=normalized_source_language_of_work_qid,
+            )
 
     return {
         'qid': normalized_entity_qid,

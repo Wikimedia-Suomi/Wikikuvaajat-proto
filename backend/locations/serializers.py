@@ -20,6 +20,7 @@ class LocationSerializer(serializers.Serializer):
     uri = serializers.URLField()
     name = serializers.CharField()
     description = serializers.CharField(allow_blank=True)
+    date_modified = serializers.CharField(required=False, allow_blank=True)
     latitude = serializers.FloatField()
     longitude = serializers.FloatField()
     source = serializers.CharField(required=False)
@@ -116,11 +117,53 @@ class DraftLocationSerializer(serializers.ModelSerializer):
 
 class AddExistingWikidataItemSerializer(serializers.Serializer):
     wikidata_item = serializers.CharField(max_length=32)
+    source_url = serializers.URLField(max_length=500)
+    source_title = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    source_title_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
+    source_author = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    source_publication_date = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    source_published_in_p1433 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    source_language_of_work_p407 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    reason_p958 = serializers.CharField(max_length=1000, required=False, allow_blank=True)
 
     def validate_wikidata_item(self, value: str) -> str:
         qid = _normalize_wikidata_qid(value)
         if not qid:
             raise serializers.ValidationError('A valid Wikidata item id is required.')
+        return qid
+
+    def validate_source_title_language(self, value: str) -> str:
+        raw_value = (value or '').strip().lower()
+        if not raw_value:
+            return ''
+        if re.fullmatch(r'[a-z]{2,12}', raw_value):
+            return raw_value
+        raise serializers.ValidationError('source_title_language must be a valid language code.')
+
+    def validate_source_publication_date(self, value: str) -> str:
+        raw_value = (value or '').strip()
+        if not raw_value:
+            return ''
+        if re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', raw_value):
+            return raw_value
+        raise serializers.ValidationError('source_publication_date must use YYYY or YYYY-MM or YYYY-MM-DD format.')
+
+    def validate_source_published_in_p1433(self, value: str) -> str:
+        raw_value = (value or '').strip()
+        if not raw_value:
+            return ''
+        qid = _normalize_wikidata_qid(raw_value)
+        if not qid:
+            raise serializers.ValidationError('source_published_in_p1433 must be a valid Wikidata QID.')
+        return qid
+
+    def validate_source_language_of_work_p407(self, value: str) -> str:
+        raw_value = (value or '').strip()
+        if not raw_value:
+            return ''
+        qid = _normalize_wikidata_qid(raw_value)
+        if not qid:
+            raise serializers.ValidationError('source_language_of_work_p407 must be a valid Wikidata QID.')
         return qid
 
 

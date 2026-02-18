@@ -43,7 +43,8 @@
       lang = null,
       method = 'GET',
       body = null,
-      queryParams = null
+      queryParams = null,
+      returnResponseMeta = false
     } = options
 
     const url = new URL(`${API_BASE_URL}${path}`, window.location.origin)
@@ -81,11 +82,34 @@
       throw new Error(`Request failed with status ${response.status}`)
     }
 
+    if (returnResponseMeta) {
+      const headers = {}
+      response.headers.forEach((value, key) => {
+        headers[key.toLowerCase()] = value
+      })
+      return { payload, headers }
+    }
+
     return payload
   }
 
-  function fetchLocations(lang) {
-    return request('/locations/', { lang })
+  function currentCacheBustMinute() {
+    const now = new Date()
+    const yyyy = String(now.getFullYear()).padStart(4, '0')
+    const mm = String(now.getMonth() + 1).padStart(2, '0')
+    const dd = String(now.getDate()).padStart(2, '0')
+    const hh = String(now.getHours()).padStart(2, '0')
+    const min = String(now.getMinutes()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}`
+  }
+
+  function fetchLocationsWithMeta(lang, { cacheBust = '' } = {}) {
+    const cacheBustValue = typeof cacheBust === 'string' ? cacheBust.trim() : ''
+    return request('/locations/', {
+      lang,
+      returnResponseMeta: true,
+      queryParams: cacheBustValue ? { cache_bust: cacheBustValue } : null,
+    })
   }
 
   function fetchLocation(id, lang) {
@@ -119,6 +143,17 @@
     return request('/wikidata/add-existing/', {
       method: 'POST',
       body: payload,
+    })
+  }
+
+  function fetchCitoidMetadata(sourceUrl, lang = null) {
+    const normalizedUrl = typeof sourceUrl === 'string' ? sourceUrl.trim() : ''
+    if (!normalizedUrl) {
+      throw new Error('Source URL is required.')
+    }
+    return request('/citoid/metadata/', {
+      lang,
+      queryParams: { url: normalizedUrl },
     })
   }
 
@@ -582,6 +617,58 @@
     return { year, month, day }
   }
 
+  function parseIsoDateTimestamp(value) {
+    if (typeof value !== 'string') {
+      return null
+    }
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return null
+    }
+    const timestamp = Date.parse(trimmed)
+    if (!Number.isFinite(timestamp)) {
+      return null
+    }
+    return timestamp
+  }
+
+  function formatDateTimeValue(value, locale, fallback) {
+    const timestamp = parseIsoDateTimestamp(value)
+    if (timestamp === null) {
+      return fallback
+    }
+    try {
+      return new Intl.DateTimeFormat(locale, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(new Date(timestamp))
+    } catch (error) {
+      void error
+      return new Date(timestamp).toISOString()
+    }
+  }
+
+  function haversineDistanceKilometers(fromLatitude, fromLongitude, toLatitude, toLongitude) {
+    const lat1 = Number(fromLatitude)
+    const lon1 = Number(fromLongitude)
+    const lat2 = Number(toLatitude)
+    const lon2 = Number(toLongitude)
+    if (!Number.isFinite(lat1) || !Number.isFinite(lon1) || !Number.isFinite(lat2) || !Number.isFinite(lon2)) {
+      return null
+    }
+
+    const earthRadiusKm = 6371
+    const toRadians = (degrees) => (degrees * Math.PI) / 180
+    const dLat = toRadians(lat2 - lat1)
+    const dLon = toRadians(lon2 - lon1)
+    const a = (
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2)
+    )
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    return earthRadiusKm * c
+  }
+
   const messages = {
     en: {
       appTitle: 'Locations Explorer',
@@ -592,9 +679,25 @@
       loadingProjects: 'Loading projects...',
       loadError: 'Could not load data.',
       noData: 'No locations found.',
+      sortBy: 'Sort by',
+      sortDirection: 'Direction',
+      sortByLastModified: 'Last modified',
+      sortByName: 'Name',
+      sortByDistance: 'Distance from you',
+      sortDirectionAsc: 'Ascending',
+      sortDirectionDesc: 'Descending',
+      openListQueryInWikidata: 'Open the list query in query.wikidata.org',
       openDetails: 'Open details',
       backToList: 'Back to list',
       coordinates: 'Coordinates',
+      lastModified: 'Last modified',
+      distanceFromYou: 'Distance from you',
+      distanceLocating: 'Detecting your location...',
+      distanceLocationUnsupported: 'Browser geolocation is not available.',
+      distanceLocationDenied: 'Location access was denied.',
+      distanceLocationUnavailable: 'Could not determine your location.',
+      distanceLocationTimeout: 'Location request timed out.',
+      distanceLocationUnknown: 'Location lookup failed.',
       locationOnMap: 'Location on map',
       language: 'Language',
       detailHint: 'Choose a location from list or map.',
@@ -734,6 +837,8 @@
       createModeLocalDesc: 'Create a locally stored draft as before.',
       addExistingWikidataTitle: 'Add Existing Wikidata Item',
       addExistingWikidataHelp: 'Select an existing Wikidata item. The app adds P5008 = Q138299296 only if it is missing.',
+      addExistingWikidataSourceHelp: 'Add a source and reason for why this item belongs on the list.',
+      addExistingWikidataSuccess: 'Added successfully. The list has been refreshed.',
       createNewWikidataTitle: 'Create New Wikidata Item',
       createNewWikidataHelp: 'Required for building: label, description, P31, P17, P131, coordinates.',
       locationAndCoordinates: 'Location and coordinates',
@@ -746,6 +851,22 @@
       countrySelectionRequired: 'Select country from suggestions.',
       sourceUrl: 'Source URL',
       sourceUrlPlaceholder: 'https://example.org/source',
+      sourceTitle: 'Source title',
+      sourceTitleLanguage: 'Title language',
+      sourceAuthor: 'Source author',
+      sourcePublicationDate: 'Publication date',
+      sourcePublicationDatePlaceholder: 'YYYY-MM-DD',
+      sourcePublishedInP1433: 'Published in (P1433)',
+      sourcePublishedInPlaceholder: 'Search publication (Wikidata)...',
+      sourcePublishedInInvalid: 'Published in (P1433) must be a valid Wikidata item.',
+      sourceLanguageOfWorkP407: 'Language of work or name (P407)',
+      sourceLanguageOfWorkPlaceholder: 'Search language (Wikidata)...',
+      sourceLanguageOfWorkInvalid: 'Language of work or name (P407) must be a valid Wikidata item.',
+      reasonP958: 'Reason (P958)',
+      reasonP958Placeholder: 'Free-form explanation for why the item belongs on the list.',
+      sourceUrlRequiredForAddExisting: 'Source URL is required.',
+      autofillSourceWithCitoid: 'Auto-fill metadata (Citoid)',
+      citoidAutofillLoading: 'Loading source metadata...',
       sourceUrlRequiredForArchitect: 'Architect source URL is required.',
       sourceUrlRequiredForInception: 'Inception source URL is required.',
       sourceUrlRequiredForOfficialClosure: 'Official closure date source URL is required.',
@@ -778,9 +899,25 @@
       loadingProjects: 'Laddar projekt...',
       loadError: 'Kunde inte ladda data.',
       noData: 'Inga platser hittades.',
+      sortBy: 'Sortera efter',
+      sortDirection: 'Ordning',
+      sortByLastModified: 'Senast ändrad',
+      sortByName: 'Namn',
+      sortByDistance: 'Avstånd från dig',
+      sortDirectionAsc: 'Stigande',
+      sortDirectionDesc: 'Fallande',
+      openListQueryInWikidata: 'Öppna listans fråga i query.wikidata.org',
       openDetails: 'Visa detaljer',
       backToList: 'Tillbaka till listan',
       coordinates: 'Koordinater',
+      lastModified: 'Senast ändrad',
+      distanceFromYou: 'Avstånd från dig',
+      distanceLocating: 'Hämtar din position...',
+      distanceLocationUnsupported: 'Geolokalisering stöds inte i webbläsaren.',
+      distanceLocationDenied: 'Åtkomst till position nekades.',
+      distanceLocationUnavailable: 'Kunde inte bestämma din position.',
+      distanceLocationTimeout: 'Positionsförfrågan tog för lång tid.',
+      distanceLocationUnknown: 'Positionshämtning misslyckades.',
       locationOnMap: 'Plats på karta',
       language: 'Språk',
       detailHint: 'Välj en plats från lista eller karta.',
@@ -920,6 +1057,8 @@
       createModeLocalDesc: 'Skapa ett lokalt sparat utkast som tidigare.',
       addExistingWikidataTitle: 'Lägg till befintligt Wikidata-objekt',
       addExistingWikidataHelp: 'Välj ett befintligt Wikidata-objekt. Appen lägger till P5008 = Q138299296 om den saknas.',
+      addExistingWikidataSourceHelp: 'Lägg till en källa och en motivering till varför objektet hör till listan.',
+      addExistingWikidataSuccess: 'Tillägg lyckades. Listan har uppdaterats.',
       createNewWikidataTitle: 'Skapa nytt Wikidata-objekt',
       createNewWikidataHelp: 'Obligatoriskt för byggnad: etikett, beskrivning, P31, P17, P131, koordinater.',
       locationAndCoordinates: 'Plats och koordinater',
@@ -932,6 +1071,22 @@
       countrySelectionRequired: 'Välj land från förslag.',
       sourceUrl: 'Käll-URL',
       sourceUrlPlaceholder: 'https://example.org/source',
+      sourceTitle: 'Källtitel',
+      sourceTitleLanguage: 'Titelns språk',
+      sourceAuthor: 'Källans författare',
+      sourcePublicationDate: 'Publiceringsdatum',
+      sourcePublicationDatePlaceholder: 'ÅÅÅÅ-MM-DD',
+      sourcePublishedInP1433: 'Publicerad i (P1433)',
+      sourcePublishedInPlaceholder: 'Sök publikation (Wikidata)...',
+      sourcePublishedInInvalid: 'Publicerad i (P1433) måste vara ett giltigt Wikidata-objekt.',
+      sourceLanguageOfWorkP407: 'Språk för verk eller namn (P407)',
+      sourceLanguageOfWorkPlaceholder: 'Sök språk (Wikidata)...',
+      sourceLanguageOfWorkInvalid: 'Språk för verk eller namn (P407) måste vara ett giltigt Wikidata-objekt.',
+      reasonP958: 'Motivering (P958)',
+      reasonP958Placeholder: 'Fri text som förklarar varför objektet hör till listan.',
+      sourceUrlRequiredForAddExisting: 'Käll-URL krävs.',
+      autofillSourceWithCitoid: 'Autofyll metadata (Citoid)',
+      citoidAutofillLoading: 'Hämtar källmetadata...',
       sourceUrlRequiredForArchitect: 'Käll-URL krävs för arkitekt.',
       sourceUrlRequiredForInception: 'Käll-URL krävs för starttid.',
       sourceUrlRequiredForOfficialClosure: 'Käll-URL krävs för datum för officiell stängning.',
@@ -964,9 +1119,25 @@
       loadingProjects: 'Ladataan projekteja...',
       loadError: 'Tietojen lataus ei onnistunut.',
       noData: 'Sijainteja ei löytynyt.',
+      sortBy: 'Järjestä',
+      sortDirection: 'Suunta',
+      sortByLastModified: 'Viimeksi muokattu',
+      sortByName: 'Nimi',
+      sortByDistance: 'Etäisyys käyttäjästä',
+      sortDirectionAsc: 'Nouseva',
+      sortDirectionDesc: 'Laskeva',
+      openListQueryInWikidata: 'Avaa listan kysely query.wikidata.orgissa',
       openDetails: 'Avaa tiedot',
       backToList: 'Takaisin listaan',
       coordinates: 'Koordinaatit',
+      lastModified: 'Viimeksi muokattu',
+      distanceFromYou: 'Etäisyys käyttäjästä',
+      distanceLocating: 'Haetaan sijaintiasi...',
+      distanceLocationUnsupported: 'Selaimen geopaikannus ei ole käytettävissä.',
+      distanceLocationDenied: 'Sijainnin käyttö estettiin.',
+      distanceLocationUnavailable: 'Sijaintia ei voitu määrittää.',
+      distanceLocationTimeout: 'Sijaintipyyntö aikakatkaistiin.',
+      distanceLocationUnknown: 'Sijainnin haku epäonnistui.',
       locationOnMap: 'Sijainti kartalla',
       language: 'Kieli',
       detailHint: 'Valitse sijainti listasta tai kartalta.',
@@ -1099,13 +1270,15 @@
       createLocationTypeStepTitle: 'Miten haluat luoda kohteen?',
       createWizardIntro: 'Valitse ensin luontitapa. Voit palata taakse ja vaihtaa valintaa.',
       createModeExistingTitle: 'Lisää olemassa oleva Wikidata-kohde',
-      createModeExistingDesc: 'Valitse olemassa oleva Wikidata-kohde ja lisää P5008 = Q138299296 jos se puuttuu.',
+      createModeExistingDesc: 'Valitse olemassa oleva Wikidata-kohde ja lisää se Wikikuvaajien vaarassa olevat rakennukset -listaan.',
       createModeNewWikidataTitle: 'Luo uusi Wikidata-kohde',
       createModeNewWikidataDesc: 'Luo rakennukselle uusi Wikidata-kohde ohjatulla lomakkeella.',
       createModeLocalTitle: 'Luo paikallinen luonnos',
       createModeLocalDesc: 'Luo paikallisesti tallennettava luonnos kuten aiemmin.',
       addExistingWikidataTitle: 'Lisää olemassa oleva Wikidata-kohde',
-      addExistingWikidataHelp: 'Valitse olemassa oleva Wikidata-kohde. Sovellus lisää P5008 = Q138299296 vain jos se puuttuu.',
+      addExistingWikidataHelp: 'Valitse olemassa oleva Wikidata-kohde ja lisää se Wikikuvaajien vaarassa olevat rakennukset -listaan.',
+      addExistingWikidataSourceHelp: 'Lisää lähde ja perustelu sille, miksi kohde kuuluu listaan.',
+      addExistingWikidataSuccess: 'Lisäys onnistui. Luettelo päivitettiin.',
       createNewWikidataTitle: 'Luo uusi Wikidata-kohde',
       createNewWikidataHelp: 'Rakennukselle pakolliset tiedot: nimi, kuvaus, P31, P17, P131 ja koordinaatit.',
       locationAndCoordinates: 'Sijainti ja koordinaatit',
@@ -1118,6 +1291,22 @@
       countrySelectionRequired: 'Valitse maa ehdotuksista.',
       sourceUrl: 'Lähde-URL',
       sourceUrlPlaceholder: 'https://example.org/source',
+      sourceTitle: 'Lähteen otsikko',
+      sourceTitleLanguage: 'Otsikon kieli',
+      sourceAuthor: 'Lähteen tekijä',
+      sourcePublicationDate: 'Julkaisupäivä',
+      sourcePublicationDatePlaceholder: 'YYYY-MM-DD',
+      sourcePublishedInP1433: 'Julkaistu teoksessa (P1433)',
+      sourcePublishedInPlaceholder: 'Hae julkaisua (Wikidata)...',
+      sourcePublishedInInvalid: 'Julkaistu teoksessa (P1433) pitää olla kelvollinen Wikidata-kohde.',
+      sourceLanguageOfWorkP407: 'Teoksen tai nimen kieli (P407)',
+      sourceLanguageOfWorkPlaceholder: 'Hae kieli (Wikidata)...',
+      sourceLanguageOfWorkInvalid: 'Teoksen tai nimen kieli (P407) pitää olla kelvollinen Wikidata-kohde.',
+      reasonP958: 'Perustelu (P958)',
+      reasonP958Placeholder: 'Vapaamuotoinen selitys sille, miksi kohde kuuluu listaan.',
+      sourceUrlRequiredForAddExisting: 'Lähde-URL vaaditaan.',
+      autofillSourceWithCitoid: 'Täytä metatiedot automaattisesti (Citoid)',
+      citoidAutofillLoading: 'Haetaan lähteen metatietoja...',
       sourceUrlRequiredForArchitect: 'Arkkitehdin lähde-URL vaaditaan.',
       sourceUrlRequiredForInception: 'Luomisvuoden lähde-URL vaaditaan.',
       sourceUrlRequiredForOfficialClosure: 'Virallisen sulkemispäivän lähde-URL vaaditaan.',
@@ -1162,6 +1351,7 @@
   const projectError = ref('')
   const locationsVersion = ref(0)
   const locationsCache = ref({})
+  const locationsQueryUrlCache = ref({})
   const locationDetailCache = ref({})
   const locationChildrenCache = ref({})
   const pendingLocationLoads = new Map()
@@ -1174,6 +1364,7 @@
 
   function invalidateLocationsCache() {
     locationsCache.value = {}
+    locationsQueryUrlCache.value = {}
     locationDetailCache.value = {}
     locationChildrenCache.value = {}
   }
@@ -1242,11 +1433,27 @@
     }
 
     const requestPromise = (async () => {
-      const loaded = await fetchLocations(key)
+      const cacheBust = force ? currentCacheBustMinute() : ''
+      const loadedResponse = await fetchLocationsWithMeta(key, { cacheBust })
+      const loaded =
+        loadedResponse && typeof loadedResponse === 'object' && 'payload' in loadedResponse
+          ? loadedResponse.payload
+          : loadedResponse
+      const queryUrl =
+        loadedResponse &&
+        typeof loadedResponse === 'object' &&
+        loadedResponse.headers &&
+        typeof loadedResponse.headers === 'object'
+          ? String(loadedResponse.headers['x-wikidata-query-url'] || '')
+          : ''
       const normalized = Array.isArray(loaded) ? loaded : []
       locationsCache.value = {
         ...locationsCache.value,
         [key]: normalized,
+      }
+      locationsQueryUrlCache.value = {
+        ...locationsQueryUrlCache.value,
+        [key]: queryUrl,
       }
       return normalized
     })()
@@ -1291,6 +1498,12 @@
     } finally {
       pendingDetailLoads.delete(key)
     }
+  }
+
+  function getLocationsQueryUrl(lang) {
+    const key = locationsCacheKey(lang)
+    const value = locationsQueryUrlCache.value[key]
+    return typeof value === 'string' ? value : ''
   }
 
   async function getLocationChildrenCached(locationId, lang, { force = false } = {}) {
@@ -1376,6 +1589,7 @@
     createProjectRecord,
     notifyLocationsChanged,
     getLocationsCached,
+    getLocationsQueryUrl,
     getLocationFromListCache,
     getLocationDetailCached,
     getLocationChildrenCached,
@@ -1506,10 +1720,16 @@ LIMIT {{limit}}`,
   const ListView = {
     setup() {
       const { t, locale } = useI18n()
-      const { activeProjectId, locationsVersion, getLocationsCached } = projectStore
+      const { activeProjectId, locationsVersion, getLocationsCached, getLocationsQueryUrl } = projectStore
       const locations = ref([])
       const loading = ref(false)
       const error = ref('')
+      const listQueryUrl = computed(() => getLocationsQueryUrl(locale.value))
+      const sortBy = ref('last-modified')
+      const sortDirection = ref('desc')
+      const userCoordinates = ref(null)
+      const geolocationLoading = ref(false)
+      const geolocationErrorKey = ref('')
       let silentRefreshTimer = null
       let loadToken = 0
 
@@ -1565,6 +1785,14 @@ LIMIT {{limit}}`,
       onMounted(loadLocations)
       onBeforeUnmount(clearSilentRefreshTimer)
       watch([() => locale.value, () => activeProjectId.value, () => locationsVersion.value], loadLocations)
+      watch(
+        () => sortBy.value,
+        (nextSortBy) => {
+          if (nextSortBy === 'distance') {
+            void ensureUserCoordinates()
+          }
+        },
+      )
 
       function formatImageCount(value) {
         return formatCountValue(value, locale.value, t('noValue'))
@@ -1620,11 +1848,189 @@ LIMIT {{limit}}`,
         return t('openDetailsFor', { name: locationDisplayName(item) })
       }
 
+      function geolocationErrorTranslationKey(errorCode) {
+        if (errorCode === 1) {
+          return 'distanceLocationDenied'
+        }
+        if (errorCode === 2) {
+          return 'distanceLocationUnavailable'
+        }
+        if (errorCode === 3) {
+          return 'distanceLocationTimeout'
+        }
+        return 'distanceLocationUnknown'
+      }
+
+      function ensureUserCoordinates() {
+        if (userCoordinates.value || geolocationLoading.value) {
+          return Promise.resolve(userCoordinates.value)
+        }
+        if (!navigator || !navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== 'function') {
+          geolocationErrorKey.value = 'distanceLocationUnsupported'
+          return Promise.resolve(null)
+        }
+
+        geolocationLoading.value = true
+        geolocationErrorKey.value = ''
+        return new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              const coords = position && position.coords ? position.coords : null
+              if (!coords) {
+                geolocationErrorKey.value = 'distanceLocationUnknown'
+                userCoordinates.value = null
+                geolocationLoading.value = false
+                resolve(null)
+                return
+              }
+              const latitude = Number(coords.latitude)
+              const longitude = Number(coords.longitude)
+              if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+                geolocationErrorKey.value = 'distanceLocationUnknown'
+                userCoordinates.value = null
+                geolocationLoading.value = false
+                resolve(null)
+                return
+              }
+              userCoordinates.value = { latitude, longitude }
+              geolocationErrorKey.value = ''
+              geolocationLoading.value = false
+              resolve(userCoordinates.value)
+            },
+            (geoError) => {
+              geolocationErrorKey.value = geolocationErrorTranslationKey(geoError && geoError.code)
+              userCoordinates.value = null
+              geolocationLoading.value = false
+              resolve(null)
+            },
+            {
+              enableHighAccuracy: false,
+              timeout: 10000,
+              maximumAge: 60000,
+            },
+          )
+        })
+      }
+
+      function locationDistanceKilometers(item) {
+        if (!item || typeof item !== 'object') {
+          return null
+        }
+        const origin = userCoordinates.value
+        if (!origin || typeof origin !== 'object') {
+          return null
+        }
+        return haversineDistanceKilometers(
+          origin.latitude,
+          origin.longitude,
+          item.latitude,
+          item.longitude,
+        )
+      }
+
+      function formatDistanceKilometers(value) {
+        if (!Number.isFinite(value)) {
+          return t('noValue')
+        }
+        const formatted = new Intl.NumberFormat(locale.value, {
+          maximumFractionDigits: 1,
+          minimumFractionDigits: value < 10 ? 1 : 0,
+        }).format(value)
+        return `${formatted} km`
+      }
+
+      function locationDistanceLabel(item) {
+        const distance = locationDistanceKilometers(item)
+        if (!Number.isFinite(distance)) {
+          return ''
+        }
+        return formatDistanceKilometers(distance)
+      }
+
+      function formatDateModified(value) {
+        return formatDateTimeValue(value, locale.value, t('noValue'))
+      }
+
+      function compareNumericNullable(aValue, bValue, directionMultiplier = 1) {
+        const hasA = Number.isFinite(aValue)
+        const hasB = Number.isFinite(bValue)
+        if (!hasA && !hasB) {
+          return 0
+        }
+        if (!hasA) {
+          return 1
+        }
+        if (!hasB) {
+          return -1
+        }
+        if (aValue === bValue) {
+          return 0
+        }
+        return (aValue < bValue ? -1 : 1) * directionMultiplier
+      }
+
+      function compareByName(aItem, bItem) {
+        const nameA = locationDisplayName(aItem)
+        const nameB = locationDisplayName(bItem)
+        const compared = nameA.localeCompare(nameB, locale.value, {
+          sensitivity: 'base',
+          numeric: true,
+        })
+        if (compared !== 0) {
+          return compared
+        }
+        const idA = String((aItem && aItem.id) || '')
+        const idB = String((bItem && bItem.id) || '')
+        return idA.localeCompare(idB, 'en', { sensitivity: 'base', numeric: true })
+      }
+
+      const geolocationErrorMessage = computed(() => {
+        const key = geolocationErrorKey.value
+        return key ? t(key) : ''
+      })
+
+      const sortedLocations = computed(() => {
+        const source = Array.isArray(locations.value) ? locations.value : []
+        const sorted = [...source]
+        const directionMultiplier = sortDirection.value === 'asc' ? 1 : -1
+
+        sorted.sort((aItem, bItem) => {
+          if (sortBy.value === 'name') {
+            return compareByName(aItem, bItem) * directionMultiplier
+          }
+
+          if (sortBy.value === 'distance') {
+            const distanceA = locationDistanceKilometers(aItem)
+            const distanceB = locationDistanceKilometers(bItem)
+            const distanceCompare = compareNumericNullable(distanceA, distanceB, directionMultiplier)
+            if (distanceCompare !== 0) {
+              return distanceCompare
+            }
+            return compareByName(aItem, bItem)
+          }
+
+          const modifiedA = parseIsoDateTimestamp(aItem && aItem.date_modified)
+          const modifiedB = parseIsoDateTimestamp(bItem && bItem.date_modified)
+          const modifiedCompare = compareNumericNullable(modifiedA, modifiedB, directionMultiplier)
+          if (modifiedCompare !== 0) {
+            return modifiedCompare
+          }
+          return compareByName(aItem, bItem)
+        })
+
+        return sorted
+      })
+
       return {
         t,
         locations,
+        sortedLocations,
         loading,
         error,
+        sortBy,
+        sortDirection,
+        geolocationLoading,
+        geolocationErrorMessage,
         formatImageCount,
         hasImageCount,
         preferredImageSource,
@@ -1632,9 +2038,12 @@ LIMIT {{limit}}`,
         preferredImageHref,
         commonsImagesLabel,
         formatCoordinates,
+        formatDateModified,
+        locationDistanceLabel,
         locationDisplayName,
         formatDescription,
         detailsAriaLabel,
+        listQueryUrl,
         handleImageLoadError
       }
     },
@@ -1644,8 +2053,33 @@ LIMIT {{limit}}`,
         <p v-else-if="error" class="status error" role="alert">{{ error }}</p>
         <p v-else-if="locations.length === 0" class="status" role="status" aria-live="polite">{{ t('noData') }}</p>
 
-        <ul v-else class="locations-grid" :aria-label="t('navList')">
-          <li v-for="location in locations" :key="location.id" class="location-card">
+        <div v-else class="list-sort-controls" role="group" :aria-label="t('sortBy')">
+          <label class="list-sort-control">
+            <span>{{ t('sortBy') }}</span>
+            <select v-model="sortBy">
+              <option value="last-modified">{{ t('sortByLastModified') }}</option>
+              <option value="name">{{ t('sortByName') }}</option>
+              <option value="distance">{{ t('sortByDistance') }}</option>
+            </select>
+          </label>
+          <label class="list-sort-control">
+            <span>{{ t('sortDirection') }}</span>
+            <select v-model="sortDirection">
+              <option value="asc">{{ t('sortDirectionAsc') }}</option>
+              <option value="desc">{{ t('sortDirectionDesc') }}</option>
+            </select>
+          </label>
+        </div>
+
+        <p v-if="!loading && !error && locations.length > 0 && sortBy === 'distance' && geolocationLoading" class="status" role="status" aria-live="polite">
+          {{ t('distanceLocating') }}
+        </p>
+        <p v-if="!loading && !error && locations.length > 0 && sortBy === 'distance' && geolocationErrorMessage" class="status error" role="alert">
+          {{ geolocationErrorMessage }}
+        </p>
+
+        <ul v-if="!loading && !error && locations.length > 0" class="locations-grid" :aria-label="t('navList')">
+          <li v-for="location in sortedLocations" :key="location.id" class="location-card">
             <article class="card-content">
               <header class="card-header">
                 <h2>
@@ -1677,6 +2111,14 @@ LIMIT {{limit}}`,
                 <div class="meta-row">
                   <dt>{{ t('coordinates') }}</dt>
                   <dd>{{ formatCoordinates(location.latitude, location.longitude) }}</dd>
+                </div>
+                <div v-if="location.date_modified" class="meta-row">
+                  <dt>{{ t('lastModified') }}</dt>
+                  <dd>{{ formatDateModified(location.date_modified) }}</dd>
+                </div>
+                <div v-if="sortBy === 'distance' && locationDistanceLabel(location)" class="meta-row">
+                  <dt>{{ t('distanceFromYou') }}</dt>
+                  <dd>{{ locationDistanceLabel(location) }}</dd>
                 </div>
                 <div v-if="location.commons_category" class="meta-row">
                   <dt>{{ t('commonsCategory') }}</dt>
@@ -1710,6 +2152,12 @@ LIMIT {{limit}}`,
             </article>
           </li>
         </ul>
+
+        <p v-if="!loading && !error && locations.length > 0 && listQueryUrl" class="query-link-footer">
+          <a class="text-link" :href="listQueryUrl" target="_blank" rel="noopener noreferrer">
+            {{ t('openListQueryInWikidata') }}
+          </a>
+        </p>
       </section>
     `
   }
@@ -4099,6 +4547,23 @@ LIMIT {{limit}}`,
       const wizardExistingWikidataItem = ref('')
       const wizardExistingSuggestions = ref([])
       const wizardExistingLoading = ref(false)
+      const wizardExistingSourceUrl = ref('')
+      const wizardExistingSourceTitle = ref('')
+      const wizardExistingSourceTitleLanguage = ref(defaultWikidataTextLanguage())
+      const wizardExistingSourceAuthor = ref('')
+      const wizardExistingSourcePublicationDate = ref('')
+      const wizardExistingSourcePublishedInP1433 = ref('')
+      const wizardExistingSourcePublishedInSearch = ref('')
+      const wizardExistingSourcePublishedInSuggestions = ref([])
+      const wizardExistingSourcePublishedInLoading = ref(false)
+      const wizardExistingSourceLanguageOfWorkP407 = ref('')
+      const wizardExistingSourceLanguageOfWorkSearch = ref('')
+      const wizardExistingSourceLanguageOfWorkSuggestions = ref([])
+      const wizardExistingSourceLanguageOfWorkLoading = ref(false)
+      const wizardExistingReasonP958 = ref('')
+      const wizardExistingCitoidLoading = ref(false)
+      const wizardExistingCitoidError = ref('')
+      const wizardExistingLastCitoidUrl = ref('')
       const wikidataTextLanguageOptions = [...SUPPORTED_LOCALES]
       function defaultWikidataTextLanguage() {
         return normalizeSupportedLocale(locale.value) || 'en'
@@ -4195,6 +4660,7 @@ LIMIT {{limit}}`,
       const isEditMode = computed(() => locationDialogMode.value === 'edit' && editingDraftId.value !== null)
       const isWizardChoiceStep = computed(() => !isEditMode.value && createWizardStep.value === 'choose')
       const isWizardExistingMode = computed(() => !isEditMode.value && createWizardMode.value === 'existing-wikidata' && createWizardStep.value === 'form')
+      const wizardExistingHasSelectedItem = computed(() => Boolean(extractWikidataId(wizardExistingWikidataItem.value)))
       const isWizardNewMode = computed(() => !isEditMode.value && createWizardMode.value === 'new-wikidata' && createWizardStep.value === 'form')
       const isWizardNewBasicStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'basic')
       const isWizardNewLocationStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'location')
@@ -4427,6 +4893,14 @@ LIMIT {{limit}}`,
       const searchWizardExistingSuggestionsDebounced = createWikidataSuggestionSearch(
         wizardExistingSuggestions,
         wizardExistingLoading,
+      )
+      const searchWizardExistingSourcePublishedInSuggestionsDebounced = createWikidataSuggestionSearch(
+        wizardExistingSourcePublishedInSuggestions,
+        wizardExistingSourcePublishedInLoading,
+      )
+      const searchWizardExistingSourceLanguageOfWorkSuggestionsDebounced = createWikidataSuggestionSearch(
+        wizardExistingSourceLanguageOfWorkSuggestions,
+        wizardExistingSourceLanguageOfWorkLoading,
       )
       const searchNewInstanceSuggestionsDebounced = createWikidataSuggestionSearch(
         newWikidataInstanceSuggestions,
@@ -4731,6 +5205,23 @@ LIMIT {{limit}}`,
         wizardExistingWikidataItem.value = ''
         wizardExistingSuggestions.value = []
         wizardExistingLoading.value = false
+        wizardExistingSourceUrl.value = ''
+        wizardExistingSourceTitle.value = ''
+        wizardExistingSourceTitleLanguage.value = defaultWikidataTextLanguage()
+        wizardExistingSourceAuthor.value = ''
+        wizardExistingSourcePublicationDate.value = ''
+        wizardExistingSourcePublishedInP1433.value = ''
+        wizardExistingSourcePublishedInSearch.value = ''
+        wizardExistingSourcePublishedInSuggestions.value = []
+        wizardExistingSourcePublishedInLoading.value = false
+        wizardExistingSourceLanguageOfWorkP407.value = ''
+        wizardExistingSourceLanguageOfWorkSearch.value = ''
+        wizardExistingSourceLanguageOfWorkSuggestions.value = []
+        wizardExistingSourceLanguageOfWorkLoading.value = false
+        wizardExistingReasonP958.value = ''
+        wizardExistingCitoidLoading.value = false
+        wizardExistingCitoidError.value = ''
+        wizardExistingLastCitoidUrl.value = ''
         newWikidataLabel.value = ''
         newWikidataLabelLanguage.value = defaultWikidataTextLanguage()
         newWikidataDescription.value = ''
@@ -5151,6 +5642,99 @@ LIMIT {{limit}}`,
         hideSuggestionsSoon(wizardExistingSuggestions)
       }
 
+      function onWizardExistingSourceUrlInput() {
+        wizardExistingCitoidError.value = ''
+      }
+
+      async function autofillWizardExistingSourceMetadata(force = false) {
+        const sourceUrl = String(wizardExistingSourceUrl.value || '').trim()
+        if (!isHttpUrl(sourceUrl)) {
+          return
+        }
+        if (!force && wizardExistingLastCitoidUrl.value === sourceUrl) {
+          return
+        }
+
+        wizardExistingCitoidLoading.value = true
+        wizardExistingCitoidError.value = ''
+        try {
+          const metadata = await fetchCitoidMetadata(sourceUrl, locale.value)
+          const normalizedMetadata = metadata && typeof metadata === 'object' ? metadata : {}
+
+          wizardExistingSourceTitle.value = String(normalizedMetadata.source_title || '').trim()
+          wizardExistingSourceTitleLanguage.value = String(normalizedMetadata.source_title_language || '').trim() || defaultWikidataTextLanguage()
+          wizardExistingSourceAuthor.value = String(normalizedMetadata.source_author || '').trim()
+          wizardExistingSourcePublicationDate.value = String(normalizedMetadata.source_publication_date || '').trim()
+          wizardExistingSourcePublishedInP1433.value = String(normalizedMetadata.source_published_in_p1433 || '').trim()
+          wizardExistingSourcePublishedInSearch.value = wizardExistingSourcePublishedInP1433.value
+          wizardExistingSourceLanguageOfWorkP407.value = String(normalizedMetadata.source_language_of_work_p407 || '').trim()
+          wizardExistingSourceLanguageOfWorkSearch.value = wizardExistingSourceLanguageOfWorkP407.value
+          wizardExistingLastCitoidUrl.value = sourceUrl
+        } catch (error) {
+          wizardExistingCitoidError.value = error && error.message ? error.message : t('loadError')
+        } finally {
+          wizardExistingCitoidLoading.value = false
+        }
+      }
+
+      function onWizardExistingSourceUrlBlur() {
+        void autofillWizardExistingSourceMetadata(false)
+      }
+
+      function onWizardExistingSourcePublishedInInput() {
+        wizardExistingSourcePublishedInP1433.value = ''
+        const inputValue = wizardExistingSourcePublishedInSearch.value.trim()
+        if (!inputValue) {
+          wizardExistingSourcePublishedInSuggestions.value = []
+          return
+        }
+        if (extractWikidataId(inputValue)) {
+          wizardExistingSourcePublishedInSuggestions.value = []
+          return
+        }
+        searchWizardExistingSourcePublishedInSuggestionsDebounced(inputValue)
+      }
+
+      function selectWizardExistingSourcePublishedIn(option) {
+        selectWikidataSuggestion(
+          option,
+          wizardExistingSourcePublishedInP1433,
+          wizardExistingSourcePublishedInSearch,
+          wizardExistingSourcePublishedInSuggestions,
+        )
+      }
+
+      function hideWizardExistingSourcePublishedInSuggestionsSoon() {
+        hideSuggestionsSoon(wizardExistingSourcePublishedInSuggestions)
+      }
+
+      function onWizardExistingSourceLanguageOfWorkInput() {
+        wizardExistingSourceLanguageOfWorkP407.value = ''
+        const inputValue = wizardExistingSourceLanguageOfWorkSearch.value.trim()
+        if (!inputValue) {
+          wizardExistingSourceLanguageOfWorkSuggestions.value = []
+          return
+        }
+        if (extractWikidataId(inputValue)) {
+          wizardExistingSourceLanguageOfWorkSuggestions.value = []
+          return
+        }
+        searchWizardExistingSourceLanguageOfWorkSuggestionsDebounced(inputValue)
+      }
+
+      function selectWizardExistingSourceLanguageOfWork(option) {
+        selectWikidataSuggestion(
+          option,
+          wizardExistingSourceLanguageOfWorkP407,
+          wizardExistingSourceLanguageOfWorkSearch,
+          wizardExistingSourceLanguageOfWorkSuggestions,
+        )
+      }
+
+      function hideWizardExistingSourceLanguageOfWorkSuggestionsSoon() {
+        hideSuggestionsSoon(wizardExistingSourceLanguageOfWorkSuggestions)
+      }
+
       function onNewWikidataInstanceInput() {
         newWikidataInstanceOf.value = ''
         if (!newWikidataInstanceSearch.value.trim()) {
@@ -5313,12 +5897,49 @@ LIMIT {{limit}}`,
           wizardError.value = t('wikidataItemRequired')
           return
         }
+        const sourceUrl = String(wizardExistingSourceUrl.value || '').trim()
+        if (!sourceUrl) {
+          wizardError.value = t('sourceUrlRequiredForAddExisting')
+          return
+        }
+        if (!isHttpUrl(sourceUrl)) {
+          wizardError.value = t('sourceUrlRequiredForAddExisting')
+          return
+        }
+        const sourcePublishedInQid = resolveWizardQid(
+          wizardExistingSourcePublishedInP1433.value,
+          wizardExistingSourcePublishedInSearch.value,
+        )
+        if (wizardExistingSourcePublishedInSearch.value.trim() && !sourcePublishedInQid) {
+          wizardError.value = t('sourcePublishedInInvalid')
+          return
+        }
+        const sourceLanguageOfWorkQid = resolveWizardQid(
+          wizardExistingSourceLanguageOfWorkP407.value,
+          wizardExistingSourceLanguageOfWorkSearch.value,
+        )
+        if (wizardExistingSourceLanguageOfWorkSearch.value.trim() && !sourceLanguageOfWorkQid) {
+          wizardError.value = t('sourceLanguageOfWorkInvalid')
+          return
+        }
 
         wizardSaving.value = true
         try {
-          await addExistingWikidataItem({ wikidata_item: qid })
-          showCreateLocationDialog.value = false
+          await addExistingWikidataItem({
+            wikidata_item: qid,
+            source_url: sourceUrl,
+            source_title: String(wizardExistingSourceTitle.value || '').trim(),
+            source_title_language: String(wizardExistingSourceTitleLanguage.value || '').trim(),
+            source_author: String(wizardExistingSourceAuthor.value || '').trim(),
+            source_publication_date: String(wizardExistingSourcePublicationDate.value || '').trim(),
+            source_published_in_p1433: sourcePublishedInQid,
+            source_language_of_work_p407: sourceLanguageOfWorkQid,
+            reason_p958: String(wizardExistingReasonP958.value || '').trim(),
+          })
+          window.alert(t('addExistingWikidataSuccess'))
           notifyLocationsChanged()
+          await getLocationsCached(locale.value, { force: true })
+          showCreateLocationDialog.value = false
         } catch (error) {
           wizardError.value = error.message || t('loadError')
         } finally {
@@ -5909,6 +6530,7 @@ LIMIT {{limit}}`,
         isEditMode,
         isWizardChoiceStep,
         isWizardExistingMode,
+        wizardExistingHasSelectedItem,
         isWizardNewMode,
         isWizardNewBasicStep,
         isWizardNewLocationStep,
@@ -5983,6 +6605,20 @@ LIMIT {{limit}}`,
         wizardExistingWikidataItem,
         wizardExistingSuggestions,
         wizardExistingLoading,
+        wizardExistingSourceUrl,
+        wizardExistingSourceTitle,
+        wizardExistingSourceTitleLanguage,
+        wizardExistingSourceAuthor,
+        wizardExistingSourcePublicationDate,
+        wizardExistingSourcePublishedInSearch,
+        wizardExistingSourcePublishedInSuggestions,
+        wizardExistingSourcePublishedInLoading,
+        wizardExistingSourceLanguageOfWorkSearch,
+        wizardExistingSourceLanguageOfWorkSuggestions,
+        wizardExistingSourceLanguageOfWorkLoading,
+        wizardExistingReasonP958,
+        wizardExistingCitoidLoading,
+        wizardExistingCitoidError,
         wikidataTextLanguageOptions,
         newWikidataLabel,
         newWikidataLabelLanguage,
@@ -6059,6 +6695,15 @@ LIMIT {{limit}}`,
         onWizardExistingWikidataInput,
         selectWizardExistingWikidataItem,
         hideWizardExistingSuggestionsSoon,
+        onWizardExistingSourceUrlInput,
+        onWizardExistingSourceUrlBlur,
+        autofillWizardExistingSourceMetadata,
+        onWizardExistingSourcePublishedInInput,
+        selectWizardExistingSourcePublishedIn,
+        hideWizardExistingSourcePublishedInSuggestionsSoon,
+        onWizardExistingSourceLanguageOfWorkInput,
+        selectWizardExistingSourceLanguageOfWork,
+        hideWizardExistingSourceLanguageOfWorkSuggestionsSoon,
         onNewWikidataInstanceInput,
         selectNewWikidataInstance,
         hideNewWikidataInstanceSuggestionsSoon,
@@ -6233,6 +6878,111 @@ LIMIT {{limit}}`,
                   </ul>
                   <p v-if="wizardExistingLoading" class="dialog-help">{{ t('searching') }}</p>
                 </label>
+                <div v-if="wizardExistingHasSelectedItem" class="wizard-section">
+                  <p class="dialog-help">{{ t('addExistingWikidataSourceHelp') }}</p>
+                  <label class="form-field">
+                    <span>{{ t('sourceUrl') }}</span>
+                    <input
+                      v-model="wizardExistingSourceUrl"
+                      type="url"
+                      :placeholder="t('sourceUrlPlaceholder')"
+                      @input="onWizardExistingSourceUrlInput"
+                      @blur="onWizardExistingSourceUrlBlur"
+                    />
+                    <div class="inline-form-actions">
+                      <button
+                        type="button"
+                        class="text-btn"
+                        :disabled="!wizardExistingSourceUrl.trim() || wizardExistingCitoidLoading"
+                        @click="autofillWizardExistingSourceMetadata(true)"
+                      >
+                        {{ t('autofillSourceWithCitoid') }}
+                      </button>
+                    </div>
+                    <p v-if="wizardExistingCitoidLoading" class="dialog-help">{{ t('citoidAutofillLoading') }}</p>
+                    <p v-else-if="wizardExistingCitoidError" class="status error">{{ wizardExistingCitoidError }}</p>
+                  </label>
+                  <div class="form-row form-row-language">
+                    <label class="form-field">
+                      <span>{{ t('sourceTitle') }}</span>
+                      <input v-model="wizardExistingSourceTitle" type="text" maxlength="500" />
+                    </label>
+                    <label class="form-field form-field-language">
+                      <span>{{ t('sourceTitleLanguage') }}</span>
+                      <select v-model="wizardExistingSourceTitleLanguage">
+                        <option
+                          v-for="langCode in wikidataTextLanguageOptions"
+                          :key="'existing-source-language-' + langCode"
+                          :value="langCode"
+                        >
+                          {{ langCode.toUpperCase() }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('sourceAuthor') }}</span>
+                      <input v-model="wizardExistingSourceAuthor" type="text" maxlength="500" />
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('sourcePublicationDate') }}</span>
+                      <input
+                        v-model="wizardExistingSourcePublicationDate"
+                        type="text"
+                        maxlength="32"
+                        :placeholder="t('sourcePublicationDatePlaceholder')"
+                      />
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('sourcePublishedInP1433') }}</span>
+                      <input
+                        v-model="wizardExistingSourcePublishedInSearch"
+                        type="text"
+                        :placeholder="t('sourcePublishedInPlaceholder')"
+                        @input="onWizardExistingSourcePublishedInInput"
+                        @blur="hideWizardExistingSourcePublishedInSuggestionsSoon"
+                      />
+                      <ul v-if="wizardExistingSourcePublishedInSuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in wizardExistingSourcePublishedInSuggestions" :key="'source-p1433-' + item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectWizardExistingSourcePublishedIn(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="wizardExistingSourcePublishedInLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('sourceLanguageOfWorkP407') }}</span>
+                      <input
+                        v-model="wizardExistingSourceLanguageOfWorkSearch"
+                        type="text"
+                        :placeholder="t('sourceLanguageOfWorkPlaceholder')"
+                        @input="onWizardExistingSourceLanguageOfWorkInput"
+                        @blur="hideWizardExistingSourceLanguageOfWorkSuggestionsSoon"
+                      />
+                      <ul v-if="wizardExistingSourceLanguageOfWorkSuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in wizardExistingSourceLanguageOfWorkSuggestions" :key="'source-p407-' + item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectWizardExistingSourceLanguageOfWork(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="wizardExistingSourceLanguageOfWorkLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                  </div>
+                  <label class="form-field">
+                    <span>{{ t('reasonP958') }}</span>
+                    <textarea
+                      v-model="wizardExistingReasonP958"
+                      rows="3"
+                      maxlength="1000"
+                      :placeholder="t('reasonP958Placeholder')"
+                    />
+                  </label>
+                </div>
               </template>
 
               <template v-else-if="isWizardNewMode">

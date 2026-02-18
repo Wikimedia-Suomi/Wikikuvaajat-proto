@@ -1,12 +1,15 @@
 from datetime import timedelta
 from unittest.mock import Mock, patch
 
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
+import locations.services as services
 from locations.models import CommonsCategoryImageCountCache, ViewItImageCountCache
 from locations.services import (
+    ExternalServiceError,
     SPARQLServiceError,
+    WikidataWriteError,
     fetch_commons_subcategory_children,
     _fetch_petscan_image_count,
     _language_fallbacks,
@@ -21,7 +24,358 @@ from locations.services import (
 )
 
 
+class WikidataWriteAuthTests(SimpleTestCase):
+    @override_settings(
+        DEBUG=True,
+        SOCIAL_AUTH_MEDIAWIKI_KEY='consumer-key',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='consumer-secret',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch('locations.services.OAuth1')
+    @patch('locations.services._wikidata_api_get')
+    @patch('locations.services.requests.Session')
+    def test_wikidata_oauth_session_uses_local_access_token_when_oauth_tokens_missing(
+        self,
+        requests_session_mock,
+        wikidata_api_get_mock,
+        oauth1_mock,
+    ):
+        session = Mock()
+        requests_session_mock.return_value = session
+        wikidata_api_get_mock.return_value = {'query': {'tokens': {'csrftoken': 'csrf-token'}}}
+        oauth1_instance = Mock()
+        oauth1_mock.return_value = oauth1_instance
+
+        returned_session, csrf_token = services._wikidata_oauth_session()
+
+        self.assertIs(returned_session, session)
+        self.assertEqual(csrf_token, 'csrf-token')
+        oauth1_mock.assert_called_once_with(
+            client_key='consumer-key',
+            client_secret='consumer-secret',
+            resource_owner_key='local-access-token',
+            resource_owner_secret='local-access-secret',
+            signature_type='auth_header',
+        )
+        self.assertIs(session.auth, oauth1_instance)
+
+    @override_settings(
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='',
+    )
+    def test_wikidata_oauth_session_raises_when_tokens_missing(self):
+        with self.assertRaises(WikidataWriteError):
+            services._wikidata_oauth_session()
+
+    @override_settings(
+        DEBUG=True,
+        SOCIAL_AUTH_MEDIAWIKI_KEY='consumer-key',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='consumer-secret',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch('locations.services.OAuth1')
+    @patch('locations.services.requests.Session')
+    def test_fetch_wikidata_authenticated_username_returns_user_name(
+        self,
+        requests_session_mock,
+        oauth1_mock,
+    ):
+        session = Mock()
+        requests_session_mock.return_value = session
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.status_code = 200
+        response.text = '{"query":{"userinfo":{"name":"Zache"}}}'
+        response.json.return_value = {'query': {'userinfo': {'name': 'Zache'}}}
+        session.get.return_value = response
+        oauth1_instance = Mock()
+        oauth1_mock.return_value = oauth1_instance
+
+        username = services.fetch_wikidata_authenticated_username()
+
+        self.assertEqual(username, 'Zache')
+        oauth1_mock.assert_called_once_with(
+            client_key='consumer-key',
+            client_secret='consumer-secret',
+            resource_owner_key='local-access-token',
+            resource_owner_secret='local-access-secret',
+            signature_type='auth_header',
+        )
+        session.get.assert_called_once_with(
+            services._WIKIDATA_API_URL,
+            params={
+                'action': 'query',
+                'meta': 'userinfo',
+                'format': 'json',
+            },
+            timeout=services._external_timeout_seconds(),
+        )
+
+    @override_settings(
+        DEBUG=True,
+        SOCIAL_AUTH_MEDIAWIKI_KEY='consumer-key',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='consumer-secret',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch('builtins.print')
+    @patch('locations.services.OAuth1')
+    @patch('locations.services.requests.Session')
+    def test_fetch_wikidata_authenticated_username_returns_empty_when_name_missing(
+        self,
+        requests_session_mock,
+        oauth1_mock,
+        print_mock,
+    ):
+        session = Mock()
+        requests_session_mock.return_value = session
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.status_code = 200
+        response.text = '{"query":{"userinfo":{}}}'
+        response.json.return_value = {'query': {'userinfo': {}}}
+        session.get.return_value = response
+        oauth1_mock.return_value = Mock()
+
+        username = services.fetch_wikidata_authenticated_username()
+
+        self.assertEqual(username, '')
+        print_mock.assert_called_once()
+        self.assertIn('userinfo', str(print_mock.call_args))
+
+    def test_wikidata_source_snaks_include_optional_metadata_fields(self):
+        snaks = services._wikidata_source_snaks(
+            source_url='https://example.org/article',
+            source_title='Example article',
+            source_title_language='fi',
+            source_author='Example Author',
+            source_publication_date='2026-01-21',
+            source_published_in_p1433='Q12345',
+            source_language_of_work_p407='Q1860',
+        )
+
+        self.assertIn('P854', snaks)
+        self.assertIn('P813', snaks)
+        self.assertIn('P1476', snaks)
+        self.assertIn('P2093', snaks)
+        self.assertIn('P577', snaks)
+        self.assertIn('P1433', snaks)
+        self.assertIn('P407', snaks)
+        self.assertEqual(
+            snaks['P1476'][0]['datavalue']['value'],
+            {'text': 'Example article', 'language': 'fi'},
+        )
+        self.assertEqual(snaks['P2093'][0]['datavalue']['value'], 'Example Author')
+        self.assertEqual(
+            snaks['P1433'][0]['datavalue']['value']['numeric-id'],
+            12345,
+        )
+        self.assertEqual(
+            snaks['P407'][0]['datavalue']['value']['numeric-id'],
+            1860,
+        )
+
+    @patch('locations.services._set_claim_reference')
+    @patch('locations.services._wikidata_api_get')
+    @patch('locations.services._wikidata_oauth_session')
+    def test_ensure_collection_membership_adds_source_reference_to_existing_p5008_claim(
+        self,
+        wikidata_oauth_session_mock,
+        wikidata_api_get_mock,
+        set_claim_reference_mock,
+    ):
+        session = Mock()
+        wikidata_oauth_session_mock.return_value = (session, 'csrf-token')
+        wikidata_api_get_mock.return_value = {
+            'entities': {
+                'Q1757': {
+                    'claims': {
+                        'P5008': [
+                            {
+                                'id': 'Q1757$P5008-claim',
+                                'mainsnak': {
+                                    'datavalue': {'value': {'id': 'Q138299296'}},
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        result = services.ensure_wikidata_collection_membership(
+            'Q1757',
+            collection_qid='Q138299296',
+            source_url='https://example.org/article',
+            source_title='Example article',
+            source_title_language='fi',
+            source_author='Example Author',
+            source_publication_date='2026-01-21',
+            source_published_in_p1433='Q12345',
+            source_language_of_work_p407='Q1860',
+        )
+
+        self.assertTrue(result['already_listed'])
+        set_claim_reference_mock.assert_called_once_with(
+            session,
+            'csrf-token',
+            'Q1757$P5008-claim',
+            'https://example.org/article',
+            source_title='Example article',
+            source_title_language='fi',
+            source_author='Example Author',
+            source_publication_date='2026-01-21',
+            source_published_in_p1433='Q12345',
+            source_language_of_work_p407='Q1860',
+        )
+
+    @patch('locations.services._set_claim_reference')
+    @patch('locations.services._wikidata_api_get')
+    @patch('locations.services._wikidata_oauth_session')
+    def test_ensure_collection_membership_skips_reference_when_same_source_url_exists(
+        self,
+        wikidata_oauth_session_mock,
+        wikidata_api_get_mock,
+        set_claim_reference_mock,
+    ):
+        session = Mock()
+        wikidata_oauth_session_mock.return_value = (session, 'csrf-token')
+        wikidata_api_get_mock.return_value = {
+            'entities': {
+                'Q1757': {
+                    'claims': {
+                        'P5008': [
+                            {
+                                'id': 'Q1757$P5008-claim',
+                                'mainsnak': {
+                                    'datavalue': {'value': {'id': 'Q138299296'}},
+                                },
+                                'references': [
+                                    {
+                                        'snaks': {
+                                            'P854': [
+                                                {
+                                                    'datavalue': {
+                                                        'value': 'https://example.org/article',
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        result = services.ensure_wikidata_collection_membership(
+            'Q1757',
+            collection_qid='Q138299296',
+            source_url='https://example.org/article',
+        )
+
+        self.assertTrue(result['already_listed'])
+        set_claim_reference_mock.assert_not_called()
+
+    @patch('locations.services._set_claim_reference')
+    @patch('locations.services._wikidata_api_get')
+    @patch('locations.services._wikidata_oauth_session')
+    def test_ensure_collection_membership_adds_reference_when_existing_url_lacks_new_entity_source_fields(
+        self,
+        wikidata_oauth_session_mock,
+        wikidata_api_get_mock,
+        set_claim_reference_mock,
+    ):
+        session = Mock()
+        wikidata_oauth_session_mock.return_value = (session, 'csrf-token')
+        wikidata_api_get_mock.return_value = {
+            'entities': {
+                'Q1757': {
+                    'claims': {
+                        'P5008': [
+                            {
+                                'id': 'Q1757$P5008-claim',
+                                'mainsnak': {
+                                    'datavalue': {'value': {'id': 'Q138299296'}},
+                                },
+                                'references': [
+                                    {
+                                        'snaks': {
+                                            'P854': [
+                                                {
+                                                    'datavalue': {
+                                                        'value': 'https://example.org/article',
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        result = services.ensure_wikidata_collection_membership(
+            'Q1757',
+            collection_qid='Q138299296',
+            source_url='https://example.org/article',
+            source_published_in_p1433='Q12345',
+            source_language_of_work_p407='Q1860',
+        )
+
+        self.assertTrue(result['already_listed'])
+        set_claim_reference_mock.assert_called_once_with(
+            session,
+            'csrf-token',
+            'Q1757$P5008-claim',
+            'https://example.org/article',
+            source_title='',
+            source_title_language='',
+            source_author='',
+            source_publication_date='',
+            source_published_in_p1433='Q12345',
+            source_language_of_work_p407='Q1860',
+        )
+
+
 class LocationServiceTests(SimpleTestCase):
+    @patch('locations.services.requests.get')
+    def test_fetch_citoid_metadata_parses_response(self, requests_get_mock):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.url = 'https://en.wikipedia.org/api/rest_v1/data/citation/mediawiki/https%3A%2F%2Fexample.org'
+        response.json.return_value = [
+            {
+                'title': 'Example article',
+                'author': [{'literal': 'Example Author'}],
+                'date': '2026-01-21',
+                'language': 'fi',
+            }
+        ]
+        requests_get_mock.return_value = response
+
+        result = services.fetch_citoid_metadata('https://example.org/article', lang='en')
+
+        self.assertEqual(result['source_url'], 'https://example.org/article')
+        self.assertEqual(result['source_title'], 'Example article')
+        self.assertEqual(result['source_title_language'], 'fi')
+        self.assertEqual(result['source_author'], 'Example Author')
+        self.assertEqual(result['source_publication_date'], '2026-01-21')
+        self.assertEqual(result['source_published_in_p1433'], '')
+        self.assertEqual(result['source_language_of_work_p407'], '')
+
+    def test_fetch_citoid_metadata_requires_http_url(self):
+        with self.assertRaises(ExternalServiceError):
+            services.fetch_citoid_metadata('example.org/article')
+
     @patch('locations.services.requests.get')
     def test_query_sparql_raises_for_non_json_response(self, requests_get_mock):
         response = Mock()
@@ -118,12 +472,27 @@ class LocationServiceTests(SimpleTestCase):
         self.assertIn('?heritageDesignationP1435WikipediaUrl schema:about ?heritageDesignationP1435', first_query)
         self.assertIn('?instanceOfP31WikipediaUrl schema:about ?instanceOfP31', first_query)
         self.assertIn('?architecturalStyleP149WikipediaUrl schema:about ?architecturalStyleP149', first_query)
+        self.assertIn('schema:dateModified ?dateModified', first_query)
         self.assertIn(
             f'schema:isPartOf <https://{expected_lang}.wikipedia.org/>',
             first_query,
         )
         self.assertIn('en,mul', first_query)
         self.assertIn('LIMIT 20', first_query)
+
+    @patch('locations.services._query_sparql')
+    def test_fetch_locations_includes_cache_bust_comment_in_query(self, query_mock):
+        query_mock.return_value = []
+
+        fetch_locations(
+            lang='fi',
+            limit=20,
+            query_comment='# cache-bust: 2026-02-18 16:45',
+        )
+
+        first_query = query_mock.call_args_list[0].args[0]
+        self.assertTrue(first_query.lstrip().startswith('# cache-bust: 2026-02-18 16:45'))
+        self.assertIn('PREFIX wd: <http://www.wikidata.org/entity/>', first_query)
 
     @patch('locations.services._query_sparql')
     def test_fetch_locations_includes_additional_wikidata_qids_in_query(self, query_mock):
@@ -157,6 +526,7 @@ class LocationServiceTests(SimpleTestCase):
                     'itemLabel': {'value': 'Helsinki'},
                     'itemDescription': {'value': 'Capital of Finland'},
                     'coord': {'value': 'Point(24.9384 60.1699)'},
+                    'dateModified': {'value': '2026-01-21T12:34:56Z'},
                     'commonsCategory': {'value': 'Category:Helsinki'},
                     'imageName': {'value': 'Helsinki city center.jpg'},
                     'inceptionP571': {'value': '1550-01-01T00:00:00Z'},
@@ -209,6 +579,7 @@ class LocationServiceTests(SimpleTestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Helsinki')
+        self.assertEqual(results[0]['date_modified'], '2026-01-21T12:34:56Z')
         self.assertEqual(results[0]['commons_category'], 'Helsinki')
         self.assertEqual(results[0]['image_name'], 'Helsinki city center.jpg')
         self.assertEqual(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from time import perf_counter
+from urllib.parse import quote
 
 from django.conf import settings
 from django.utils import translation
@@ -21,14 +22,17 @@ from .services import (
     SPARQLServiceError,
     WikidataWriteError,
     create_wikidata_building_item,
+    build_locations_sparql_query,
     decode_location_id,
     ensure_wikidata_collection_membership,
     enrich_locations_with_image_counts,
+    fetch_citoid_metadata,
     encode_location_id,
     fetch_wikidata_entity,
     fetch_location_children,
     fetch_location_detail,
     fetch_locations,
+    fetch_wikidata_authenticated_username,
     list_render_debug_scope,
     search_commons_categories,
     search_geocode_places,
@@ -43,6 +47,7 @@ _WIKIDATA_ENTITY_PATTERN = re.compile(
 )
 _WIKIDATA_QID_PATTERN = re.compile(r'(Q\d+)', flags=re.IGNORECASE)
 _DRAFT_URI_PATTERN = re.compile(r'^https://draft\.local/location/(\d+)$')
+_CACHE_BUST_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$')
 
 
 def _list_render_debug_log(message: str) -> None:
@@ -65,44 +70,95 @@ def _oauth_enabled() -> bool:
     return bool(oauth_key and oauth_secret)
 
 
+def _local_dev_access_token_credentials() -> tuple[str, str]:
+    token = str(getattr(settings, 'LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN', '') or '').strip()
+    secret = str(getattr(settings, 'LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET', '') or '').strip()
+    return token, secret
+
+
+def _local_dev_access_token_enabled() -> bool:
+    if not getattr(settings, 'DEBUG', False):
+        return False
+    token, secret = _local_dev_access_token_credentials()
+    return bool(token and secret)
+
+
+def _cache_bust_query_comment(request) -> str:
+    raw_value = str(request.query_params.get('cache_bust') or '').strip()
+    if not raw_value:
+        return ''
+    if not _CACHE_BUST_PATTERN.fullmatch(raw_value):
+        return ''
+    return f'# cache-bust: {raw_value}'
+
+
 def _mediawiki_oauth_credentials_for_request(request) -> tuple[dict[str, str] | None, str, int]:
-    if not _oauth_enabled():
+    oauth_enabled = _oauth_enabled()
+    local_access_token_enabled = _local_dev_access_token_enabled()
+    if not oauth_enabled and not local_access_token_enabled:
         return None, 'Wikimedia OAuth is not configured on this server.', status.HTTP_503_SERVICE_UNAVAILABLE
 
     user = getattr(request, 'user', None)
-    if user is None or not user.is_authenticated:
-        return None, 'Authentication required. Sign in with Wikimedia OAuth first.', status.HTTP_401_UNAUTHORIZED
+    if oauth_enabled and user is not None and user.is_authenticated:
+        from social_django.models import UserSocialAuth
 
-    from social_django.models import UserSocialAuth
+        social_auth = UserSocialAuth.objects.filter(user=user, provider='mediawiki').first()
+        if social_auth is None:
+            if local_access_token_enabled:
+                access_token, access_token_secret = _local_dev_access_token_credentials()
+                return {
+                    'oauth_token': access_token,
+                    'oauth_token_secret': access_token_secret,
+                }, '', status.HTTP_200_OK
+            return (
+                None,
+                'No linked Wikimedia OAuth account found. Sign in with Wikimedia OAuth first.',
+                status.HTTP_403_FORBIDDEN,
+            )
 
-    social_auth = UserSocialAuth.objects.filter(user=user, provider='mediawiki').first()
-    if social_auth is None:
-        return (
-            None,
-            'No linked Wikimedia OAuth account found. Sign in with Wikimedia OAuth first.',
-            status.HTTP_403_FORBIDDEN,
-        )
+        extra_data = social_auth.extra_data if isinstance(social_auth.extra_data, dict) else {}
+        access_token = extra_data.get('access_token')
+        if isinstance(access_token, dict):
+            oauth_token = str(access_token.get('oauth_token') or '').strip()
+            oauth_token_secret = str(access_token.get('oauth_token_secret') or '').strip()
+        else:
+            oauth_token = str(extra_data.get('oauth_token') or '').strip()
+            oauth_token_secret = str(extra_data.get('oauth_token_secret') or '').strip()
 
-    extra_data = social_auth.extra_data if isinstance(social_auth.extra_data, dict) else {}
-    access_token = extra_data.get('access_token')
-    if isinstance(access_token, dict):
-        oauth_token = str(access_token.get('oauth_token') or '').strip()
-        oauth_token_secret = str(access_token.get('oauth_token_secret') or '').strip()
-    else:
-        oauth_token = str(extra_data.get('oauth_token') or '').strip()
-        oauth_token_secret = str(extra_data.get('oauth_token_secret') or '').strip()
+        if oauth_token and oauth_token_secret:
+            return {
+                'oauth_token': oauth_token,
+                'oauth_token_secret': oauth_token_secret,
+            }, '', status.HTTP_200_OK
 
-    if not oauth_token or not oauth_token_secret:
+        if local_access_token_enabled:
+            access_token, access_token_secret = _local_dev_access_token_credentials()
+            return {
+                'oauth_token': access_token,
+                'oauth_token_secret': access_token_secret,
+            }, '', status.HTTP_200_OK
+
         return (
             None,
             'Wikimedia OAuth credentials are missing from the linked account.',
             status.HTTP_403_FORBIDDEN,
         )
 
-    return {
-        'oauth_token': oauth_token,
-        'oauth_token_secret': oauth_token_secret,
-    }, '', status.HTTP_200_OK
+    if local_access_token_enabled:
+        access_token, access_token_secret = _local_dev_access_token_credentials()
+        return {
+            'oauth_token': access_token,
+            'oauth_token_secret': access_token_secret,
+        }, '', status.HTTP_200_OK
+
+    if user is None or not user.is_authenticated:
+        return None, 'Authentication required. Sign in with Wikimedia OAuth first.', status.HTTP_401_UNAUTHORIZED
+
+    return (
+        None,
+        'No linked Wikimedia OAuth account found. Sign in with Wikimedia OAuth first.',
+        status.HTTP_403_FORBIDDEN,
+    )
 
 
 def _normalize_uri(uri: str) -> str:
@@ -469,13 +525,18 @@ class BaseLocationAPIView(APIView):
 
 class AuthStatusAPIView(APIView):
     def get(self, request):
-        enabled = _oauth_enabled()
+        oauth_enabled = _oauth_enabled()
+        local_access_token_enabled = _local_dev_access_token_enabled()
+        enabled = oauth_enabled or local_access_token_enabled
+        request_is_authenticated = bool(getattr(request, 'user', None) and request.user.is_authenticated)
+        use_access_token_mode = bool(local_access_token_enabled and (not request_is_authenticated or not oauth_enabled))
         payload: dict[str, object] = {
             'enabled': enabled,
-            'authenticated': bool(getattr(request, 'user', None) and request.user.is_authenticated),
-            'login_url': _oauth_login_url(),
-            'logout_url': _oauth_logout_url(),
+            'authenticated': request_is_authenticated or use_access_token_mode,
+            'login_url': '#' if use_access_token_mode else _oauth_login_url(),
+            'logout_url': '#' if use_access_token_mode else _oauth_logout_url(),
             'provider': 'mediawiki',
+            'auth_mode': 'access_token' if use_access_token_mode else 'oauth',
             'username': '',
         }
 
@@ -483,7 +544,24 @@ class AuthStatusAPIView(APIView):
             return Response(payload)
 
         if payload['authenticated']:
-            payload['username'] = str(request.user.get_username() or '')
+            if use_access_token_mode:
+                access_token, access_token_secret = _local_dev_access_token_credentials()
+                try:
+                    payload['username'] = (
+                        fetch_wikidata_authenticated_username(
+                            oauth_token=access_token,
+                            oauth_token_secret=access_token_secret,
+                        )
+                        or 'local-access-token'
+                    )
+                except WikidataWriteError as exc:
+                    print(
+                        f'[AUTH-DEBUG] Local access token username lookup failed: {exc}',
+                        flush=True,
+                    )
+                    payload['username'] = 'local-access-token'
+            else:
+                payload['username'] = str(request.user.get_username() or '')
 
         return Response(payload)
 
@@ -491,6 +569,7 @@ class AuthStatusAPIView(APIView):
 class LocationListAPIView(BaseLocationAPIView):
     def get(self, request):
         lang = self._get_lang(request)
+        cache_bust_comment = _cache_bust_query_comment(request)
         request_started_at = perf_counter()
 
         with list_render_debug_scope():
@@ -508,6 +587,8 @@ class LocationListAPIView(BaseLocationAPIView):
 
             fetch_started_at = perf_counter()
             fetch_kwargs: dict[str, object] = {'lang': lang}
+            if cache_bust_comment:
+                fetch_kwargs['query_comment'] = cache_bust_comment
             if draft_wikidata_qids:
                 fetch_kwargs['additional_wikidata_qids'] = draft_wikidata_qids
             try:
@@ -563,7 +644,16 @@ class LocationListAPIView(BaseLocationAPIView):
                 f'duration_ms={(perf_counter() - request_started_at) * 1000:.1f}'
             )
 
-        return Response(payload)
+        sparql_query = build_locations_sparql_query(
+            lang=lang,
+            additional_wikidata_qids=draft_wikidata_qids,
+            query_comment=cache_bust_comment,
+        )
+        query_ui_url = f'https://query.wikidata.org/#{quote(sparql_query, safe="")}'
+
+        response = Response(payload)
+        response['X-Wikidata-Query-Url'] = query_ui_url
+        return response
 
 
 class LocationDetailAPIView(BaseLocationAPIView):
@@ -704,11 +794,35 @@ class WikidataAddExistingAPIView(BaseLocationAPIView):
                 wikidata_item,
                 oauth_token=oauth_credentials['oauth_token'],
                 oauth_token_secret=oauth_credentials['oauth_token_secret'],
+                source_url=str(serializer.validated_data.get('source_url') or '').strip(),
+                source_title=str(serializer.validated_data.get('source_title') or '').strip(),
+                source_title_language=str(serializer.validated_data.get('source_title_language') or '').strip(),
+                source_author=str(serializer.validated_data.get('source_author') or '').strip(),
+                source_publication_date=str(serializer.validated_data.get('source_publication_date') or '').strip(),
+                source_published_in_p1433=str(serializer.validated_data.get('source_published_in_p1433') or '').strip(),
+                source_language_of_work_p407=str(
+                    serializer.validated_data.get('source_language_of_work_p407') or ''
+                ).strip(),
+                reason_p958=str(serializer.validated_data.get('reason_p958') or '').strip(),
             )
         except (ExternalServiceError, WikidataWriteError) as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         return Response(result)
+
+
+class CitoidMetadataAPIView(BaseLocationAPIView):
+    def get(self, request):
+        source_url = str(request.query_params.get('url') or '').strip()
+        if not source_url:
+            return Response({'detail': 'url is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        lang = self._get_lang(request)
+        try:
+            metadata = fetch_citoid_metadata(source_url, lang=lang)
+        except ExternalServiceError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response(metadata)
 
 
 class WikidataCreateItemAPIView(BaseLocationAPIView):

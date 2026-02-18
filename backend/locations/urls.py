@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     AuthStatusAPIView,
+    CitoidMetadataAPIView,
     CommonsCategorySearchAPIView,
     DraftLocationDetailAPIView,
     DraftLocationListCreateAPIView,
@@ -24,6 +25,7 @@ urlpatterns = [
     path('wikidata/entities/<str:entity_id>/', WikidataEntityAPIView.as_view(), name='wikidata-entity'),
     path('wikidata/add-existing/', WikidataAddExistingAPIView.as_view(), name='wikidata-add-existing'),
     path('wikidata/create/', WikidataCreateItemAPIView.as_view(), name='wikidata-create-item'),
+    path('citoid/metadata/', CitoidMetadataAPIView.as_view(), name='citoid-metadata'),
     path('commons/categories/', CommonsCategorySearchAPIView.as_view(), name='commons-category-search'),
     path('geocode/search/', GeocodeSearchAPIView.as_view(), name='geocode-search'),
     path('geocode/reverse/', GeocodeReverseAPIView.as_view(), name='geocode-reverse'),

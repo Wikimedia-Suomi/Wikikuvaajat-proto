@@ -1,5 +1,5 @@
 from unittest.mock import patch
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -53,7 +53,25 @@ class LocationApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
+        query_url = response.headers.get('X-Wikidata-Query-Url', '')
+        self.assertTrue(query_url.startswith('https://query.wikidata.org/#'))
+        self.assertIn('wdt:P5008 wd:Q138299296', unquote(query_url.split('#', 1)[1]))
         fetch_locations_mock.assert_called_once_with(lang='en')
+
+    @patch('locations.views.fetch_locations')
+    def test_location_list_passes_cache_bust_comment_to_fetch(self, fetch_locations_mock):
+        fetch_locations_mock.return_value = []
+
+        response = self.client.get(
+            reverse('location-list'),
+            {'lang': 'en', 'cache_bust': '2026-02-18 16:45'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        fetch_locations_mock.assert_called_once_with(
+            lang='en',
+            query_comment='# cache-bust: 2026-02-18 16:45',
+        )
 
     @patch('locations.views.fetch_locations')
     def test_location_list_returns_502_on_sparql_error(self, fetch_locations_mock):
@@ -170,6 +188,39 @@ class LocationApiTests(APITestCase):
         )
         fetch_wikidata_entity_mock.assert_called_once_with('Q1757', lang='fi')
 
+    @patch('locations.views.fetch_citoid_metadata')
+    def test_citoid_metadata_endpoint(self, fetch_citoid_metadata_mock):
+        fetch_citoid_metadata_mock.return_value = {
+            'source_url': 'https://example.org/article',
+            'source_title': 'Example article',
+            'source_title_language': 'en',
+            'source_author': 'Example Author',
+            'source_publication_date': '2026-01-21',
+            'source_published_in_p1433': '',
+            'source_language_of_work_p407': '',
+        }
+
+        response = self.client.get(
+            reverse('citoid-metadata'),
+            {'url': 'https://example.org/article', 'lang': 'fi'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['source_title'], 'Example article')
+        fetch_citoid_metadata_mock.assert_called_once_with('https://example.org/article', lang='fi')
+
+    @patch('locations.views.fetch_citoid_metadata')
+    def test_citoid_metadata_endpoint_returns_502_for_external_error(self, fetch_citoid_metadata_mock):
+        fetch_citoid_metadata_mock.side_effect = ExternalServiceError('upstream failure')
+
+        response = self.client.get(
+            reverse('citoid-metadata'),
+            {'url': 'https://example.org/article'},
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('detail', response.data)
+
     @patch('locations.views.search_commons_categories')
     def test_commons_category_search_endpoint(self, search_commons_categories_mock):
         search_commons_categories_mock.return_value = [
@@ -218,6 +269,62 @@ class LocationApiTests(APITestCase):
         self.assertTrue(response.data['enabled'])
         self.assertTrue(response.data['authenticated'])
         self.assertEqual(response.data['username'], 'wikimedia-user')
+        self.assertEqual(response.data['auth_mode'], 'oauth')
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch(
+        'locations.views.fetch_wikidata_authenticated_username',
+        return_value='Zache',
+    )
+    def test_auth_status_endpoint_reports_local_access_token_mode(
+        self,
+        fetch_wikidata_authenticated_username_mock,
+    ):
+        response = self.client.get(reverse('auth-status'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['enabled'])
+        self.assertTrue(response.data['authenticated'])
+        self.assertEqual(response.data['auth_mode'], 'access_token')
+        self.assertEqual(response.data['username'], 'Zache')
+        fetch_wikidata_authenticated_username_mock.assert_called_once_with(
+            oauth_token='local-access-token',
+            oauth_token_secret='local-access-secret',
+        )
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch('builtins.print')
+    @patch(
+        'locations.views.fetch_wikidata_authenticated_username',
+        side_effect=WikidataWriteError('userinfo request failed'),
+    )
+    def test_auth_status_endpoint_logs_debug_when_local_access_username_lookup_fails(
+        self,
+        fetch_wikidata_authenticated_username_mock,
+        print_mock,
+    ):
+        response = self.client.get(reverse('auth-status'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['username'], 'local-access-token')
+        fetch_wikidata_authenticated_username_mock.assert_called_once_with(
+            oauth_token='local-access-token',
+            oauth_token_secret='local-access-secret',
+        )
+        print_mock.assert_called_once()
+        self.assertIn('username lookup failed', str(print_mock.call_args))
 
     def test_auth_logout_route_redirects_and_clears_session(self):
         user = get_user_model().objects.create_user(username='logout-user')
@@ -254,7 +361,17 @@ class LocationApiTests(APITestCase):
 
         response = self.client.post(
             reverse('wikidata-add-existing'),
-            {'wikidata_item': 'Q1757'},
+            {
+                'wikidata_item': 'Q1757',
+                'source_url': 'https://example.org/article',
+                'source_title': 'Example article',
+                'source_title_language': 'en',
+                'source_author': 'Example Author',
+                'source_publication_date': '2026-01-21',
+                'source_published_in_p1433': 'Q12345',
+                'source_language_of_work_p407': 'Q1860',
+                'reason_p958': 'Included because demolition threat is documented.',
+            },
             format='json',
         )
 
@@ -265,6 +382,14 @@ class LocationApiTests(APITestCase):
             'Q1757',
             oauth_token='token',
             oauth_token_secret='secret',
+            source_url='https://example.org/article',
+            source_title='Example article',
+            source_title_language='en',
+            source_author='Example Author',
+            source_publication_date='2026-01-21',
+            source_published_in_p1433='Q12345',
+            source_language_of_work_p407='Q1860',
+            reason_p958='Included because demolition threat is documented.',
         )
 
     @patch('locations.views.ensure_wikidata_collection_membership')
@@ -281,12 +406,76 @@ class LocationApiTests(APITestCase):
 
         response = self.client.post(
             reverse('wikidata-add-existing'),
-            {'wikidata_item': 'Q1757'},
+            {'wikidata_item': 'Q1757', 'source_url': 'https://example.org/article'},
             format='json',
         )
 
         self.assertEqual(response.status_code, 502)
         self.assertIn('detail', response.data)
+        oauth_credentials_mock.assert_called_once()
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch('locations.views.ensure_wikidata_collection_membership')
+    def test_wikidata_add_existing_endpoint_uses_local_access_token_fallback(
+        self,
+        ensure_wikidata_collection_membership_mock,
+    ):
+        ensure_wikidata_collection_membership_mock.return_value = {
+            'qid': 'Q1757',
+            'uri': 'https://www.wikidata.org/entity/Q1757',
+            'already_listed': False,
+        }
+
+        response = self.client.post(
+            reverse('wikidata-add-existing'),
+            {
+                'wikidata_item': 'Q1757',
+                'source_url': 'https://example.org/article',
+                'reason_p958': 'Included because demolition threat is documented.',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        ensure_wikidata_collection_membership_mock.assert_called_once_with(
+            'Q1757',
+            oauth_token='local-access-token',
+            oauth_token_secret='local-access-secret',
+            source_url='https://example.org/article',
+            source_title='',
+            source_title_language='',
+            source_author='',
+            source_publication_date='',
+            source_published_in_p1433='',
+            source_language_of_work_p407='',
+            reason_p958='Included because demolition threat is documented.',
+        )
+
+    @patch('locations.views.ensure_wikidata_collection_membership')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_wikidata_add_existing_endpoint_requires_source_url(
+        self,
+        oauth_credentials_mock,
+        ensure_wikidata_collection_membership_mock,
+    ):
+        response = self.client.post(
+            reverse('wikidata-add-existing'),
+            {'wikidata_item': 'Q1757'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('source_url', response.data)
+        ensure_wikidata_collection_membership_mock.assert_not_called()
         oauth_credentials_mock.assert_called_once()
 
     @patch('locations.views.create_wikidata_building_item')
@@ -397,7 +586,7 @@ class LocationApiTests(APITestCase):
     def test_wikidata_write_endpoints_require_authentication(self):
         response = self.client.post(
             reverse('wikidata-add-existing'),
-            {'wikidata_item': 'Q1757'},
+            {'wikidata_item': 'Q1757', 'source_url': 'https://example.org/article'},
             format='json',
         )
 
