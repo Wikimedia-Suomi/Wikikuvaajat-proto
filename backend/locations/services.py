@@ -58,6 +58,7 @@ class Location:
     architect_p84: str = ''
     architect_p84_label: str = ''
     architect_p84_wikipedia_url: str = ''
+    collection_membership_source_url: str = ''
     official_closure_date_p3999: str = ''
     state_of_use_p5817: str = ''
     state_of_use_p5817_label: str = ''
@@ -102,6 +103,11 @@ _COMMONS_THUMB_WIDTH = 320
 _PETSCAN_DEPTH = 3
 _WIKIDATA_CALENDAR_MODEL = 'http://www.wikidata.org/entity/Q1985727'
 _WIKIDATA_GLOBE = 'http://www.wikidata.org/entity/Q2'
+_CITOID_LANGUAGE_QID_BY_CODE: dict[str, str] = {
+    'en': 'Q1860',
+    'fi': 'Q1412',
+    'sv': 'Q9027',
+}
 _IMAGE_COUNT_REFRESH_MAX_WORKERS = 4
 _IMAGE_COUNT_REFRESH_EXECUTOR = ThreadPoolExecutor(
     max_workers=_IMAGE_COUNT_REFRESH_MAX_WORKERS,
@@ -234,11 +240,12 @@ def _query_sparql(query: str) -> list[dict[str, Any]]:
     request_started_at = perf_counter()
     request_url = str(getattr(settings, 'SPARQL_ENDPOINT', '') or '')
     try:
-        response = requests.get(
+        response = requests.post(
             settings.SPARQL_ENDPOINT,
-            params={'query': query, 'format': 'application/sparql-results+json'},
+            data={'query': query, 'format': 'application/sparql-results+json'},
             headers={
                 'Accept': 'application/sparql-results+json, application/json;q=0.9, */*;q=0.1',
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
                 'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
             },
             timeout=settings.SPARQL_TIMEOUT_SECONDS,
@@ -357,6 +364,11 @@ def _format_binding(binding: dict[str, Any]) -> Location:
     architect_p84_wikipedia_url = _binding_value(
         binding,
         ['architectP84WikipediaUrl', 'architectWikipediaUrl'],
+        '',
+    )
+    collection_membership_source_url = _binding_value(
+        binding,
+        ['collectionMembershipSourceUrl', 'p5008CollectionMembershipSourceUrl'],
         '',
     )
     official_closure_date_p3999 = _binding_value(
@@ -494,6 +506,7 @@ def _format_binding(binding: dict[str, Any]) -> Location:
         architect_p84=architect_p84,
         architect_p84_label=architect_p84_label,
         architect_p84_wikipedia_url=architect_p84_wikipedia_url,
+        collection_membership_source_url=collection_membership_source_url,
         official_closure_date_p3999=official_closure_date_p3999,
         state_of_use_p5817=state_of_use_p5817,
         state_of_use_p5817_label=state_of_use_p5817_label,
@@ -559,6 +572,18 @@ def _binding_value(binding: dict[str, Any], keys: list[str], default: str = '') 
     return default
 
 
+def _binding_language(binding: dict[str, Any], keys: list[str], default: str = '') -> str:
+    for key in keys:
+        entry = binding.get(key)
+        if not isinstance(entry, dict):
+            continue
+        language_value = entry.get('xml:lang') or entry.get('lang') or ''
+        language_text = str(language_value).strip()
+        if language_text:
+            return language_text
+    return default
+
+
 def _collect_linked_entities(
     bindings: list[dict[str, Any]],
     value_keys: list[str],
@@ -596,25 +621,385 @@ def _collect_linked_entities(
     return [entities_by_key[key] for key in ordered_keys]
 
 
-def _apply_architect_values(item: dict[str, Any], bindings: list[dict[str, Any]]) -> dict[str, Any]:
+def _collect_located_on_street_values(bindings: list[dict[str, Any]]) -> list[dict[str, str]]:
+    values_by_key: dict[str, dict[str, str]] = {}
+    ordered_keys: list[str] = []
+
+    for binding in bindings:
+        value = _binding_value(binding, ['locatedOnStreetP669', 'locatedOnStreet'], '').strip()
+        label = _binding_value(binding, ['locatedOnStreetP669Label', 'locatedOnStreetLabel'], '').strip()
+        wikipedia_url = _binding_value(
+            binding,
+            ['locatedOnStreetP669WikipediaUrl', 'locatedOnStreetWikipediaUrl'],
+            '',
+        ).strip()
+        house_number = _binding_value(binding, ['houseNumberP670', 'houseNumber'], '').strip()
+        if not value and not label and not wikipedia_url and not house_number:
+            continue
+
+        dedupe_key = '|'.join(
+            [
+                value.casefold(),
+                label.casefold(),
+                wikipedia_url.casefold(),
+                house_number.casefold(),
+            ]
+        )
+        if not dedupe_key:
+            continue
+
+        existing = values_by_key.get(dedupe_key)
+        if existing is None:
+            values_by_key[dedupe_key] = {
+                'value': value,
+                'label': label,
+                'wikipedia_url': wikipedia_url,
+                'house_number': house_number,
+            }
+            ordered_keys.append(dedupe_key)
+            continue
+
+        if not existing.get('value') and value:
+            existing['value'] = value
+        if not existing.get('label') and label:
+            existing['label'] = label
+        if not existing.get('wikipedia_url') and wikipedia_url:
+            existing['wikipedia_url'] = wikipedia_url
+        if not existing.get('house_number') and house_number:
+            existing['house_number'] = house_number
+
+    return [values_by_key[key] for key in ordered_keys]
+
+
+def _collect_unique_binding_values(
+    bindings: list[dict[str, Any]],
+    keys: list[str],
+) -> list[str]:
+    values: list[str] = []
+    seen_values: set[str] = set()
+
+    for binding in bindings:
+        value = _binding_value(binding, keys, '').strip()
+        if not value:
+            continue
+        normalized = value.casefold()
+        if normalized in seen_values:
+            continue
+        seen_values.add(normalized)
+        values.append(value)
+
+    return values
+
+
+def _collect_monolingual_binding_values(
+    bindings: list[dict[str, Any]],
+    keys: list[str],
+) -> list[dict[str, str]]:
+    values: list[dict[str, str]] = []
+    seen_values: set[str] = set()
+
+    for binding in bindings:
+        text = _binding_value(binding, keys, '').strip()
+        if not text:
+            continue
+        language = _binding_language(binding, keys, '').strip().lower()
+        dedupe_key = f'{language}|{text.casefold()}'
+        if dedupe_key in seen_values:
+            continue
+        seen_values.add(dedupe_key)
+        values.append(
+            {
+                'text': text,
+                'language': language,
+            }
+        )
+
+    return values
+
+
+def _preferred_monolingual_text(
+    values: list[dict[str, str]],
+    preferred_lang: str | None = None,
+) -> str:
+    if not values:
+        return ''
+
+    fallbacks = _language_fallbacks(preferred_lang, include_mul=True)
+    normalized_fallbacks: list[str] = []
+    for fallback in fallbacks:
+        normalized = str(fallback or '').strip().lower()
+        if normalized and normalized not in normalized_fallbacks:
+            normalized_fallbacks.append(normalized)
+
+    for fallback in normalized_fallbacks:
+        for candidate in values:
+            language = str(candidate.get('language') or '').strip().lower()
+            text = str(candidate.get('text') or '').strip()
+            if text and language == fallback:
+                return text
+
+    for candidate in values:
+        language = str(candidate.get('language') or '').strip().lower()
+        text = str(candidate.get('text') or '').strip()
+        if text and not language:
+            return text
+
+    for candidate in values:
+        text = str(candidate.get('text') or '').strip()
+        if text:
+            return text
+
+    return ''
+
+
+def _merge_source_entity(
+    entity: dict[str, str],
+    value: str,
+    label: str,
+    wikipedia_url: str,
+) -> None:
+    if value and not entity.get('value'):
+        entity['value'] = value
+    if label and not entity.get('label'):
+        entity['label'] = label
+    if wikipedia_url and not entity.get('wikipedia_url'):
+        entity['wikipedia_url'] = wikipedia_url
+
+
+def _collect_collection_membership_sources(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sources_by_key: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+
+    for binding in bindings:
+        reference_id = _binding_value(binding, ['collectionMembershipReferenceP5008'], '').strip()
+        source_url = _binding_value(
+            binding,
+            ['collectionMembershipSourceUrl', 'p5008CollectionMembershipSourceUrl'],
+            '',
+        ).strip()
+        source_title = _binding_value(binding, ['collectionMembershipSourceTitle'], '').strip()
+        source_title_language = _binding_value(binding, ['collectionMembershipSourceTitleLang'], '').strip() or _binding_language(
+            binding,
+            ['collectionMembershipSourceTitle'],
+            '',
+        )
+        source_author = _binding_value(binding, ['collectionMembershipSourceAuthor'], '').strip()
+        source_publication_date = _binding_value(binding, ['collectionMembershipSourcePublicationDate'], '').strip()
+        source_retrieved_date = _binding_value(binding, ['collectionMembershipSourceRetrievedDate'], '').strip()
+
+        source_publisher_value = _binding_value(binding, ['collectionMembershipSourcePublisherP123'], '').strip()
+        source_publisher_label = _binding_value(binding, ['collectionMembershipSourcePublisherP123Label'], '').strip()
+        source_publisher_wikipedia_url = _binding_value(
+            binding,
+            ['collectionMembershipSourcePublisherP123WikipediaUrl'],
+            '',
+        ).strip()
+
+        source_published_in_value = _binding_value(binding, ['collectionMembershipSourcePublishedInP1433'], '').strip()
+        source_published_in_label = _binding_value(binding, ['collectionMembershipSourcePublishedInP1433Label'], '').strip()
+        source_published_in_wikipedia_url = _binding_value(
+            binding,
+            ['collectionMembershipSourcePublishedInP1433WikipediaUrl'],
+            '',
+        ).strip()
+
+        source_language_of_work_value = _binding_value(
+            binding,
+            ['collectionMembershipSourceLanguageOfWorkP407'],
+            '',
+        ).strip()
+        source_language_of_work_label = _binding_value(
+            binding,
+            ['collectionMembershipSourceLanguageOfWorkP407Label'],
+            '',
+        ).strip()
+        source_language_of_work_wikipedia_url = _binding_value(
+            binding,
+            ['collectionMembershipSourceLanguageOfWorkP407WikipediaUrl'],
+            '',
+        ).strip()
+
+        has_values = any(
+            (
+                source_url,
+                source_title,
+                source_title_language,
+                source_author,
+                source_publication_date,
+                source_retrieved_date,
+                source_publisher_value,
+                source_publisher_label,
+                source_publisher_wikipedia_url,
+                source_published_in_value,
+                source_published_in_label,
+                source_published_in_wikipedia_url,
+                source_language_of_work_value,
+                source_language_of_work_label,
+                source_language_of_work_wikipedia_url,
+            )
+        )
+        if not has_values:
+            continue
+
+        dedupe_key = reference_id or source_url.casefold() or '|'.join(
+            [
+                source_title.casefold(),
+                source_author.casefold(),
+                source_publication_date.casefold(),
+                source_publisher_value.casefold(),
+                source_published_in_value.casefold(),
+            ]
+        )
+        if not dedupe_key:
+            dedupe_key = f'collection-source-{len(ordered_keys)}'
+
+        source_entry = sources_by_key.get(dedupe_key)
+        if source_entry is None:
+            source_entry = {
+                'url': '',
+                'title': '',
+                'title_language': '',
+                '_authors': [],
+                'publication_date': '',
+                'retrieved_date': '',
+                'publisher': {'value': '', 'label': '', 'wikipedia_url': ''},
+                'published_in': {'value': '', 'label': '', 'wikipedia_url': ''},
+                'language_of_work': {'value': '', 'label': '', 'wikipedia_url': ''},
+            }
+            sources_by_key[dedupe_key] = source_entry
+            ordered_keys.append(dedupe_key)
+
+        if source_url and not source_entry['url']:
+            source_entry['url'] = source_url
+        if source_title and not source_entry['title']:
+            source_entry['title'] = source_title
+        if source_title_language and not source_entry['title_language']:
+            source_entry['title_language'] = source_title_language
+        if source_author:
+            existing_authors = source_entry['_authors']
+            if source_author.casefold() not in {author.casefold() for author in existing_authors}:
+                existing_authors.append(source_author)
+        if source_publication_date and not source_entry['publication_date']:
+            source_entry['publication_date'] = source_publication_date
+        if source_retrieved_date and not source_entry['retrieved_date']:
+            source_entry['retrieved_date'] = source_retrieved_date
+
+        _merge_source_entity(
+            source_entry['publisher'],
+            source_publisher_value,
+            source_publisher_label,
+            source_publisher_wikipedia_url,
+        )
+        _merge_source_entity(
+            source_entry['published_in'],
+            source_published_in_value,
+            source_published_in_label,
+            source_published_in_wikipedia_url,
+        )
+        _merge_source_entity(
+            source_entry['language_of_work'],
+            source_language_of_work_value,
+            source_language_of_work_label,
+            source_language_of_work_wikipedia_url,
+        )
+
+    sources: list[dict[str, Any]] = []
+    for key in ordered_keys:
+        source_entry = dict(sources_by_key[key])
+        authors = source_entry.pop('_authors', [])
+        source_entry['author'] = ', '.join(str(item).strip() for item in authors if str(item).strip())
+        sources.append(source_entry)
+
+    return sources
+
+
+def _apply_architect_values(
+    item: dict[str, Any],
+    bindings: list[dict[str, Any]],
+    preferred_lang: str | None = None,
+) -> dict[str, Any]:
+    enriched = dict(item)
+    has_changes = False
+
     architect_values = _collect_linked_entities(
         bindings,
         ['architectP84', 'architect'],
         ['architectP84Label', 'architectLabel'],
         ['architectP84WikipediaUrl', 'architectWikipediaUrl'],
     )
-    if not architect_values:
-        return item
+    if architect_values:
+        has_changes = True
+        enriched['architect_p84_values'] = architect_values
+        first_architect = architect_values[0]
+        enriched['architect_p84'] = first_architect.get('value') or str(enriched.get('architect_p84') or '')
+        enriched['architect_p84_label'] = first_architect.get('label') or str(enriched.get('architect_p84_label') or '')
+        enriched['architect_p84_wikipedia_url'] = first_architect.get('wikipedia_url') or str(
+            enriched.get('architect_p84_wikipedia_url') or ''
+        )
 
-    enriched = dict(item)
-    enriched['architect_p84_values'] = architect_values
-    first_architect = architect_values[0]
-    enriched['architect_p84'] = first_architect.get('value') or str(enriched.get('architect_p84') or '')
-    enriched['architect_p84_label'] = first_architect.get('label') or str(enriched.get('architect_p84_label') or '')
-    enriched['architect_p84_wikipedia_url'] = first_architect.get('wikipedia_url') or str(
-        enriched.get('architect_p84_wikipedia_url') or ''
+    located_on_street_values = _collect_located_on_street_values(bindings)
+    if located_on_street_values:
+        has_changes = True
+        enriched['located_on_street_p669_values'] = located_on_street_values
+        first_street = located_on_street_values[0]
+        enriched['located_on_street_p669'] = first_street.get('value') or str(enriched.get('located_on_street_p669') or '')
+        enriched['located_on_street_p669_label'] = first_street.get('label') or str(
+            enriched.get('located_on_street_p669_label') or ''
+        )
+        enriched['located_on_street_p669_wikipedia_url'] = first_street.get('wikipedia_url') or str(
+            enriched.get('located_on_street_p669_wikipedia_url') or ''
+        )
+        enriched['house_number_p670'] = first_street.get('house_number') or str(enriched.get('house_number_p670') or '')
+
+    address_text_values = _collect_monolingual_binding_values(
+        bindings,
+        ['addressTextP6375', 'streetAddressP6375', 'addressText'],
     )
-    return enriched
+    if address_text_values:
+        has_changes = True
+        enriched['address_text_values'] = address_text_values
+        preferred_address_text = _preferred_monolingual_text(
+            address_text_values,
+            preferred_lang=preferred_lang,
+        )
+        if preferred_address_text:
+            enriched['address_text'] = preferred_address_text
+
+    collection_membership_sources = _collect_collection_membership_sources(bindings)
+    if collection_membership_sources:
+        has_changes = True
+        enriched['collection_membership_sources'] = collection_membership_sources
+
+    collection_membership_source_urls: list[str] = []
+    seen_collection_source_urls: set[str] = set()
+
+    def _append_collection_source_url(value: str) -> None:
+        normalized_value = str(value).strip()
+        if not normalized_value:
+            return
+        dedupe_key = normalized_value.casefold()
+        if dedupe_key in seen_collection_source_urls:
+            return
+        seen_collection_source_urls.add(dedupe_key)
+        collection_membership_source_urls.append(normalized_value)
+
+    _append_collection_source_url(str(enriched.get('collection_membership_source_url') or ''))
+    for source_entry in collection_membership_sources:
+        if not isinstance(source_entry, dict):
+            continue
+        _append_collection_source_url(str(source_entry.get('url') or ''))
+    for source_url in _collect_unique_binding_values(
+        bindings,
+        ['collectionMembershipSourceUrl', 'p5008CollectionMembershipSourceUrl'],
+    ):
+        _append_collection_source_url(source_url)
+
+    if collection_membership_source_urls:
+        has_changes = True
+        enriched['collection_membership_source_urls'] = collection_membership_source_urls
+        enriched['collection_membership_source_url'] = collection_membership_source_urls[0]
+
+    return enriched if has_changes else item
 
 
 def _parse_coord_to_lat_lon(coord_value: str) -> tuple[float, float] | None:
@@ -812,9 +1197,11 @@ PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX p: <http://www.wikidata.org/prop/>
 PREFIX ps: <http://www.wikidata.org/prop/statement/>
 PREFIX pq: <http://www.wikidata.org/prop/qualifier/>
+PREFIX pr: <http://www.wikidata.org/prop/reference/>
 PREFIX wikibase: <http://wikiba.se/ontology#>
 PREFIX bd: <http://www.bigdata.com/rdf#>
 PREFIX schema: <http://schema.org/>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 
 SELECT DISTINCT
   ?item ?coord ?itemLabel ?itemDescription ?dateModified ?commonsCategory ?imageName
@@ -830,6 +1217,15 @@ SELECT DISTINCT
   ?instanceOfP31 ?instanceOfP31Label ?instanceOfP31WikipediaUrl
   ?architecturalStyleP149 ?architecturalStyleP149Label ?architecturalStyleP149WikipediaUrl
   ?routeInstructionP2795
+  ?collectionMembershipReferenceP5008 ?collectionMembershipSourceUrl
+  ?collectionMembershipSourceTitle ?collectionMembershipSourceTitleLang ?collectionMembershipSourceAuthor
+  ?collectionMembershipSourcePublicationDate ?collectionMembershipSourceRetrievedDate
+  ?collectionMembershipSourcePublisherP123 ?collectionMembershipSourcePublisherP123Label
+  ?collectionMembershipSourcePublisherP123WikipediaUrl
+  ?collectionMembershipSourcePublishedInP1433 ?collectionMembershipSourcePublishedInP1433Label
+  ?collectionMembershipSourcePublishedInP1433WikipediaUrl
+  ?collectionMembershipSourceLanguageOfWorkP407 ?collectionMembershipSourceLanguageOfWorkP407Label
+  ?collectionMembershipSourceLanguageOfWorkP407WikipediaUrl
   ?ysoIdP2347 ?yleTopicIdP8309 ?kantoIdP8980 ?protectedBuildingsRegisterInFinlandIdP5310
   ?rkyNationalBuiltHeritageEnvironmentIdP4009
   ?permanentBuildingNumberVtjPrtP3824 ?protectedBuildingsRegisterInFinlandBuildingIdP5313
@@ -903,6 +1299,40 @@ WHERE {{
     }}
   }}
   OPTIONAL {{ ?item wdt:P2795 ?routeInstructionP2795 . }}
+  OPTIONAL {{
+    ?item p:P5008 ?collectionMembershipStatementP5008 .
+    ?collectionMembershipStatementP5008 ps:P5008 wd:Q138299296 .
+    ?collectionMembershipStatementP5008 prov:wasDerivedFrom ?collectionMembershipReferenceP5008 .
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P854 ?collectionMembershipSourceUrl . }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P1476 ?collectionMembershipSourceTitle .
+      BIND(LANG(?collectionMembershipSourceTitle) AS ?collectionMembershipSourceTitleLang)
+    }}
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P2093 ?collectionMembershipSourceAuthor . }}
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P577 ?collectionMembershipSourcePublicationDate . }}
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P813 ?collectionMembershipSourceRetrievedDate . }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P123 ?collectionMembershipSourcePublisherP123 .
+      OPTIONAL {{
+        ?collectionMembershipSourcePublisherP123WikipediaUrl schema:about ?collectionMembershipSourcePublisherP123 ;
+                                                      schema:isPartOf <{wikipedia_site_url}> .
+      }}
+    }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P1433 ?collectionMembershipSourcePublishedInP1433 .
+      OPTIONAL {{
+        ?collectionMembershipSourcePublishedInP1433WikipediaUrl schema:about ?collectionMembershipSourcePublishedInP1433 ;
+                                                                schema:isPartOf <{wikipedia_site_url}> .
+      }}
+    }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P407 ?collectionMembershipSourceLanguageOfWorkP407 .
+      OPTIONAL {{
+        ?collectionMembershipSourceLanguageOfWorkP407WikipediaUrl schema:about ?collectionMembershipSourceLanguageOfWorkP407 ;
+                                                                  schema:isPartOf <{wikipedia_site_url}> .
+      }}
+    }}
+  }}
   OPTIONAL {{ ?item wdt:P2347 ?ysoIdP2347 . }}
   OPTIONAL {{ ?item wdt:P8309 ?yleTopicIdP8309 . }}
   OPTIONAL {{ ?item wdt:P8980 ?kantoIdP8980 . }}
@@ -944,9 +1374,11 @@ PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX p: <http://www.wikidata.org/prop/>
 PREFIX ps: <http://www.wikidata.org/prop/statement/>
 PREFIX pq: <http://www.wikidata.org/prop/qualifier/>
+PREFIX pr: <http://www.wikidata.org/prop/reference/>
 PREFIX wikibase: <http://wikiba.se/ontology#>
 PREFIX bd: <http://www.bigdata.com/rdf#>
 PREFIX schema: <http://schema.org/>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 
 SELECT DISTINCT
   ?item ?coord ?itemLabel ?itemDescription ?dateModified ?commonsCategory ?imageName
@@ -962,6 +1394,15 @@ SELECT DISTINCT
   ?instanceOfP31 ?instanceOfP31Label ?instanceOfP31WikipediaUrl
   ?architecturalStyleP149 ?architecturalStyleP149Label ?architecturalStyleP149WikipediaUrl
   ?routeInstructionP2795
+  ?collectionMembershipReferenceP5008 ?collectionMembershipSourceUrl
+  ?collectionMembershipSourceTitle ?collectionMembershipSourceTitleLang ?collectionMembershipSourceAuthor
+  ?collectionMembershipSourcePublicationDate ?collectionMembershipSourceRetrievedDate
+  ?collectionMembershipSourcePublisherP123 ?collectionMembershipSourcePublisherP123Label
+  ?collectionMembershipSourcePublisherP123WikipediaUrl
+  ?collectionMembershipSourcePublishedInP1433 ?collectionMembershipSourcePublishedInP1433Label
+  ?collectionMembershipSourcePublishedInP1433WikipediaUrl
+  ?collectionMembershipSourceLanguageOfWorkP407 ?collectionMembershipSourceLanguageOfWorkP407Label
+  ?collectionMembershipSourceLanguageOfWorkP407WikipediaUrl
   ?ysoIdP2347 ?yleTopicIdP8309 ?kantoIdP8980 ?protectedBuildingsRegisterInFinlandIdP5310
   ?rkyNationalBuiltHeritageEnvironmentIdP4009
   ?permanentBuildingNumberVtjPrtP3824 ?protectedBuildingsRegisterInFinlandBuildingIdP5313
@@ -1035,6 +1476,40 @@ WHERE {{
     }}
   }}
   OPTIONAL {{ ?item wdt:P2795 ?routeInstructionP2795 . }}
+  OPTIONAL {{
+    ?item p:P5008 ?collectionMembershipStatementP5008 .
+    ?collectionMembershipStatementP5008 ps:P5008 wd:Q138299296 .
+    ?collectionMembershipStatementP5008 prov:wasDerivedFrom ?collectionMembershipReferenceP5008 .
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P854 ?collectionMembershipSourceUrl . }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P1476 ?collectionMembershipSourceTitle .
+      BIND(LANG(?collectionMembershipSourceTitle) AS ?collectionMembershipSourceTitleLang)
+    }}
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P2093 ?collectionMembershipSourceAuthor . }}
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P577 ?collectionMembershipSourcePublicationDate . }}
+    OPTIONAL {{ ?collectionMembershipReferenceP5008 pr:P813 ?collectionMembershipSourceRetrievedDate . }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P123 ?collectionMembershipSourcePublisherP123 .
+      OPTIONAL {{
+        ?collectionMembershipSourcePublisherP123WikipediaUrl schema:about ?collectionMembershipSourcePublisherP123 ;
+                                                      schema:isPartOf <{wikipedia_site_url}> .
+      }}
+    }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P1433 ?collectionMembershipSourcePublishedInP1433 .
+      OPTIONAL {{
+        ?collectionMembershipSourcePublishedInP1433WikipediaUrl schema:about ?collectionMembershipSourcePublishedInP1433 ;
+                                                                schema:isPartOf <{wikipedia_site_url}> .
+      }}
+    }}
+    OPTIONAL {{
+      ?collectionMembershipReferenceP5008 pr:P407 ?collectionMembershipSourceLanguageOfWorkP407 .
+      OPTIONAL {{
+        ?collectionMembershipSourceLanguageOfWorkP407WikipediaUrl schema:about ?collectionMembershipSourceLanguageOfWorkP407 ;
+                                                                  schema:isPartOf <{wikipedia_site_url}> .
+      }}
+    }}
+  }}
   OPTIONAL {{ ?item wdt:P2347 ?ysoIdP2347 . }}
   OPTIONAL {{ ?item wdt:P8309 ?yleTopicIdP8309 . }}
   OPTIONAL {{ ?item wdt:P8980 ?kantoIdP8980 . }}
@@ -1120,7 +1595,13 @@ def fetch_locations(
 
         merged_items: list[dict[str, Any]] = []
         for uri, item in formatted_by_uri.items():
-            merged_items.append(_apply_architect_values(item, bindings_by_uri.get(uri, [])))
+            merged_items.append(
+                _apply_architect_values(
+                    item,
+                    bindings_by_uri.get(uri, []),
+                    preferred_lang=lang,
+                )
+            )
 
         return merged_items
 
@@ -1169,7 +1650,11 @@ def fetch_location_detail(
 
         first_uri = next(iter(formatted_by_uri))
         first_item = formatted_by_uri[first_uri]
-        return _apply_architect_values(first_item, bindings_by_uri.get(first_uri, []))
+        return _apply_architect_values(
+            first_item,
+            bindings_by_uri.get(first_uri, []),
+            preferred_lang=lang,
+        )
 
     if last_error is not None and not had_successful_query:
         raise last_error
@@ -1422,6 +1907,117 @@ def _first_citoid_item(payload: Any) -> dict[str, Any]:
     return {}
 
 
+def _append_unique_citoid_text(target: list[str], value: Any) -> None:
+    normalized = _clean_citoid_text(value)
+    if normalized and normalized not in target:
+        target.append(normalized)
+
+
+def _citoid_text_candidates(value: Any, max_depth: int = 3) -> list[str]:
+    candidates: list[str] = []
+
+    def _collect(raw_value: Any, depth: int) -> None:
+        if raw_value is None or depth > max_depth:
+            return
+        if isinstance(raw_value, (str, int, float)):
+            _append_unique_citoid_text(candidates, raw_value)
+            return
+        if isinstance(raw_value, list):
+            for item in raw_value:
+                _collect(item, depth + 1)
+            return
+        if not isinstance(raw_value, dict):
+            return
+
+        preferred_keys = (
+            'literal',
+            'name',
+            'title',
+            'label',
+            'text',
+            'value',
+            'raw',
+            'publisher',
+            'publicationTitle',
+            'container-title',
+            'containerTitle',
+            'journal',
+            'periodical',
+            'websiteTitle',
+            'blogTitle',
+            'seriesTitle',
+            'language',
+            'lang',
+            'code',
+            'iso',
+            'iso6391',
+            'iso6392',
+        )
+        for key in preferred_keys:
+            if key in raw_value:
+                _collect(raw_value.get(key), depth + 1)
+
+    _collect(value, 0)
+    return candidates
+
+
+def _citoid_candidate_strings(item: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
+    candidates: list[str] = []
+    for key in keys:
+        if key not in item:
+            continue
+        for candidate in _citoid_text_candidates(item.get(key)):
+            if candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
+def _resolve_citoid_source_qid(candidates: list[str], lang: str | None = None) -> str:
+    if not candidates:
+        return ''
+
+    normalized_candidates: list[str] = []
+    for candidate in candidates:
+        normalized = _clean_citoid_text(candidate)
+        if normalized and normalized not in normalized_candidates:
+            normalized_candidates.append(normalized)
+
+    for allow_fuzzy in (False, True):
+        for candidate in normalized_candidates:
+            resolved = _resolve_wikidata_qid(candidate, lang=lang, allow_fuzzy=allow_fuzzy)
+            if resolved:
+                return resolved
+    return ''
+
+
+def _source_language_from_citoid(value: Any, fallback: str) -> str:
+    language_candidates = _citoid_text_candidates(value)
+    for candidate in language_candidates:
+        normalized = candidate.strip().lower()
+        if re.fullmatch(r'[a-z]{2,12}(?:-[a-z0-9]{2,8})?', normalized):
+            return _wikidata_language_code(normalized.split('-', 1)[0], fallback=fallback)
+        if re.fullmatch(r'[a-z]{2,12}', normalized):
+            return _wikidata_language_code(normalized, fallback=fallback)
+    for candidate in language_candidates:
+        normalized = candidate.strip().lower()
+        if re.fullmatch(r'[a-z]{2,12}', normalized):
+            return normalized
+    return _wikidata_language_code('', fallback=fallback)
+
+
+def _citoid_source_language_qid(value: Any, lang: str | None = None) -> str:
+    language_candidates = _citoid_text_candidates(value)
+    for candidate in language_candidates:
+        normalized = candidate.strip().lower()
+        if not normalized:
+            continue
+        code = normalized.split('-', 1)[0]
+        mapped_qid = _CITOID_LANGUAGE_QID_BY_CODE.get(code)
+        if mapped_qid:
+            return mapped_qid
+    return _resolve_citoid_source_qid(language_candidates, lang=lang)
+
+
 def fetch_citoid_metadata(source_url: str, lang: str | None = None) -> dict[str, str]:
     normalized_url = str(source_url or '').strip()
     if not normalized_url.startswith('http://') and not normalized_url.startswith('https://'):
@@ -1473,10 +2069,41 @@ def fetch_citoid_metadata(source_url: str, lang: str | None = None) -> dict[str,
         or item.get('published')
         or item.get('publication_date')
     )
-    source_lang = _wikidata_language_code(
-        _clean_citoid_text(item.get('language') or item.get('lang') or ''),
+    source_language_value = item.get('language') if item.get('language') is not None else item.get('lang')
+    source_lang = _source_language_from_citoid(
+        source_language_value,
         fallback=_wikidata_language_code(str(lang or ''), fallback='en'),
     )
+    source_published_in_qid = _resolve_citoid_source_qid(
+        _citoid_candidate_strings(
+            item,
+            (
+                'publicationTitle',
+                'container-title',
+                'containerTitle',
+                'container',
+                'journal',
+                'periodical',
+                'websiteTitle',
+                'blogTitle',
+                'seriesTitle',
+            ),
+        ),
+        lang=lang,
+    )
+    source_publisher_qid = _resolve_citoid_source_qid(
+        _citoid_candidate_strings(
+            item,
+            (
+                'publisher',
+                'publicationPublisher',
+                'publisherName',
+                'organization',
+            ),
+        ),
+        lang=lang,
+    )
+    source_language_qid = _citoid_source_language_qid(source_language_value, lang=lang)
 
     return {
         'source_url': normalized_url,
@@ -1484,8 +2111,9 @@ def fetch_citoid_metadata(source_url: str, lang: str | None = None) -> dict[str,
         'source_title_language': source_lang,
         'source_author': author,
         'source_publication_date': publication_date,
-        'source_published_in_p1433': '',
-        'source_language_of_work_p407': '',
+        'source_publisher_p123': source_publisher_qid,
+        'source_published_in_p1433': source_published_in_qid,
+        'source_language_of_work_p407': source_language_qid,
     }
 
 
@@ -2417,6 +3045,7 @@ def _wikidata_source_snaks(
     source_title_language: str = '',
     source_author: str = '',
     source_publication_date: str = '',
+    source_publisher_p123: str = '',
     source_published_in_p1433: str = '',
     source_language_of_work_p407: str = '',
 ) -> dict[str, Any]:
@@ -2478,6 +3107,16 @@ def _wikidata_source_snaks(
             }
         ]
 
+    normalized_publisher_qid = _extract_wikidata_qid(str(source_publisher_p123 or '').strip())
+    if normalized_publisher_qid:
+        snaks['P123'] = [
+            {
+                'snaktype': 'value',
+                'property': 'P123',
+                'datavalue': {'value': _wikidata_entity_datavalue(normalized_publisher_qid), 'type': 'wikibase-entityid'},
+            }
+        ]
+
     normalized_published_in_qid = _extract_wikidata_qid(str(source_published_in_p1433 or '').strip())
     if normalized_published_in_qid:
         snaks['P1433'] = [
@@ -2510,6 +3149,7 @@ def _set_claim_reference(
     source_title_language: str = '',
     source_author: str = '',
     source_publication_date: str = '',
+    source_publisher_p123: str = '',
     source_published_in_p1433: str = '',
     source_language_of_work_p407: str = '',
 ) -> None:
@@ -2519,6 +3159,7 @@ def _set_claim_reference(
         source_title_language=source_title_language,
         source_author=source_author,
         source_publication_date=source_publication_date,
+        source_publisher_p123=source_publisher_p123,
         source_published_in_p1433=source_published_in_p1433,
         source_language_of_work_p407=source_language_of_work_p407,
     )
@@ -2569,6 +3210,7 @@ def _create_wikidata_claim(
     source_title_language: str = '',
     source_author: str = '',
     source_publication_date: str = '',
+    source_publisher_p123: str = '',
     source_published_in_p1433: str = '',
     source_language_of_work_p407: str = '',
     qualifiers: dict[str, Any] | None = None,
@@ -2599,6 +3241,7 @@ def _create_wikidata_claim(
         source_title_language=source_title_language,
         source_author=source_author,
         source_publication_date=source_publication_date,
+        source_publisher_p123=source_publisher_p123,
         source_published_in_p1433=source_published_in_p1433,
         source_language_of_work_p407=source_language_of_work_p407,
     )
@@ -2690,6 +3333,7 @@ def _reference_has_entity_snak(snaks: dict[str, Any], property_id: str, expected
 def _claim_has_matching_source_reference(
     claim: dict[str, Any],
     source_url: str,
+    source_publisher_p123: str = '',
     source_published_in_p1433: str = '',
     source_language_of_work_p407: str = '',
 ) -> bool:
@@ -2708,6 +3352,8 @@ def _claim_has_matching_source_reference(
         if not isinstance(snaks, dict):
             continue
         if not _reference_has_string_snak(snaks, 'P854', normalized_url):
+            continue
+        if not _reference_has_entity_snak(snaks, 'P123', source_publisher_p123):
             continue
         if not _reference_has_entity_snak(snaks, 'P1433', source_published_in_p1433):
             continue
@@ -2728,9 +3374,9 @@ def ensure_wikidata_collection_membership(
     source_title_language: str = '',
     source_author: str = '',
     source_publication_date: str = '',
+    source_publisher_p123: str = '',
     source_published_in_p1433: str = '',
     source_language_of_work_p407: str = '',
-    reason_p958: str = '',
 ) -> dict[str, Any]:
     normalized_entity_qid = _extract_wikidata_qid(entity_id)
     if not normalized_entity_qid:
@@ -2764,9 +3410,9 @@ def ensure_wikidata_collection_membership(
     normalized_source_title_language = str(source_title_language or '').strip()
     normalized_source_author = str(source_author or '').strip()
     normalized_source_publication_date = str(source_publication_date or '').strip()
+    normalized_source_publisher_qid = _extract_wikidata_qid(str(source_publisher_p123 or '').strip())
     normalized_source_published_in_qid = _extract_wikidata_qid(str(source_published_in_p1433 or '').strip())
     normalized_source_language_of_work_qid = _extract_wikidata_qid(str(source_language_of_work_p407 or '').strip())
-    normalized_reason_p958 = str(reason_p958 or '').strip()
 
     matching_collection_claims = _entity_item_claims(claims, 'P5008', normalized_collection_qid)
     already_listed = bool(matching_collection_claims)
@@ -2782,20 +3428,24 @@ def ensure_wikidata_collection_membership(
             source_title_language=normalized_source_title_language,
             source_author=normalized_source_author,
             source_publication_date=normalized_source_publication_date,
+            source_publisher_p123=normalized_source_publisher_qid,
             source_published_in_p1433=normalized_source_published_in_qid,
             source_language_of_work_p407=normalized_source_language_of_work_qid,
-            qualifiers={'P958': normalized_reason_p958},
         )
-    elif normalized_source_url:
+    else:
         for claim in matching_collection_claims:
             if not isinstance(claim, dict):
                 continue
             claim_id = str(claim.get('id') or '').strip()
             if not claim_id:
                 continue
+
+            if not normalized_source_url:
+                continue
             if _claim_has_matching_source_reference(
                 claim,
                 normalized_source_url,
+                source_publisher_p123=normalized_source_publisher_qid,
                 source_published_in_p1433=normalized_source_published_in_qid,
                 source_language_of_work_p407=normalized_source_language_of_work_qid,
             ):
@@ -2810,6 +3460,7 @@ def ensure_wikidata_collection_membership(
                 source_title_language=normalized_source_title_language,
                 source_author=normalized_source_author,
                 source_publication_date=normalized_source_publication_date,
+                source_publisher_p123=normalized_source_publisher_qid,
                 source_published_in_p1433=normalized_source_published_in_qid,
                 source_language_of_work_p407=normalized_source_language_of_work_qid,
             )

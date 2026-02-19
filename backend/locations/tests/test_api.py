@@ -119,12 +119,37 @@ class LocationApiTests(APITestCase):
             'location_p276': 'https://www.wikidata.org/entity/Q33',
             'location_p276_label': 'Finland',
             'location_p276_wikipedia_url': 'https://en.wikipedia.org/wiki/Finland',
+            'collection_membership_source_url': 'https://example.org/source-1',
+            'collection_membership_source_urls': [
+                'https://example.org/source-1',
+                'https://example.org/source-2',
+            ],
+            'collection_membership_sources': [
+                {
+                    'url': 'https://example.org/source-1',
+                    'title': 'Example article',
+                    'title_language': 'en',
+                    'author': 'Example Author',
+                    'publication_date': '+2026-01-02T00:00:00Z',
+                    'retrieved_date': '',
+                    'publisher': {'value': 'http://www.wikidata.org/entity/Q12321', 'label': 'Example Publisher'},
+                    'published_in': {'value': 'http://www.wikidata.org/entity/Q12345', 'label': 'Example Newspaper'},
+                    'language_of_work': {'value': 'http://www.wikidata.org/entity/Q1860', 'label': 'English'},
+                }
+            ],
         }
 
         response = self.client.get(reverse('location-detail', kwargs={'location_id': encoded}), {'lang': 'en'})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['location_p276_wikipedia_url'], 'https://en.wikipedia.org/wiki/Finland')
+        self.assertEqual(response.data['collection_membership_source_url'], 'https://example.org/source-1')
+        self.assertEqual(
+            response.data['collection_membership_source_urls'],
+            ['https://example.org/source-1', 'https://example.org/source-2'],
+        )
+        self.assertEqual(len(response.data['collection_membership_sources']), 1)
+        self.assertEqual(response.data['collection_membership_sources'][0]['title'], 'Example article')
 
     @patch('locations.views.fetch_location_detail')
     def test_location_detail_404(self, fetch_location_detail_mock):
@@ -196,6 +221,7 @@ class LocationApiTests(APITestCase):
             'source_title_language': 'en',
             'source_author': 'Example Author',
             'source_publication_date': '2026-01-21',
+            'source_publisher_p123': '',
             'source_published_in_p1433': '',
             'source_language_of_work_p407': '',
         }
@@ -368,9 +394,9 @@ class LocationApiTests(APITestCase):
                 'source_title_language': 'en',
                 'source_author': 'Example Author',
                 'source_publication_date': '2026-01-21',
+                'source_publisher_p123': 'Q12321',
                 'source_published_in_p1433': 'Q12345',
                 'source_language_of_work_p407': 'Q1860',
-                'reason_p958': 'Included because demolition threat is documented.',
             },
             format='json',
         )
@@ -387,9 +413,9 @@ class LocationApiTests(APITestCase):
             source_title_language='en',
             source_author='Example Author',
             source_publication_date='2026-01-21',
+            source_publisher_p123='Q12321',
             source_published_in_p1433='Q12345',
             source_language_of_work_p407='Q1860',
-            reason_p958='Included because demolition threat is documented.',
         )
 
     @patch('locations.views.ensure_wikidata_collection_membership')
@@ -437,7 +463,6 @@ class LocationApiTests(APITestCase):
             {
                 'wikidata_item': 'Q1757',
                 'source_url': 'https://example.org/article',
-                'reason_p958': 'Included because demolition threat is documented.',
             },
             format='json',
         )
@@ -452,9 +477,9 @@ class LocationApiTests(APITestCase):
             source_title_language='',
             source_author='',
             source_publication_date='',
+            source_publisher_p123='',
             source_published_in_p1433='',
             source_language_of_work_p407='',
-            reason_p958='Included because demolition threat is documented.',
         )
 
     @patch('locations.views.ensure_wikidata_collection_membership')

@@ -799,11 +799,11 @@ class WikidataAddExistingAPIView(BaseLocationAPIView):
                 source_title_language=str(serializer.validated_data.get('source_title_language') or '').strip(),
                 source_author=str(serializer.validated_data.get('source_author') or '').strip(),
                 source_publication_date=str(serializer.validated_data.get('source_publication_date') or '').strip(),
+                source_publisher_p123=str(serializer.validated_data.get('source_publisher_p123') or '').strip(),
                 source_published_in_p1433=str(serializer.validated_data.get('source_published_in_p1433') or '').strip(),
                 source_language_of_work_p407=str(
                     serializer.validated_data.get('source_language_of_work_p407') or ''
                 ).strip(),
-                reason_p958=str(serializer.validated_data.get('reason_p958') or '').strip(),
             )
         except (ExternalServiceError, WikidataWriteError) as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)

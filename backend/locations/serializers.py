@@ -28,6 +28,7 @@ class LocationSerializer(serializers.Serializer):
     location_type = serializers.CharField(required=False, allow_blank=True)
     wikidata_item = serializers.CharField(required=False, allow_blank=True)
     address_text = serializers.CharField(required=False, allow_blank=True)
+    address_text_values = serializers.ListField(child=serializers.DictField(), required=False)
     postal_code = serializers.CharField(required=False, allow_blank=True)
     municipality_p131 = serializers.CharField(required=False, allow_blank=True)
     municipality_p131_label = serializers.CharField(required=False, allow_blank=True)
@@ -35,6 +36,7 @@ class LocationSerializer(serializers.Serializer):
     located_on_street_p669 = serializers.CharField(required=False, allow_blank=True)
     located_on_street_p669_label = serializers.CharField(required=False, allow_blank=True)
     located_on_street_p669_wikipedia_url = serializers.URLField(required=False, allow_blank=True)
+    located_on_street_p669_values = serializers.ListField(child=serializers.DictField(), required=False)
     house_number_p670 = serializers.CharField(required=False, allow_blank=True)
     heritage_designation_p1435 = serializers.CharField(required=False, allow_blank=True)
     heritage_designation_p1435_label = serializers.CharField(required=False, allow_blank=True)
@@ -71,6 +73,12 @@ class LocationSerializer(serializers.Serializer):
     architect_p84_label = serializers.CharField(required=False, allow_blank=True)
     architect_p84_wikipedia_url = serializers.URLField(required=False, allow_blank=True)
     architect_p84_values = serializers.ListField(child=serializers.DictField(), required=False)
+    collection_membership_source_url = serializers.URLField(required=False, allow_blank=True)
+    collection_membership_source_urls = serializers.ListField(
+        child=serializers.URLField(allow_blank=True),
+        required=False,
+    )
+    collection_membership_sources = serializers.ListField(child=serializers.DictField(), required=False)
     official_closure_date_p3999 = serializers.CharField(required=False, allow_blank=True)
     state_of_use_p5817 = serializers.CharField(required=False, allow_blank=True)
     state_of_use_p5817_label = serializers.CharField(required=False, allow_blank=True)
@@ -122,9 +130,9 @@ class AddExistingWikidataItemSerializer(serializers.Serializer):
     source_title_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
     source_author = serializers.CharField(max_length=500, required=False, allow_blank=True)
     source_publication_date = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    source_publisher_p123 = serializers.CharField(max_length=32, required=False, allow_blank=True)
     source_published_in_p1433 = serializers.CharField(max_length=32, required=False, allow_blank=True)
     source_language_of_work_p407 = serializers.CharField(max_length=32, required=False, allow_blank=True)
-    reason_p958 = serializers.CharField(max_length=1000, required=False, allow_blank=True)
 
     def validate_wikidata_item(self, value: str) -> str:
         qid = _normalize_wikidata_qid(value)
@@ -147,6 +155,15 @@ class AddExistingWikidataItemSerializer(serializers.Serializer):
         if re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', raw_value):
             return raw_value
         raise serializers.ValidationError('source_publication_date must use YYYY or YYYY-MM or YYYY-MM-DD format.')
+
+    def validate_source_publisher_p123(self, value: str) -> str:
+        raw_value = (value or '').strip()
+        if not raw_value:
+            return ''
+        qid = _normalize_wikidata_qid(raw_value)
+        if not qid:
+            raise serializers.ValidationError('source_publisher_p123 must be a valid Wikidata QID.')
+        return qid
 
     def validate_source_published_in_p1433(self, value: str) -> str:
         raw_value = (value or '').strip()

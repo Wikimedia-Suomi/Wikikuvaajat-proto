@@ -250,6 +250,34 @@ textarea:focus-visible {
   font-size: 1.1rem;
 }
 
+.detail-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.detail-title-qid {
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 0.78em;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.detail-title-qid-link {
+  color: inherit;
+  font-weight: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted #94a3b8;
+}
+
+.detail-title-qid-link:hover,
+.detail-title-qid-link:focus-visible {
+  color: #334155;
+  border-bottom-color: #64748b;
+}
+
 .location-thumb,
 .detail-image {
   margin: 0;
@@ -344,6 +372,40 @@ textarea:focus-visible {
   grid-column: 1 / -1;
 }
 
+.detail-image {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.detail-media-caption {
+  margin: 0;
+  display: grid;
+  gap: 0.18rem;
+  text-align: center;
+  color: #334155;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.detail-media-caption-line {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.24rem;
+}
+
+.detail-media-caption-label {
+  color: #0f3f58;
+  font-weight: 700;
+}
+
+.detail-media-caption-standalone {
+  grid-column: 1 / -1;
+}
+
 .meta-list {
   margin: 0;
   display: grid;
@@ -393,6 +455,26 @@ textarea:focus-visible {
   margin: 0;
   font-size: 1rem;
   color: #0f3f58;
+}
+
+.source-citation-list {
+  list-style: decimal;
+  margin: 0;
+  padding-left: 1.4rem;
+  display: grid;
+  gap: 0.38rem;
+}
+
+.source-citation-item {
+  margin: 0;
+  line-height: 1.45;
+  color: #1e293b;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+}
+
+.source-citation-text {
+  font-style: normal;
 }
 
 .card-actions {
@@ -1132,6 +1214,10 @@ textarea:focus-visible {
 
   .meta-row dt {
     font-size: 0.71rem;
+  }
+
+  .source-citation-item {
+    font-size: 0.89rem;
   }
 
   .map-canvas {

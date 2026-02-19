@@ -153,6 +153,7 @@ class WikidataWriteAuthTests(SimpleTestCase):
             source_title_language='fi',
             source_author='Example Author',
             source_publication_date='2026-01-21',
+            source_publisher_p123='Q12321',
             source_published_in_p1433='Q12345',
             source_language_of_work_p407='Q1860',
         )
@@ -162,6 +163,7 @@ class WikidataWriteAuthTests(SimpleTestCase):
         self.assertIn('P1476', snaks)
         self.assertIn('P2093', snaks)
         self.assertIn('P577', snaks)
+        self.assertIn('P123', snaks)
         self.assertIn('P1433', snaks)
         self.assertIn('P407', snaks)
         self.assertEqual(
@@ -169,6 +171,10 @@ class WikidataWriteAuthTests(SimpleTestCase):
             {'text': 'Example article', 'language': 'fi'},
         )
         self.assertEqual(snaks['P2093'][0]['datavalue']['value'], 'Example Author')
+        self.assertEqual(
+            snaks['P123'][0]['datavalue']['value']['numeric-id'],
+            12321,
+        )
         self.assertEqual(
             snaks['P1433'][0]['datavalue']['value']['numeric-id'],
             12345,
@@ -214,6 +220,7 @@ class WikidataWriteAuthTests(SimpleTestCase):
             source_title_language='fi',
             source_author='Example Author',
             source_publication_date='2026-01-21',
+            source_publisher_p123='Q12321',
             source_published_in_p1433='Q12345',
             source_language_of_work_p407='Q1860',
         )
@@ -228,6 +235,7 @@ class WikidataWriteAuthTests(SimpleTestCase):
             source_title_language='fi',
             source_author='Example Author',
             source_publication_date='2026-01-21',
+            source_publisher_p123='Q12321',
             source_published_in_p1433='Q12345',
             source_language_of_work_p407='Q1860',
         )
@@ -327,6 +335,7 @@ class WikidataWriteAuthTests(SimpleTestCase):
             'Q1757',
             collection_qid='Q138299296',
             source_url='https://example.org/article',
+            source_publisher_p123='Q12321',
             source_published_in_p1433='Q12345',
             source_language_of_work_p407='Q1860',
         )
@@ -341,10 +350,10 @@ class WikidataWriteAuthTests(SimpleTestCase):
             source_title_language='',
             source_author='',
             source_publication_date='',
+            source_publisher_p123='Q12321',
             source_published_in_p1433='Q12345',
             source_language_of_work_p407='Q1860',
         )
-
 
 class LocationServiceTests(SimpleTestCase):
     @patch('locations.services.requests.get')
@@ -369,27 +378,58 @@ class LocationServiceTests(SimpleTestCase):
         self.assertEqual(result['source_title_language'], 'fi')
         self.assertEqual(result['source_author'], 'Example Author')
         self.assertEqual(result['source_publication_date'], '2026-01-21')
+        self.assertEqual(result['source_publisher_p123'], '')
         self.assertEqual(result['source_published_in_p1433'], '')
-        self.assertEqual(result['source_language_of_work_p407'], '')
+        self.assertEqual(result['source_language_of_work_p407'], 'Q1412')
+
+    @patch('locations.services._resolve_wikidata_qid')
+    @patch('locations.services.requests.get')
+    def test_fetch_citoid_metadata_autofills_p123_p1433_and_p407(
+        self,
+        requests_get_mock,
+        resolve_wikidata_qid_mock,
+    ):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.url = 'https://en.wikipedia.org/api/rest_v1/data/citation/mediawiki/https%3A%2F%2Fexample.org'
+        response.json.return_value = [
+            {
+                'title': 'Example article',
+                'publisher': 'Example Publishing House',
+                'publicationTitle': 'Example Newspaper',
+                'language': 'en',
+            }
+        ]
+        requests_get_mock.return_value = response
+        resolve_wikidata_qid_mock.side_effect = lambda value, **kwargs: {
+            'Example Publishing House': 'Q12321',
+            'Example Newspaper': 'Q12345',
+        }.get(value, '')
+
+        result = services.fetch_citoid_metadata('https://example.org/article', lang='fi')
+
+        self.assertEqual(result['source_publisher_p123'], 'Q12321')
+        self.assertEqual(result['source_published_in_p1433'], 'Q12345')
+        self.assertEqual(result['source_language_of_work_p407'], 'Q1860')
 
     def test_fetch_citoid_metadata_requires_http_url(self):
         with self.assertRaises(ExternalServiceError):
             services.fetch_citoid_metadata('example.org/article')
 
-    @patch('locations.services.requests.get')
-    def test_query_sparql_raises_for_non_json_response(self, requests_get_mock):
+    @patch('locations.services.requests.post')
+    def test_query_sparql_raises_for_non_json_response(self, requests_post_mock):
         response = Mock()
         response.raise_for_status.return_value = None
         response.json.side_effect = ValueError('invalid json')
         response.text = '<html>Too many requests</html>'
         response.headers = {'Content-Type': 'text/html'}
-        requests_get_mock.return_value = response
+        requests_post_mock.return_value = response
 
         with self.assertRaises(SPARQLServiceError):
             _query_sparql('SELECT * WHERE { ?s ?p ?o } LIMIT 1')
 
-    @patch('locations.services.requests.get')
-    def test_query_sparql_accepts_xml_response(self, requests_get_mock):
+    @patch('locations.services.requests.post')
+    def test_query_sparql_accepts_xml_response(self, requests_post_mock):
         response = Mock()
         response.raise_for_status.return_value = None
         response.json.side_effect = ValueError('invalid json')
@@ -409,7 +449,7 @@ class LocationServiceTests(SimpleTestCase):
   </results>
 </sparql>"""
         response.headers = {'Content-Type': 'application/sparql-results+xml;charset=utf-8'}
-        requests_get_mock.return_value = response
+        requests_post_mock.return_value = response
 
         result = _query_sparql('SELECT ?item ?itemLabel ?coord WHERE { ?s ?p ?o } LIMIT 1')
 
@@ -463,7 +503,9 @@ class LocationServiceTests(SimpleTestCase):
         self.assertIn('PREFIX p: <http://www.wikidata.org/prop/>', first_query)
         self.assertIn('PREFIX ps: <http://www.wikidata.org/prop/statement/>', first_query)
         self.assertIn('PREFIX pq: <http://www.wikidata.org/prop/qualifier/>', first_query)
+        self.assertIn('PREFIX pr: <http://www.wikidata.org/prop/reference/>', first_query)
         self.assertIn('PREFIX schema: <http://schema.org/>', first_query)
+        self.assertIn('PREFIX prov: <http://www.w3.org/ns/prov#>', first_query)
         self.assertIn('?locationP276WikipediaUrl schema:about ?locationP276', first_query)
         self.assertIn('?architectP84WikipediaUrl schema:about ?architectP84', first_query)
         self.assertIn('?stateOfUseP5817WikipediaUrl schema:about ?stateOfUseP5817', first_query)
@@ -472,6 +514,21 @@ class LocationServiceTests(SimpleTestCase):
         self.assertIn('?heritageDesignationP1435WikipediaUrl schema:about ?heritageDesignationP1435', first_query)
         self.assertIn('?instanceOfP31WikipediaUrl schema:about ?instanceOfP31', first_query)
         self.assertIn('?architecturalStyleP149WikipediaUrl schema:about ?architecturalStyleP149', first_query)
+        self.assertIn('?item p:P5008 ?collectionMembershipStatementP5008', first_query)
+        self.assertIn('?collectionMembershipStatementP5008 ps:P5008 wd:Q138299296', first_query)
+        self.assertIn('?collectionMembershipStatementP5008 prov:wasDerivedFrom ?collectionMembershipReferenceP5008', first_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P1476 ?collectionMembershipSourceTitle', first_query)
+        self.assertIn('BIND(LANG(?collectionMembershipSourceTitle) AS ?collectionMembershipSourceTitleLang)', first_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P2093 ?collectionMembershipSourceAuthor', first_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P577 ?collectionMembershipSourcePublicationDate', first_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P813 ?collectionMembershipSourceRetrievedDate', first_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P123 ?collectionMembershipSourcePublisherP123', first_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P1433 ?collectionMembershipSourcePublishedInP1433', first_query)
+        self.assertIn(
+            '?collectionMembershipReferenceP5008 pr:P407 ?collectionMembershipSourceLanguageOfWorkP407',
+            first_query,
+        )
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P854 ?collectionMembershipSourceUrl', first_query)
         self.assertIn('schema:dateModified ?dateModified', first_query)
         self.assertIn(
             f'schema:isPartOf <https://{expected_lang}.wikipedia.org/>',
@@ -536,6 +593,7 @@ class LocationServiceTests(SimpleTestCase):
                     'architectP84': {'value': 'https://www.wikidata.org/entity/Q6313'},
                     'architectP84Label': {'value': 'Carl Ludwig Engel'},
                     'architectP84WikipediaUrl': {'value': 'https://fi.wikipedia.org/wiki/Carl_Ludwig_Engel'},
+                    'collectionMembershipSourceUrl': {'value': 'https://example.org/source-1'},
                     'officialClosureDateP3999': {'value': '1990-01-01T00:00:00Z'},
                     'stateOfUseP5817': {'value': 'https://www.wikidata.org/entity/Q30185'},
                     'stateOfUseP5817Label': {'value': 'in use'},
@@ -600,6 +658,8 @@ class LocationServiceTests(SimpleTestCase):
             results[0]['architect_p84_wikipedia_url'],
             'https://fi.wikipedia.org/wiki/Carl_Ludwig_Engel',
         )
+        self.assertEqual(results[0]['collection_membership_source_url'], 'https://example.org/source-1')
+        self.assertEqual(results[0]['collection_membership_source_urls'], ['https://example.org/source-1'])
         self.assertEqual(results[0]['official_closure_date_p3999'], '1990-01-01T00:00:00Z')
         self.assertEqual(results[0]['state_of_use_p5817'], 'https://www.wikidata.org/entity/Q30185')
         self.assertEqual(results[0]['state_of_use_p5817_label'], 'in use')
@@ -699,6 +759,188 @@ class LocationServiceTests(SimpleTestCase):
         )
 
     @patch('locations.services._query_sparql')
+    def test_fetch_locations_prefers_ui_language_for_address_text_p6375(self, query_mock):
+        query_mock.return_value = [
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'addressTextP6375': {'value': 'Suomenkatu 1', 'xml:lang': 'fi'},
+            },
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'addressTextP6375': {'value': 'Svenska gatan 1', 'xml:lang': 'sv'},
+            },
+        ]
+
+        results = fetch_locations(lang='sv', limit=1)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['address_text'], 'Svenska gatan 1')
+        self.assertEqual(
+            results[0]['address_text_values'],
+            [
+                {'text': 'Suomenkatu 1', 'language': 'fi'},
+                {'text': 'Svenska gatan 1', 'language': 'sv'},
+            ],
+        )
+
+    @patch('locations.services._query_sparql')
+    def test_fetch_locations_falls_back_to_other_language_for_address_text_p6375(self, query_mock):
+        query_mock.return_value = [
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'addressTextP6375': {'value': 'Suomenkatu 1', 'xml:lang': 'fi'},
+            },
+        ]
+
+        results = fetch_locations(lang='sv', limit=1)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['address_text'], 'Suomenkatu 1')
+        self.assertEqual(
+            results[0]['address_text_values'],
+            [
+                {'text': 'Suomenkatu 1', 'language': 'fi'},
+            ],
+        )
+
+    @patch('locations.services._query_sparql')
+    def test_fetch_locations_aggregates_multiple_located_on_street_addresses(self, query_mock):
+        query_mock.return_value = [
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'locatedOnStreetP669': {'value': 'https://www.wikidata.org/entity/Q111'},
+                'locatedOnStreetP669Label': {'value': 'Street A'},
+                'houseNumberP670': {'value': '1'},
+            },
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'locatedOnStreetP669': {'value': 'https://www.wikidata.org/entity/Q222'},
+                'locatedOnStreetP669Label': {'value': 'Street B'},
+                'houseNumberP670': {'value': '2'},
+            },
+        ]
+
+        results = fetch_locations(lang='fi', limit=1)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]['located_on_street_p669_values'],
+            [
+                {
+                    'value': 'https://www.wikidata.org/entity/Q111',
+                    'label': 'Street A',
+                    'wikipedia_url': '',
+                    'house_number': '1',
+                },
+                {
+                    'value': 'https://www.wikidata.org/entity/Q222',
+                    'label': 'Street B',
+                    'wikipedia_url': '',
+                    'house_number': '2',
+                },
+            ],
+        )
+        self.assertEqual(results[0]['located_on_street_p669'], 'https://www.wikidata.org/entity/Q111')
+        self.assertEqual(results[0]['located_on_street_p669_label'], 'Street A')
+        self.assertEqual(results[0]['house_number_p670'], '1')
+
+    @patch('locations.services._query_sparql')
+    def test_fetch_locations_aggregates_multiple_collection_membership_source_urls(self, query_mock):
+        query_mock.return_value = [
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'collectionMembershipReferenceP5008': {'value': 'http://www.wikidata.org/reference/ref-1'},
+                'collectionMembershipSourceUrl': {'value': 'https://example.org/source-1'},
+                'collectionMembershipSourceTitle': {'value': 'Example article', 'xml:lang': 'fi'},
+                'collectionMembershipSourceAuthor': {'value': 'Author One'},
+                'collectionMembershipSourcePublicationDate': {'value': '+2026-01-02T00:00:00Z'},
+                'collectionMembershipSourcePublisherP123': {'value': 'http://www.wikidata.org/entity/Q12321'},
+                'collectionMembershipSourcePublisherP123Label': {'value': 'Example Publisher'},
+            },
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'collectionMembershipReferenceP5008': {'value': 'http://www.wikidata.org/reference/ref-2'},
+                'collectionMembershipSourceUrl': {'value': 'https://example.org/source-2'},
+                'collectionMembershipSourcePublishedInP1433': {'value': 'http://www.wikidata.org/entity/Q12345'},
+                'collectionMembershipSourcePublishedInP1433Label': {'value': 'Example Newspaper'},
+                'collectionMembershipSourceLanguageOfWorkP407': {'value': 'http://www.wikidata.org/entity/Q1860'},
+                'collectionMembershipSourceLanguageOfWorkP407Label': {'value': 'English'},
+            },
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'collectionMembershipReferenceP5008': {'value': 'http://www.wikidata.org/reference/ref-1'},
+                'collectionMembershipSourceAuthor': {'value': 'Author Two'},
+            },
+        ]
+
+        results = fetch_locations(lang='fi', limit=1)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['collection_membership_source_url'], 'https://example.org/source-1')
+        self.assertEqual(
+            results[0]['collection_membership_source_urls'],
+            [
+                'https://example.org/source-1',
+                'https://example.org/source-2',
+            ],
+        )
+        self.assertEqual(
+            results[0]['collection_membership_sources'],
+            [
+                {
+                    'url': 'https://example.org/source-1',
+                    'title': 'Example article',
+                    'title_language': 'fi',
+                    'publication_date': '+2026-01-02T00:00:00Z',
+                    'retrieved_date': '',
+                    'publisher': {
+                        'value': 'http://www.wikidata.org/entity/Q12321',
+                        'label': 'Example Publisher',
+                        'wikipedia_url': '',
+                    },
+                    'published_in': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'language_of_work': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'author': 'Author One, Author Two',
+                },
+                {
+                    'url': 'https://example.org/source-2',
+                    'title': '',
+                    'title_language': '',
+                    'publication_date': '',
+                    'retrieved_date': '',
+                    'publisher': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'published_in': {
+                        'value': 'http://www.wikidata.org/entity/Q12345',
+                        'label': 'Example Newspaper',
+                        'wikipedia_url': '',
+                    },
+                    'language_of_work': {
+                        'value': 'http://www.wikidata.org/entity/Q1860',
+                        'label': 'English',
+                        'wikipedia_url': '',
+                    },
+                    'author': '',
+                },
+            ],
+        )
+
+    @patch('locations.services._query_sparql')
     def test_fetch_locations_supports_sparql_image_url_binding(self, query_mock):
         query_mock.return_value = [
             {
@@ -773,12 +1015,29 @@ class LocationServiceTests(SimpleTestCase):
         self.assertIn('PREFIX schema: <http://schema.org/>', detail_query)
         self.assertIn('PREFIX p: <http://www.wikidata.org/prop/>', detail_query)
         self.assertIn('PREFIX pq: <http://www.wikidata.org/prop/qualifier/>', detail_query)
+        self.assertIn('PREFIX pr: <http://www.wikidata.org/prop/reference/>', detail_query)
+        self.assertIn('PREFIX prov: <http://www.w3.org/ns/prov#>', detail_query)
         self.assertIn('?locationP276WikipediaUrl schema:about ?locationP276', detail_query)
         self.assertIn('?municipalityP131WikipediaUrl schema:about ?municipalityP131', detail_query)
         self.assertIn('?locatedOnStreetP669WikipediaUrl schema:about ?locatedOnStreetP669', detail_query)
         self.assertIn('?heritageDesignationP1435WikipediaUrl schema:about ?heritageDesignationP1435', detail_query)
         self.assertIn('?instanceOfP31WikipediaUrl schema:about ?instanceOfP31', detail_query)
         self.assertIn('?architecturalStyleP149WikipediaUrl schema:about ?architecturalStyleP149', detail_query)
+        self.assertIn('?item p:P5008 ?collectionMembershipStatementP5008', detail_query)
+        self.assertIn('?collectionMembershipStatementP5008 ps:P5008 wd:Q138299296', detail_query)
+        self.assertIn('?collectionMembershipStatementP5008 prov:wasDerivedFrom ?collectionMembershipReferenceP5008', detail_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P1476 ?collectionMembershipSourceTitle', detail_query)
+        self.assertIn('BIND(LANG(?collectionMembershipSourceTitle) AS ?collectionMembershipSourceTitleLang)', detail_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P2093 ?collectionMembershipSourceAuthor', detail_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P577 ?collectionMembershipSourcePublicationDate', detail_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P813 ?collectionMembershipSourceRetrievedDate', detail_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P123 ?collectionMembershipSourcePublisherP123', detail_query)
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P1433 ?collectionMembershipSourcePublishedInP1433', detail_query)
+        self.assertIn(
+            '?collectionMembershipReferenceP5008 pr:P407 ?collectionMembershipSourceLanguageOfWorkP407',
+            detail_query,
+        )
+        self.assertIn('?collectionMembershipReferenceP5008 pr:P854 ?collectionMembershipSourceUrl', detail_query)
         self.assertIn(f'schema:isPartOf <https://{expected_lang}.wikipedia.org/>', detail_query)
 
     @patch('locations.services._query_sparql')
@@ -818,6 +1077,73 @@ class LocationServiceTests(SimpleTestCase):
                     'value': 'https://www.wikidata.org/entity/Q263212',
                     'label': 'Eliel Saarinen',
                     'wikipedia_url': 'https://fi.wikipedia.org/wiki/Eliel_Saarinen',
+                },
+            ],
+        )
+
+    @patch('locations.services._query_sparql')
+    def test_fetch_location_detail_aggregates_multiple_collection_membership_source_urls(self, query_mock):
+        query_mock.return_value = [
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'collectionMembershipReferenceP5008': {'value': 'http://www.wikidata.org/reference/ref-1'},
+                'collectionMembershipSourceUrl': {'value': 'https://example.org/source-1'},
+                'collectionMembershipSourceTitle': {'value': 'Example article', 'xml:lang': 'fi'},
+                'collectionMembershipSourceAuthor': {'value': 'Author One'},
+                'collectionMembershipSourceRetrievedDate': {'value': '+2026-01-03T00:00:00Z'},
+            },
+            {
+                'item': {'value': 'https://www.wikidata.org/entity/Q1757'},
+                'itemLabel': {'value': 'Helsinki'},
+                'coord': {'value': 'Point(24.9384 60.1699)'},
+                'collectionMembershipReferenceP5008': {'value': 'http://www.wikidata.org/reference/ref-2'},
+                'collectionMembershipSourceUrl': {'value': 'https://example.org/source-2'},
+                'collectionMembershipSourceLanguageOfWorkP407': {'value': 'http://www.wikidata.org/entity/Q1860'},
+                'collectionMembershipSourceLanguageOfWorkP407Label': {'value': 'English'},
+            },
+        ]
+
+        result = fetch_location_detail('https://www.wikidata.org/entity/Q1757', lang='fi')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['collection_membership_source_url'], 'https://example.org/source-1')
+        self.assertEqual(
+            result['collection_membership_source_urls'],
+            [
+                'https://example.org/source-1',
+                'https://example.org/source-2',
+            ],
+        )
+        self.assertEqual(
+            result['collection_membership_sources'],
+            [
+                {
+                    'url': 'https://example.org/source-1',
+                    'title': 'Example article',
+                    'title_language': 'fi',
+                    'publication_date': '',
+                    'retrieved_date': '+2026-01-03T00:00:00Z',
+                    'publisher': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'published_in': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'language_of_work': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'author': 'Author One',
+                },
+                {
+                    'url': 'https://example.org/source-2',
+                    'title': '',
+                    'title_language': '',
+                    'publication_date': '',
+                    'retrieved_date': '',
+                    'publisher': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'published_in': {'value': '', 'label': '', 'wikipedia_url': ''},
+                    'language_of_work': {
+                        'value': 'http://www.wikidata.org/entity/Q1860',
+                        'label': 'English',
+                        'wikipedia_url': '',
+                    },
+                    'author': '',
                 },
             ],
         )

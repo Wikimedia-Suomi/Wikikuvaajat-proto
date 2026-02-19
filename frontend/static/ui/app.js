@@ -702,10 +702,12 @@
       language: 'Language',
       detailHint: 'Choose a location from list or map.',
       basicInformation: 'Basic information',
+      sourcesSectionTitle: 'Sources',
       mediaAndCounts: 'Media and image counts',
       additionalProperties: 'Additional properties',
       sourceUri: 'Source URI',
       wikidataIdLabel: 'WIKIDATA ID',
+      collectionMembershipSourcesP5008: 'Collection membership sources (P5008)',
       project: 'Project',
       defaultProject: 'Default data',
       newProject: 'New Project',
@@ -837,7 +839,7 @@
       createModeLocalDesc: 'Create a locally stored draft as before.',
       addExistingWikidataTitle: 'Add Existing Wikidata Item',
       addExistingWikidataHelp: 'Select an existing Wikidata item. The app adds P5008 = Q138299296 only if it is missing.',
-      addExistingWikidataSourceHelp: 'Add a source and reason for why this item belongs on the list.',
+      addExistingWikidataSourceHelp: 'Add a source for this item.',
       addExistingWikidataSuccess: 'Added successfully. The list has been refreshed.',
       createNewWikidataTitle: 'Create New Wikidata Item',
       createNewWikidataHelp: 'Required for building: label, description, P31, P17, P131, coordinates.',
@@ -855,15 +857,17 @@
       sourceTitleLanguage: 'Title language',
       sourceAuthor: 'Source author',
       sourcePublicationDate: 'Publication date',
+      sourceRetrievedDate: 'Retrieved date',
       sourcePublicationDatePlaceholder: 'YYYY-MM-DD',
+      sourcePublisherP123: 'Publisher (P123)',
+      sourcePublisherPlaceholder: 'Search publisher (Wikidata)...',
+      sourcePublisherInvalid: 'Publisher (P123) must be a valid Wikidata item.',
       sourcePublishedInP1433: 'Published in (P1433)',
       sourcePublishedInPlaceholder: 'Search publication (Wikidata)...',
       sourcePublishedInInvalid: 'Published in (P1433) must be a valid Wikidata item.',
       sourceLanguageOfWorkP407: 'Language of work or name (P407)',
       sourceLanguageOfWorkPlaceholder: 'Search language (Wikidata)...',
       sourceLanguageOfWorkInvalid: 'Language of work or name (P407) must be a valid Wikidata item.',
-      reasonP958: 'Reason (P958)',
-      reasonP958Placeholder: 'Free-form explanation for why the item belongs on the list.',
       sourceUrlRequiredForAddExisting: 'Source URL is required.',
       autofillSourceWithCitoid: 'Auto-fill metadata (Citoid)',
       citoidAutofillLoading: 'Loading source metadata...',
@@ -922,10 +926,12 @@
       language: 'Språk',
       detailHint: 'Välj en plats från lista eller karta.',
       basicInformation: 'Grundinformation',
+      sourcesSectionTitle: 'Källor',
       mediaAndCounts: 'Media och bildantal',
       additionalProperties: 'Ytterligare egenskaper',
       sourceUri: 'Käll-URI',
       wikidataIdLabel: 'WIKIDATA ID',
+      collectionMembershipSourcesP5008: 'Källor för listmedlemskap (P5008)',
       project: 'Projekt',
       defaultProject: 'Standarddata',
       newProject: 'Nytt projekt',
@@ -1057,7 +1063,7 @@
       createModeLocalDesc: 'Skapa ett lokalt sparat utkast som tidigare.',
       addExistingWikidataTitle: 'Lägg till befintligt Wikidata-objekt',
       addExistingWikidataHelp: 'Välj ett befintligt Wikidata-objekt. Appen lägger till P5008 = Q138299296 om den saknas.',
-      addExistingWikidataSourceHelp: 'Lägg till en källa och en motivering till varför objektet hör till listan.',
+      addExistingWikidataSourceHelp: 'Lägg till en källa för objektet.',
       addExistingWikidataSuccess: 'Tillägg lyckades. Listan har uppdaterats.',
       createNewWikidataTitle: 'Skapa nytt Wikidata-objekt',
       createNewWikidataHelp: 'Obligatoriskt för byggnad: etikett, beskrivning, P31, P17, P131, koordinater.',
@@ -1075,15 +1081,17 @@
       sourceTitleLanguage: 'Titelns språk',
       sourceAuthor: 'Källans författare',
       sourcePublicationDate: 'Publiceringsdatum',
+      sourceRetrievedDate: 'Hämtningsdatum',
       sourcePublicationDatePlaceholder: 'ÅÅÅÅ-MM-DD',
+      sourcePublisherP123: 'Utgivare (P123)',
+      sourcePublisherPlaceholder: 'Sök utgivare (Wikidata)...',
+      sourcePublisherInvalid: 'Utgivare (P123) måste vara ett giltigt Wikidata-objekt.',
       sourcePublishedInP1433: 'Publicerad i (P1433)',
       sourcePublishedInPlaceholder: 'Sök publikation (Wikidata)...',
       sourcePublishedInInvalid: 'Publicerad i (P1433) måste vara ett giltigt Wikidata-objekt.',
       sourceLanguageOfWorkP407: 'Språk för verk eller namn (P407)',
       sourceLanguageOfWorkPlaceholder: 'Sök språk (Wikidata)...',
       sourceLanguageOfWorkInvalid: 'Språk för verk eller namn (P407) måste vara ett giltigt Wikidata-objekt.',
-      reasonP958: 'Motivering (P958)',
-      reasonP958Placeholder: 'Fri text som förklarar varför objektet hör till listan.',
       sourceUrlRequiredForAddExisting: 'Käll-URL krävs.',
       autofillSourceWithCitoid: 'Autofyll metadata (Citoid)',
       citoidAutofillLoading: 'Hämtar källmetadata...',
@@ -1142,10 +1150,12 @@
       language: 'Kieli',
       detailHint: 'Valitse sijainti listasta tai kartalta.',
       basicInformation: 'Perustiedot',
+      sourcesSectionTitle: 'Lisätietoja',
       mediaAndCounts: 'Media ja kuvamäärät',
       additionalProperties: 'Lisäominaisuudet',
       sourceUri: 'Lähde-URI',
       wikidataIdLabel: 'WIKIDATA ID',
+      collectionMembershipSourcesP5008: 'Listajäsenyyden lähteet (P5008)',
       project: 'Projekti',
       defaultProject: 'Oletusdata',
       newProject: 'Uusi projekti',
@@ -1277,7 +1287,7 @@
       createModeLocalDesc: 'Luo paikallisesti tallennettava luonnos kuten aiemmin.',
       addExistingWikidataTitle: 'Lisää olemassa oleva Wikidata-kohde',
       addExistingWikidataHelp: 'Valitse olemassa oleva Wikidata-kohde ja lisää se Wikikuvaajien vaarassa olevat rakennukset -listaan.',
-      addExistingWikidataSourceHelp: 'Lisää lähde ja perustelu sille, miksi kohde kuuluu listaan.',
+      addExistingWikidataSourceHelp: 'Lisää kohteelle lähde.',
       addExistingWikidataSuccess: 'Lisäys onnistui. Luettelo päivitettiin.',
       createNewWikidataTitle: 'Luo uusi Wikidata-kohde',
       createNewWikidataHelp: 'Rakennukselle pakolliset tiedot: nimi, kuvaus, P31, P17, P131 ja koordinaatit.',
@@ -1295,15 +1305,17 @@
       sourceTitleLanguage: 'Otsikon kieli',
       sourceAuthor: 'Lähteen tekijä',
       sourcePublicationDate: 'Julkaisupäivä',
+      sourceRetrievedDate: 'Hakupäivä',
       sourcePublicationDatePlaceholder: 'YYYY-MM-DD',
+      sourcePublisherP123: 'Julkaisija (P123)',
+      sourcePublisherPlaceholder: 'Hae julkaisija (Wikidata)...',
+      sourcePublisherInvalid: 'Julkaisija (P123) pitää olla kelvollinen Wikidata-kohde.',
       sourcePublishedInP1433: 'Julkaistu teoksessa (P1433)',
       sourcePublishedInPlaceholder: 'Hae julkaisua (Wikidata)...',
       sourcePublishedInInvalid: 'Julkaistu teoksessa (P1433) pitää olla kelvollinen Wikidata-kohde.',
       sourceLanguageOfWorkP407: 'Teoksen tai nimen kieli (P407)',
       sourceLanguageOfWorkPlaceholder: 'Hae kieli (Wikidata)...',
       sourceLanguageOfWorkInvalid: 'Teoksen tai nimen kieli (P407) pitää olla kelvollinen Wikidata-kohde.',
-      reasonP958: 'Perustelu (P958)',
-      reasonP958Placeholder: 'Vapaamuotoinen selitys sille, miksi kohde kuuluu listaan.',
       sourceUrlRequiredForAddExisting: 'Lähde-URL vaaditaan.',
       autofillSourceWithCitoid: 'Täytä metatiedot automaattisesti (Citoid)',
       citoidAutofillLoading: 'Haetaan lähteen metatietoja...',
@@ -3648,6 +3660,228 @@ LIMIT {{limit}}`,
         return street || houseNumber
       }
 
+      function normalizeAddressPart(value) {
+        if (value === null || value === undefined) {
+          return ''
+        }
+        return String(value)
+          .toLowerCase()
+          .replace(/[.,;:()]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      }
+
+      function addressContainsPart(addressText, partText) {
+        const normalizedAddress = normalizeAddressPart(addressText)
+        const normalizedPart = normalizeAddressPart(partText)
+        if (!normalizedAddress || !normalizedPart) {
+          return false
+        }
+        if (normalizedAddress === normalizedPart) {
+          return true
+        }
+        return ` ${normalizedAddress} `.includes(` ${normalizedPart} `)
+      }
+
+      function uniqueAddressTexts(values) {
+        const uniqueValues = []
+        const seenValues = new Set()
+        for (const rawValue of values) {
+          const text = String(rawValue || '').trim()
+          if (!text) {
+            continue
+          }
+          const dedupeKey = normalizeAddressPart(text)
+          if (!dedupeKey || seenValues.has(dedupeKey)) {
+            continue
+          }
+          seenValues.add(dedupeKey)
+          uniqueValues.push(text)
+        }
+        return uniqueValues
+      }
+
+      function localizedAddressTextsP6375(item) {
+        if (!item || typeof item !== 'object') {
+          return []
+        }
+
+        const fallbackAddressText = String(item.address_text || '').trim()
+        const rawValues = Array.isArray(item.address_text_values) ? item.address_text_values : []
+        const values = []
+        for (const rawValue of rawValues) {
+          const entry = rawValue && typeof rawValue === 'object' ? rawValue : {}
+          const text = String(entry.text || entry.value || '').trim()
+          if (!text) {
+            continue
+          }
+          const language = String(entry.language || entry.lang || '').trim().toLowerCase()
+          values.push({ text, language })
+        }
+        if (!values.length) {
+          return fallbackAddressText ? [fallbackAddressText] : []
+        }
+
+        const preferredLocale = normalizeSupportedLocale(locale.value) || ''
+        const languageCandidates = []
+        if (preferredLocale) {
+          languageCandidates.push(preferredLocale)
+          const baseLanguage = preferredLocale.split('-')[0]
+          if (baseLanguage) {
+            languageCandidates.push(baseLanguage)
+          }
+        }
+
+        for (const candidate of languageCandidates) {
+          const normalizedCandidate = String(candidate || '').trim().toLowerCase()
+          if (!normalizedCandidate) {
+            continue
+          }
+          const matches = values
+            .filter((entry) => entry.language === normalizedCandidate)
+            .map((entry) => entry.text)
+          if (matches.length) {
+            return uniqueAddressTexts(matches)
+          }
+        }
+
+        if (fallbackAddressText) {
+          return [fallbackAddressText]
+        }
+
+        const noLanguageMatches = values
+          .filter((entry) => !entry.language)
+          .map((entry) => entry.text)
+        if (noLanguageMatches.length) {
+          return uniqueAddressTexts(noLanguageMatches)
+        }
+
+        const firstLanguage = String(values[0].language || '').trim().toLowerCase()
+        if (firstLanguage) {
+          return uniqueAddressTexts(
+            values
+              .filter((entry) => entry.language === firstLanguage)
+              .map((entry) => entry.text)
+          )
+        }
+        return uniqueAddressTexts(values.map((entry) => entry.text))
+      }
+
+      function streetAddressTextsP669P670(item) {
+        if (!item || typeof item !== 'object') {
+          return []
+        }
+
+        const rawValues = Array.isArray(item.located_on_street_p669_values)
+          ? item.located_on_street_p669_values
+          : []
+        const streetValues = []
+        for (const rawValue of rawValues) {
+          const entry = rawValue && typeof rawValue === 'object' ? rawValue : {}
+          const streetText = combineStreetAndHouseNumber(
+            linkedEntityLabel(entry.value, entry.label),
+            entry.house_number || entry.houseNumber || '',
+          )
+          if (streetText) {
+            streetValues.push(streetText)
+          }
+        }
+
+        if (!streetValues.length) {
+          const fallbackStreetText = combineStreetAndHouseNumber(
+            linkedEntityLabel(item.located_on_street_p669, item.located_on_street_p669_label),
+            item.house_number_p670,
+          )
+          if (fallbackStreetText) {
+            streetValues.push(fallbackStreetText)
+          }
+        }
+
+        return uniqueAddressTexts(streetValues)
+      }
+
+      function inlineAddressText(item) {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+
+        const addressTextsP6375 = localizedAddressTextsP6375(item)
+        const streetTextsP669P670 = streetAddressTextsP669P670(item)
+        const postalCodeP281 = String(item.postal_code || '').trim()
+        const municipalityTextP131 = linkedEntityLabel(item.municipality_p131, item.municipality_p131_label)
+
+        const buildAddressLine = (baseAddressText) => {
+          const parts = []
+          const addPart = (rawPart) => {
+            const part = String(rawPart || '').trim()
+            if (!part) {
+              return
+            }
+            let replaceIndex = -1
+            for (let index = 0; index < parts.length; index += 1) {
+              const existingPart = parts[index]
+              if (normalizeAddressPart(existingPart) === normalizeAddressPart(part)) {
+                return
+              }
+              if (addressContainsPart(existingPart, part)) {
+                return
+              }
+              if (addressContainsPart(part, existingPart)) {
+                replaceIndex = index
+              }
+            }
+            if (replaceIndex >= 0) {
+              parts[replaceIndex] = part
+              return
+            }
+            parts.push(part)
+          }
+
+          addPart(baseAddressText)
+          addPart(postalCodeP281)
+          addPart(municipalityTextP131)
+          return parts.join(', ')
+        }
+
+        const lines = []
+        const addLine = (rawLine) => {
+          const line = String(rawLine || '').trim()
+          if (!line) {
+            return
+          }
+          let replaceIndex = -1
+          for (let index = 0; index < lines.length; index += 1) {
+            const existingLine = lines[index]
+            if (normalizeAddressPart(existingLine) === normalizeAddressPart(line)) {
+              return
+            }
+            if (addressContainsPart(existingLine, line)) {
+              return
+            }
+            if (addressContainsPart(line, existingLine)) {
+              replaceIndex = index
+            }
+          }
+          if (replaceIndex >= 0) {
+            lines[replaceIndex] = line
+            return
+          }
+          lines.push(line)
+        }
+
+        for (const addressText of addressTextsP6375) {
+          addLine(buildAddressLine(addressText))
+        }
+        for (const streetText of streetTextsP669P670) {
+          addLine(buildAddressLine(streetText))
+        }
+
+        if (!lines.length) {
+          return ''
+        }
+        return lines.join('; ')
+      }
+
       function externalIdHref(idType, value) {
         if (typeof value !== 'string') {
           return ''
@@ -3730,6 +3964,153 @@ LIMIT {{limit}}`,
         )
       )
 
+      function normalizeSourceEntity(rawEntity, fallbackValue = '', fallbackLabel = '', fallbackWikipediaUrl = '') {
+        const entity = rawEntity && typeof rawEntity === 'object' ? rawEntity : {}
+        const value = (
+          (typeof entity.value === 'string' ? entity.value : '') ||
+          (typeof fallbackValue === 'string' ? fallbackValue : '')
+        ).trim()
+        const label = (
+          (typeof entity.label === 'string' ? entity.label : '') ||
+          (typeof fallbackLabel === 'string' ? fallbackLabel : '')
+        ).trim()
+        const wikipedia_url = (
+          (typeof entity.wikipedia_url === 'string' ? entity.wikipedia_url : '') ||
+          (typeof fallbackWikipediaUrl === 'string' ? fallbackWikipediaUrl : '')
+        ).trim()
+        return { value, label, wikipedia_url }
+      }
+
+      const collectionMembershipSources = computed(() => {
+        if (!location.value || typeof location.value !== 'object') {
+          return []
+        }
+
+        const sources = []
+        const seenSources = new Set()
+        const addSource = (rawSource) => {
+          const source = rawSource && typeof rawSource === 'object' ? rawSource : {}
+          const url = String(source.url || source.source_url || '').trim()
+          const title = String(source.title || source.source_title || '').trim()
+          const title_language = String(source.title_language || source.source_title_language || '').trim()
+          const author = String(source.author || source.source_author || '').trim()
+          const publication_date = String(
+            source.publication_date || source.source_publication_date || ''
+          ).trim()
+          const retrieved_date = String(source.retrieved_date || source.source_retrieved_date || '').trim()
+          const publisher = normalizeSourceEntity(
+            source.publisher,
+            source.source_publisher_p123 || source.publisher_value || '',
+            source.source_publisher_p123_label || source.publisher_label || '',
+            source.source_publisher_p123_wikipedia_url || source.publisher_wikipedia_url || '',
+          )
+          const published_in = normalizeSourceEntity(
+            source.published_in,
+            source.source_published_in_p1433 || source.published_in_value || '',
+            source.source_published_in_p1433_label || source.published_in_label || '',
+            source.source_published_in_p1433_wikipedia_url || source.published_in_wikipedia_url || '',
+          )
+          const language_of_work = normalizeSourceEntity(
+            source.language_of_work,
+            source.source_language_of_work_p407 || source.language_of_work_value || '',
+            source.source_language_of_work_p407_label || source.language_of_work_label || '',
+            source.source_language_of_work_p407_wikipedia_url || source.language_of_work_wikipedia_url || '',
+          )
+
+          if (
+            !url &&
+            !title &&
+            !title_language &&
+            !author &&
+            !publication_date &&
+            !retrieved_date &&
+            !publisher.value &&
+            !publisher.label &&
+            !published_in.value &&
+            !published_in.label
+          ) {
+            return
+          }
+
+          const dedupeKey = url
+            ? `url|${url.toLowerCase()}`
+            : [
+                title.toLowerCase(),
+                author.toLowerCase(),
+                publication_date.toLowerCase(),
+                retrieved_date.toLowerCase(),
+                publisher.value.toLowerCase(),
+                published_in.value.toLowerCase(),
+              ].join('|')
+          if (seenSources.has(dedupeKey)) {
+            return
+          }
+          seenSources.add(dedupeKey)
+          const citationParts = []
+          if (author) {
+            citationParts.push({ text: author, href: '' })
+          }
+
+          const titleOrUrl = title || url
+          if (titleOrUrl) {
+            const titleText = title ? `"${title}"` : titleOrUrl
+            citationParts.push({
+              text: titleText,
+              href: isHttpUrl(url) ? url : '',
+            })
+          }
+
+          const appendEntityCitationPart = (entity) => {
+            if (!entity || typeof entity !== 'object') {
+              return
+            }
+            const text = linkedEntityLabel(entity.value, entity.label)
+            const href = linkedEntityHref(entity.value, entity.label, entity.wikipedia_url)
+            if (!text) {
+              return
+            }
+            citationParts.push({ text, href })
+          }
+          appendEntityCitationPart(published_in)
+          appendEntityCitationPart(publisher)
+          if (publication_date) {
+            citationParts.push({
+              text: formatWikidataDate(publication_date),
+              href: '',
+            })
+          }
+
+          if (citationParts.length === 0) {
+            citationParts.push({ text: t('noValue'), href: '' })
+          }
+
+          sources.push({
+            url,
+            title,
+            title_language,
+            author,
+            publication_date,
+            retrieved_date,
+            publisher,
+            published_in,
+            citation_parts: citationParts,
+          })
+        }
+
+        if (Array.isArray(location.value.collection_membership_sources)) {
+          for (const source of location.value.collection_membership_sources) {
+            addSource(source)
+          }
+        }
+        if (Array.isArray(location.value.collection_membership_source_urls)) {
+          for (const sourceUrl of location.value.collection_membership_source_urls) {
+            addSource({ url: sourceUrl })
+          }
+        }
+        addSource({ url: location.value.collection_membership_source_url })
+        return sources
+      })
+
       function formatWikidataDate(value) {
         if (typeof value !== 'string') {
           return ''
@@ -3810,6 +4191,8 @@ LIMIT {{limit}}`,
         return t('noValue')
       }
 
+      const detailInlineAddress = computed(() => inlineAddressText(location.value))
+
       const hasMediaMetadata = computed(() => {
         if (!location.value) {
           return false
@@ -3817,22 +4200,6 @@ LIMIT {{limit}}`,
         return Boolean(
           location.value.commons_category ||
           preferredImageSource(location.value)
-        )
-      })
-
-      const hasAdditionalProperties = computed(() => {
-        if (!location.value) {
-          return false
-        }
-        const item = location.value
-        return Boolean(
-          item.yso_id_p2347 ||
-          item.kanto_id_p8980 ||
-          item.protected_buildings_register_in_finland_id_p5310 ||
-          item.rky_national_built_heritage_environment_id_p4009 ||
-          item.permanent_building_number_vtj_prt_p3824 ||
-          item.protected_buildings_register_in_finland_building_id_p5313 ||
-          item.helsinki_persistent_building_id_ratu_p8355
         )
       })
 
@@ -3939,15 +4306,18 @@ LIMIT {{limit}}`,
         parentLocationId,
         isHttpUrl,
         isWikidataEntityUri,
+        wikidataQid,
         wikidataEntityUrl,
         wikidataLinkText,
         displayUriLabel,
         linkedEntityLabel,
         linkedEntityHref,
         sourceUriLabel,
+        detailInlineAddress,
         wikidataItemLabel,
         parentUriLabel,
         architectP84Entries,
+        collectionMembershipSources,
         formatWikidataDate,
         formatImageCount,
         hasImageCount,
@@ -3958,7 +4328,6 @@ LIMIT {{limit}}`,
         formatCoordinates,
         locationDisplayName,
         hasMediaMetadata,
-        hasAdditionalProperties,
         detailsAriaLabel,
         handleImageLoadError,
         externalIdHref,
@@ -3975,7 +4344,20 @@ LIMIT {{limit}}`,
         <article v-else-if="location" class="detail-card">
           <header class="detail-header">
             <div class="detail-header-main">
-              <h2>{{ locationDisplayName(location) }}</h2>
+              <h2 class="detail-title">
+                <span>{{ locationDisplayName(location) }}</span>
+                <span
+                  v-if="wikidataQid(location.uri || location.wikidata_item)"
+                  class="detail-title-qid"
+                >
+                  (<a
+                    class="detail-title-qid-link"
+                    :href="wikidataEntityUrl(location.uri || location.wikidata_item)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >{{ wikidataQid(location.uri || location.wikidata_item) }}</a>)
+                </span>
+              </h2>
               <p v-if="location.description" class="detail-description">{{ location.description }}</p>
             </div>
             <div v-if="canSaveImage" class="detail-header-actions">
@@ -3988,7 +4370,7 @@ LIMIT {{limit}}`,
             </div>
           </header>
           <div
-            v-if="(location.image_thumb_url || location.image_url) || hasDetailMapCoordinates"
+            v-if="(location.image_thumb_url || location.image_url) || hasDetailMapCoordinates || hasMediaMetadata"
             class="detail-media-layout"
           >
             <figure v-if="location.image_thumb_url || location.image_url" class="detail-image">
@@ -3999,6 +4381,32 @@ LIMIT {{limit}}`,
                 loading="lazy"
                 @error="(event) => handleImageLoadError(event, location.image_url)"
               />
+              <figcaption v-if="hasMediaMetadata" class="detail-media-caption" :aria-label="t('mediaAndCounts')">
+                <span v-if="location.commons_category" class="detail-media-caption-line">
+                  <span class="detail-media-caption-label">{{ t('commonsCategory') }}:</span>
+                  <a
+                    v-if="isHttpUrl(location.commons_category_url)"
+                    :href="location.commons_category_url"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ location.commons_category }}
+                  </a>
+                  <span v-else>{{ location.commons_category }}</span>
+                </span>
+                <span v-if="preferredImageSource(location)" class="detail-media-caption-line">
+                  <span class="detail-media-caption-label">{{ commonsImagesLabel(location) }}:</span>
+                  <a
+                    v-if="preferredImageHref(location)"
+                    :href="preferredImageHref(location)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ formatImageCount(preferredImageCount(location)) }}
+                  </a>
+                  <span v-else>{{ formatImageCount(preferredImageCount(location)) }}</span>
+                </span>
+              </figcaption>
             </figure>
             <div v-if="hasDetailMapCoordinates" class="detail-mini-map-wrap">
               <p class="detail-mini-map-title">{{ t('locationOnMap') }}</p>
@@ -4012,6 +4420,36 @@ LIMIT {{limit}}`,
                 <span>{{ formatCoordinates(location.latitude, location.longitude) }}</span>
               </p>
             </div>
+            <p
+              v-if="hasMediaMetadata && !(location.image_thumb_url || location.image_url)"
+              class="detail-media-caption detail-media-caption-standalone"
+              :aria-label="t('mediaAndCounts')"
+            >
+              <span v-if="location.commons_category" class="detail-media-caption-line">
+                <span class="detail-media-caption-label">{{ t('commonsCategory') }}:</span>
+                <a
+                  v-if="isHttpUrl(location.commons_category_url)"
+                  :href="location.commons_category_url"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {{ location.commons_category }}
+                </a>
+                <span v-else>{{ location.commons_category }}</span>
+              </span>
+              <span v-if="preferredImageSource(location)" class="detail-media-caption-line">
+                <span class="detail-media-caption-label">{{ commonsImagesLabel(location) }}:</span>
+                <a
+                  v-if="preferredImageHref(location)"
+                  :href="preferredImageHref(location)"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {{ formatImageCount(preferredImageCount(location)) }}
+                </a>
+                <span v-else>{{ formatImageCount(preferredImageCount(location)) }}</span>
+              </span>
+            </p>
           </div>
           <section class="detail-section">
             <h3>{{ t('basicInformation') }}</h3>
@@ -4038,45 +4476,9 @@ LIMIT {{limit}}`,
                 <dt>{{ t('coordinates') }}</dt>
                 <dd>{{ formatCoordinates(location.latitude, location.longitude) }}</dd>
               </div>
-              <div v-if="location.postal_code" class="meta-row">
-                <dt>{{ t('postalCodeP281') }}</dt>
-                <dd>{{ location.postal_code }}</dd>
-              </div>
-              <div v-if="location.municipality_p131" class="meta-row">
-                <dt>{{ t('locatedInAdministrativeTerritorialEntityP131') }}</dt>
-                <dd>
-                  <a
-                    v-if="linkedEntityHref(location.municipality_p131, location.municipality_p131_label, location.municipality_p131_wikipedia_url)"
-                    :href="linkedEntityHref(location.municipality_p131, location.municipality_p131_label, location.municipality_p131_wikipedia_url)"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {{ linkedEntityLabel(location.municipality_p131, location.municipality_p131_label) }}
-                  </a>
-                  <span v-else>{{ linkedEntityLabel(location.municipality_p131, location.municipality_p131_label) }}</span>
-                </dd>
-              </div>
-              <div v-if="location.located_on_street_p669" class="meta-row">
-                <dt>{{ t('locatedOnStreetP669') }}</dt>
-                <dd>
-                  <template v-if="location.located_on_street_p669">
-                    <a
-                      v-if="linkedEntityHref(location.located_on_street_p669, location.located_on_street_p669_label, location.located_on_street_p669_wikipedia_url)"
-                      :href="linkedEntityHref(location.located_on_street_p669, location.located_on_street_p669_label, location.located_on_street_p669_wikipedia_url)"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {{ combineStreetAndHouseNumber(linkedEntityLabel(location.located_on_street_p669, location.located_on_street_p669_label), location.house_number_p670) }}
-                    </a>
-                    <span v-else>
-                      {{ combineStreetAndHouseNumber(linkedEntityLabel(location.located_on_street_p669, location.located_on_street_p669_label), location.house_number_p670) }}
-                    </span>
-                  </template>
-                </dd>
-              </div>
-              <div v-else-if="location.address_text" class="meta-row">
-                <dt>{{ t('streetAddressP6375') }}</dt>
-                <dd>{{ location.address_text }}</dd>
+              <div v-if="detailInlineAddress" class="meta-row">
+                <dt>{{ t('addressText') }}</dt>
+                <dd>{{ detailInlineAddress }}</dd>
               </div>
               <div v-if="location.instance_of_p31" class="meta-row">
                 <dt>{{ t('instanceOfP31') }}</dt>
@@ -4137,8 +4539,8 @@ LIMIT {{limit}}`,
                   <span v-else>{{ parentUriLabel(location) }}</span>
                 </dd>
               </div>
-              <div v-if="location.uri" class="meta-row">
-                <dt>{{ isWikidataEntityUri(location.uri) ? t('wikidataIdLabel') : t('sourceUri') }}</dt>
+              <div v-if="location.uri && !isWikidataEntityUri(location.uri)" class="meta-row">
+                <dt>{{ t('sourceUri') }}</dt>
                 <dd>
                   <a
                     v-if="isHttpUrl(location.uri)"
@@ -4204,11 +4606,6 @@ LIMIT {{limit}}`,
                   <span v-else>{{ linkedEntityLabel(location.state_of_use_p5817, location.state_of_use_p5817_label) }}</span>
                 </dd>
               </div>
-            </dl>
-          </section>
-          <section v-if="hasAdditionalProperties" class="detail-section">
-            <h3>{{ t('additionalProperties') }}</h3>
-            <dl class="meta-list detail-meta-list">
               <div v-if="location.yso_id_p2347" class="meta-row">
                 <dt>{{ t('ysoIdP2347') }}</dt>
                 <dd>
@@ -4279,38 +4676,31 @@ LIMIT {{limit}}`,
               </div>
             </dl>
           </section>
-          <section v-if="hasMediaMetadata" class="detail-section">
-            <h3>{{ t('mediaAndCounts') }}</h3>
-            <dl class="meta-list detail-meta-list">
-              <div v-if="location.commons_category" class="meta-row">
-                <dt>{{ t('commonsCategory') }}</dt>
-                <dd>
-                  <a
-                    v-if="isHttpUrl(location.commons_category_url)"
-                    :href="location.commons_category_url"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {{ location.commons_category }}
-                  </a>
-                  <span v-else>{{ location.commons_category }}</span>
-                </dd>
-              </div>
-              <div v-if="preferredImageSource(location)" class="meta-row">
-                <dt>{{ commonsImagesLabel(location) }}</dt>
-                <dd>
-                  <a
-                    v-if="preferredImageHref(location)"
-                    :href="preferredImageHref(location)"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {{ formatImageCount(preferredImageCount(location)) }}
-                  </a>
-                  <span v-else>{{ formatImageCount(preferredImageCount(location)) }}</span>
-                </dd>
-              </div>
-            </dl>
+          <section v-if="collectionMembershipSources.length > 0" class="detail-section">
+            <h3>{{ t('sourcesSectionTitle') }}</h3>
+            <ol class="source-citation-list">
+              <li
+                v-for="(source, index) in collectionMembershipSources"
+                :key="'collection-source-' + index"
+                class="source-citation-item"
+              >
+                <cite class="source-citation-text">
+                  <template v-for="(part, partIndex) in source.citation_parts" :key="'source-citation-' + index + '-' + partIndex">
+                    <span v-if="partIndex > 0">, </span>
+                    <a
+                      v-if="part.href"
+                      :href="part.href"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {{ part.text }}
+                    </a>
+                    <span v-else>{{ part.text }}</span>
+                  </template>
+                  <span>.</span>
+                </cite>
+              </li>
+            </ol>
           </section>
           <section class="detail-tree">
             <h3>{{ t('subLocations') }}</h3>
@@ -4339,9 +4729,6 @@ LIMIT {{limit}}`,
             </ul>
           </section>
           <div class="detail-actions">
-            <button v-if="canCreateSubLocation" type="button" class="secondary-btn" @click="openSubLocationCreator">
-              {{ t('createSubLocation') }}
-            </button>
             <button v-if="canEditDraft" type="button" class="secondary-btn" @click="openDraftEditor">
               {{ t('editLocationData') }}
             </button>
@@ -4545,6 +4932,7 @@ LIMIT {{limit}}`,
       const wizardSaving = ref(false)
       const wizardError = ref('')
       const wizardExistingWikidataItem = ref('')
+      const wizardExistingWikidataSearch = ref('')
       const wizardExistingSuggestions = ref([])
       const wizardExistingLoading = ref(false)
       const wizardExistingSourceUrl = ref('')
@@ -4552,6 +4940,10 @@ LIMIT {{limit}}`,
       const wizardExistingSourceTitleLanguage = ref(defaultWikidataTextLanguage())
       const wizardExistingSourceAuthor = ref('')
       const wizardExistingSourcePublicationDate = ref('')
+      const wizardExistingSourcePublisherP123 = ref('')
+      const wizardExistingSourcePublisherSearch = ref('')
+      const wizardExistingSourcePublisherSuggestions = ref([])
+      const wizardExistingSourcePublisherLoading = ref(false)
       const wizardExistingSourcePublishedInP1433 = ref('')
       const wizardExistingSourcePublishedInSearch = ref('')
       const wizardExistingSourcePublishedInSuggestions = ref([])
@@ -4560,7 +4952,6 @@ LIMIT {{limit}}`,
       const wizardExistingSourceLanguageOfWorkSearch = ref('')
       const wizardExistingSourceLanguageOfWorkSuggestions = ref([])
       const wizardExistingSourceLanguageOfWorkLoading = ref(false)
-      const wizardExistingReasonP958 = ref('')
       const wizardExistingCitoidLoading = ref(false)
       const wizardExistingCitoidError = ref('')
       const wizardExistingLastCitoidUrl = ref('')
@@ -4660,7 +5051,9 @@ LIMIT {{limit}}`,
       const isEditMode = computed(() => locationDialogMode.value === 'edit' && editingDraftId.value !== null)
       const isWizardChoiceStep = computed(() => !isEditMode.value && createWizardStep.value === 'choose')
       const isWizardExistingMode = computed(() => !isEditMode.value && createWizardMode.value === 'existing-wikidata' && createWizardStep.value === 'form')
-      const wizardExistingHasSelectedItem = computed(() => Boolean(extractWikidataId(wizardExistingWikidataItem.value)))
+      const wizardExistingHasSelectedItem = computed(() => Boolean(
+        resolveWizardQid(wizardExistingWikidataItem.value, wizardExistingWikidataSearch.value)
+      ))
       const isWizardNewMode = computed(() => !isEditMode.value && createWizardMode.value === 'new-wikidata' && createWizardStep.value === 'form')
       const isWizardNewBasicStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'basic')
       const isWizardNewLocationStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'location')
@@ -4893,6 +5286,10 @@ LIMIT {{limit}}`,
       const searchWizardExistingSuggestionsDebounced = createWikidataSuggestionSearch(
         wizardExistingSuggestions,
         wizardExistingLoading,
+      )
+      const searchWizardExistingSourcePublisherSuggestionsDebounced = createWikidataSuggestionSearch(
+        wizardExistingSourcePublisherSuggestions,
+        wizardExistingSourcePublisherLoading,
       )
       const searchWizardExistingSourcePublishedInSuggestionsDebounced = createWikidataSuggestionSearch(
         wizardExistingSourcePublishedInSuggestions,
@@ -5203,6 +5600,7 @@ LIMIT {{limit}}`,
         wizardError.value = ''
         wizardSaving.value = false
         wizardExistingWikidataItem.value = ''
+        wizardExistingWikidataSearch.value = ''
         wizardExistingSuggestions.value = []
         wizardExistingLoading.value = false
         wizardExistingSourceUrl.value = ''
@@ -5210,6 +5608,10 @@ LIMIT {{limit}}`,
         wizardExistingSourceTitleLanguage.value = defaultWikidataTextLanguage()
         wizardExistingSourceAuthor.value = ''
         wizardExistingSourcePublicationDate.value = ''
+        wizardExistingSourcePublisherP123.value = ''
+        wizardExistingSourcePublisherSearch.value = ''
+        wizardExistingSourcePublisherSuggestions.value = []
+        wizardExistingSourcePublisherLoading.value = false
         wizardExistingSourcePublishedInP1433.value = ''
         wizardExistingSourcePublishedInSearch.value = ''
         wizardExistingSourcePublishedInSuggestions.value = []
@@ -5218,7 +5620,6 @@ LIMIT {{limit}}`,
         wizardExistingSourceLanguageOfWorkSearch.value = ''
         wizardExistingSourceLanguageOfWorkSuggestions.value = []
         wizardExistingSourceLanguageOfWorkLoading.value = false
-        wizardExistingReasonP958.value = ''
         wizardExistingCitoidLoading.value = false
         wizardExistingCitoidError.value = ''
         wizardExistingLastCitoidUrl.value = ''
@@ -5618,14 +6019,33 @@ LIMIT {{limit}}`,
         targetSuggestionsRef.value = []
       }
 
-      function onWizardExistingWikidataInput() {
-        const inputValue = wizardExistingWikidataItem.value.trim()
-        if (!inputValue) {
-          wizardExistingSuggestions.value = []
+      async function setWikidataSearchDisplayFromQid(targetSearchRef, rawValue) {
+        const normalizedQid = extractWikidataId(String(rawValue || ''))
+        if (!normalizedQid) {
+          targetSearchRef.value = String(rawValue || '').trim()
           return
         }
+        targetSearchRef.value = normalizedQid
+        try {
+          const entity = await fetchWikidataEntity(normalizedQid, locale.value)
+          const label = entity && typeof entity === 'object'
+            ? String(entity.label || '').trim()
+            : ''
+          if (!label) {
+            return
+          }
+          if (extractWikidataId(targetSearchRef.value) === normalizedQid) {
+            targetSearchRef.value = `${label} (${normalizedQid})`
+          }
+        } catch (error) {
+          // Keep plain QID on lookup failure.
+        }
+      }
 
-        if (extractWikidataId(inputValue)) {
+      function onWizardExistingWikidataInput() {
+        wizardExistingWikidataItem.value = ''
+        const inputValue = wizardExistingWikidataSearch.value.trim()
+        if (!inputValue) {
           wizardExistingSuggestions.value = []
           return
         }
@@ -5635,6 +6055,7 @@ LIMIT {{limit}}`,
 
       function selectWizardExistingWikidataItem(option) {
         wizardExistingWikidataItem.value = option.id
+        wizardExistingWikidataSearch.value = `${option.label} (${option.id})`
         wizardExistingSuggestions.value = []
       }
 
@@ -5665,10 +6086,21 @@ LIMIT {{limit}}`,
           wizardExistingSourceTitleLanguage.value = String(normalizedMetadata.source_title_language || '').trim() || defaultWikidataTextLanguage()
           wizardExistingSourceAuthor.value = String(normalizedMetadata.source_author || '').trim()
           wizardExistingSourcePublicationDate.value = String(normalizedMetadata.source_publication_date || '').trim()
+          wizardExistingSourcePublisherP123.value = String(normalizedMetadata.source_publisher_p123 || '').trim()
+          void setWikidataSearchDisplayFromQid(
+            wizardExistingSourcePublisherSearch,
+            wizardExistingSourcePublisherP123.value,
+          )
           wizardExistingSourcePublishedInP1433.value = String(normalizedMetadata.source_published_in_p1433 || '').trim()
-          wizardExistingSourcePublishedInSearch.value = wizardExistingSourcePublishedInP1433.value
+          void setWikidataSearchDisplayFromQid(
+            wizardExistingSourcePublishedInSearch,
+            wizardExistingSourcePublishedInP1433.value,
+          )
           wizardExistingSourceLanguageOfWorkP407.value = String(normalizedMetadata.source_language_of_work_p407 || '').trim()
-          wizardExistingSourceLanguageOfWorkSearch.value = wizardExistingSourceLanguageOfWorkP407.value
+          void setWikidataSearchDisplayFromQid(
+            wizardExistingSourceLanguageOfWorkSearch,
+            wizardExistingSourceLanguageOfWorkP407.value,
+          )
           wizardExistingLastCitoidUrl.value = sourceUrl
         } catch (error) {
           wizardExistingCitoidError.value = error && error.message ? error.message : t('loadError')
@@ -5681,14 +6113,33 @@ LIMIT {{limit}}`,
         void autofillWizardExistingSourceMetadata(false)
       }
 
+      function onWizardExistingSourcePublisherInput() {
+        wizardExistingSourcePublisherP123.value = ''
+        const inputValue = wizardExistingSourcePublisherSearch.value.trim()
+        if (!inputValue) {
+          wizardExistingSourcePublisherSuggestions.value = []
+          return
+        }
+        searchWizardExistingSourcePublisherSuggestionsDebounced(inputValue)
+      }
+
+      function selectWizardExistingSourcePublisher(option) {
+        selectWikidataSuggestion(
+          option,
+          wizardExistingSourcePublisherP123,
+          wizardExistingSourcePublisherSearch,
+          wizardExistingSourcePublisherSuggestions,
+        )
+      }
+
+      function hideWizardExistingSourcePublisherSuggestionsSoon() {
+        hideSuggestionsSoon(wizardExistingSourcePublisherSuggestions)
+      }
+
       function onWizardExistingSourcePublishedInInput() {
         wizardExistingSourcePublishedInP1433.value = ''
         const inputValue = wizardExistingSourcePublishedInSearch.value.trim()
         if (!inputValue) {
-          wizardExistingSourcePublishedInSuggestions.value = []
-          return
-        }
-        if (extractWikidataId(inputValue)) {
           wizardExistingSourcePublishedInSuggestions.value = []
           return
         }
@@ -5712,10 +6163,6 @@ LIMIT {{limit}}`,
         wizardExistingSourceLanguageOfWorkP407.value = ''
         const inputValue = wizardExistingSourceLanguageOfWorkSearch.value.trim()
         if (!inputValue) {
-          wizardExistingSourceLanguageOfWorkSuggestions.value = []
-          return
-        }
-        if (extractWikidataId(inputValue)) {
           wizardExistingSourceLanguageOfWorkSuggestions.value = []
           return
         }
@@ -5892,7 +6339,10 @@ LIMIT {{limit}}`,
           wizardError.value = t('authRequiredForWikidataWrites')
           return
         }
-        const qid = extractWikidataId(wizardExistingWikidataItem.value)
+        const qid = resolveWizardQid(
+          wizardExistingWikidataItem.value,
+          wizardExistingWikidataSearch.value,
+        )
         if (!qid) {
           wizardError.value = t('wikidataItemRequired')
           return
@@ -5904,6 +6354,14 @@ LIMIT {{limit}}`,
         }
         if (!isHttpUrl(sourceUrl)) {
           wizardError.value = t('sourceUrlRequiredForAddExisting')
+          return
+        }
+        const sourcePublisherQid = resolveWizardQid(
+          wizardExistingSourcePublisherP123.value,
+          wizardExistingSourcePublisherSearch.value,
+        )
+        if (wizardExistingSourcePublisherSearch.value.trim() && !sourcePublisherQid) {
+          wizardError.value = t('sourcePublisherInvalid')
           return
         }
         const sourcePublishedInQid = resolveWizardQid(
@@ -5932,9 +6390,9 @@ LIMIT {{limit}}`,
             source_title_language: String(wizardExistingSourceTitleLanguage.value || '').trim(),
             source_author: String(wizardExistingSourceAuthor.value || '').trim(),
             source_publication_date: String(wizardExistingSourcePublicationDate.value || '').trim(),
+            source_publisher_p123: sourcePublisherQid,
             source_published_in_p1433: sourcePublishedInQid,
             source_language_of_work_p407: sourceLanguageOfWorkQid,
-            reason_p958: String(wizardExistingReasonP958.value || '').trim(),
           })
           window.alert(t('addExistingWikidataSuccess'))
           notifyLocationsChanged()
@@ -6603,6 +7061,7 @@ LIMIT {{limit}}`,
         formError,
         formSaving,
         wizardExistingWikidataItem,
+        wizardExistingWikidataSearch,
         wizardExistingSuggestions,
         wizardExistingLoading,
         wizardExistingSourceUrl,
@@ -6610,13 +7069,15 @@ LIMIT {{limit}}`,
         wizardExistingSourceTitleLanguage,
         wizardExistingSourceAuthor,
         wizardExistingSourcePublicationDate,
+        wizardExistingSourcePublisherSearch,
+        wizardExistingSourcePublisherSuggestions,
+        wizardExistingSourcePublisherLoading,
         wizardExistingSourcePublishedInSearch,
         wizardExistingSourcePublishedInSuggestions,
         wizardExistingSourcePublishedInLoading,
         wizardExistingSourceLanguageOfWorkSearch,
         wizardExistingSourceLanguageOfWorkSuggestions,
         wizardExistingSourceLanguageOfWorkLoading,
-        wizardExistingReasonP958,
         wizardExistingCitoidLoading,
         wizardExistingCitoidError,
         wikidataTextLanguageOptions,
@@ -6698,6 +7159,9 @@ LIMIT {{limit}}`,
         onWizardExistingSourceUrlInput,
         onWizardExistingSourceUrlBlur,
         autofillWizardExistingSourceMetadata,
+        onWizardExistingSourcePublisherInput,
+        selectWizardExistingSourcePublisher,
+        hideWizardExistingSourcePublisherSuggestionsSoon,
         onWizardExistingSourcePublishedInInput,
         selectWizardExistingSourcePublishedIn,
         hideWizardExistingSourcePublishedInSuggestionsSoon,
@@ -6852,10 +7316,6 @@ LIMIT {{limit}}`,
                   <span class="wizard-choice-title">{{ t('createModeNewWikidataTitle') }}</span>
                   <span class="wizard-choice-description">{{ t('createModeNewWikidataDesc') }}</span>
                 </button>
-                <button type="button" class="wizard-choice-card" @click="chooseCreateWizardMode('local-draft')">
-                  <span class="wizard-choice-title">{{ t('createModeLocalTitle') }}</span>
-                  <span class="wizard-choice-description">{{ t('createModeLocalDesc') }}</span>
-                </button>
               </div>
 
               <template v-else-if="isWizardExistingMode">
@@ -6863,7 +7323,7 @@ LIMIT {{limit}}`,
                 <label class="form-field">
                   <span>{{ t('wikidataItem') }}</span>
                   <input
-                    v-model="wizardExistingWikidataItem"
+                    v-model="wizardExistingWikidataSearch"
                     type="text"
                     :placeholder="t('wikidataItemPlaceholder')"
                     @input="onWizardExistingWikidataInput"
@@ -6955,6 +7415,26 @@ LIMIT {{limit}}`,
                       <p v-if="wizardExistingSourcePublishedInLoading" class="dialog-help">{{ t('searching') }}</p>
                     </label>
                     <label class="form-field">
+                      <span>{{ t('sourcePublisherP123') }}</span>
+                      <input
+                        v-model="wizardExistingSourcePublisherSearch"
+                        type="text"
+                        :placeholder="t('sourcePublisherPlaceholder')"
+                        @input="onWizardExistingSourcePublisherInput"
+                        @blur="hideWizardExistingSourcePublisherSuggestionsSoon"
+                      />
+                      <ul v-if="wizardExistingSourcePublisherSuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in wizardExistingSourcePublisherSuggestions" :key="'source-p123-' + item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectWizardExistingSourcePublisher(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="wizardExistingSourcePublisherLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-field">
                       <span>{{ t('sourceLanguageOfWorkP407') }}</span>
                       <input
                         v-model="wizardExistingSourceLanguageOfWorkSearch"
@@ -6973,15 +7453,6 @@ LIMIT {{limit}}`,
                       <p v-if="wizardExistingSourceLanguageOfWorkLoading" class="dialog-help">{{ t('searching') }}</p>
                     </label>
                   </div>
-                  <label class="form-field">
-                    <span>{{ t('reasonP958') }}</span>
-                    <textarea
-                      v-model="wizardExistingReasonP958"
-                      rows="3"
-                      maxlength="1000"
-                      :placeholder="t('reasonP958Placeholder')"
-                    />
-                  </label>
                 </div>
               </template>
 
