@@ -184,6 +184,12 @@ class WikidataWriteAuthTests(SimpleTestCase):
             1860,
         )
 
+    def test_wikidata_time_datavalue_accepts_finnish_date_format(self):
+        datavalue = services._wikidata_time_datavalue('1.11.2026')
+
+        self.assertEqual(datavalue['time'], '+2026-11-01T00:00:00Z')
+        self.assertEqual(datavalue['precision'], 11)
+
     @patch('locations.services._set_claim_reference')
     @patch('locations.services._wikidata_api_get')
     @patch('locations.services._wikidata_oauth_session')
@@ -1477,3 +1483,117 @@ class LocationImageCountCacheTests(TestCase):
             stale_categories=set(),
             stale_qids=set(),
         )
+
+
+class ReverseGeocodeAdministrativeResolutionTests(SimpleTestCase):
+    def test_municipality_labels_prioritize_city_over_regional_grouping(self):
+        labels = services._municipality_labels_from_address({
+            'municipality': 'Helsingin seutukunta',
+            'city': 'Espoo',
+            'county': 'Uusimaa',
+        })
+
+        self.assertGreaterEqual(len(labels), 2)
+        self.assertEqual(labels[0], 'Espoo')
+        self.assertIn('Helsingin seutukunta', labels)
+
+    @patch('locations.services._resolve_wikidata_qid')
+    @patch('locations.services._external_json_get')
+    def test_reverse_geocode_places_prefers_city_for_municipality(self, external_json_get_mock, resolve_wikidata_qid_mock):
+        external_json_get_mock.return_value = {
+            'address': {
+                'country': 'Suomi',
+                'municipality': 'Helsingin seutukunta',
+                'city': 'Espoo',
+                'county': 'Uusimaa',
+            }
+        }
+
+        def resolve_side_effect(label, lang=None, allow_fuzzy=True):
+            if label == 'Suomi':
+                return 'Q33'
+            if label == 'Espoo':
+                return 'Q1793'
+            return ''
+
+        resolve_wikidata_qid_mock.side_effect = resolve_side_effect
+
+        result = services.reverse_geocode_places(latitude=60.2055, longitude=24.6559, lang='fi')
+
+        self.assertEqual(result['country'], {'id': 'Q33', 'label': 'Suomi'})
+        self.assertEqual(result['municipality'], {'id': 'Q1793', 'label': 'Espoo'})
+
+        args = external_json_get_mock.call_args.args
+        self.assertEqual(args[0], services._NOMINATIM_REVERSE_URL)
+        self.assertEqual(args[1]['zoom'], 16)
+
+        resolve_calls = [call.args[0] for call in resolve_wikidata_qid_mock.call_args_list]
+        self.assertIn('Suomi', resolve_calls)
+        self.assertIn('Espoo', resolve_calls)
+        self.assertNotIn('Helsingin seutukunta', resolve_calls)
+
+    @patch('locations.services._resolve_wikidata_qid')
+    @patch('locations.services._external_json_get')
+    def test_reverse_geocode_places_resolves_detailed_location_from_suburb(
+        self,
+        external_json_get_mock,
+        resolve_wikidata_qid_mock,
+    ):
+        external_json_get_mock.return_value = {
+            'address': {
+                'country': 'Suomi',
+                'city': 'Espoo',
+                'suburb': 'Pohjois-Tapiola',
+            }
+        }
+
+        def resolve_side_effect(label, lang=None, allow_fuzzy=True):
+            if label == 'Suomi':
+                return 'Q33'
+            if label == 'Espoo':
+                return 'Q1793'
+            if label == 'Pohjois-Tapiola':
+                return 'Q11889564'
+            return ''
+
+        resolve_wikidata_qid_mock.side_effect = resolve_side_effect
+
+        result = services.reverse_geocode_places(latitude=60.1797, longitude=24.8013, lang='fi')
+
+        self.assertEqual(result['country'], {'id': 'Q33', 'label': 'Suomi'})
+        self.assertEqual(result['municipality'], {'id': 'Q1793', 'label': 'Espoo'})
+        self.assertEqual(result['detailed_location'], {'id': 'Q11889564', 'label': 'Pohjois-Tapiola'})
+
+    @patch('locations.services._query_sparql')
+    @patch('locations.services._resolve_wikidata_qid')
+    @patch('locations.services._external_json_get')
+    def test_reverse_geocode_places_resolves_country_by_iso_code_fallback(
+        self,
+        external_json_get_mock,
+        resolve_wikidata_qid_mock,
+        query_sparql_mock,
+    ):
+        external_json_get_mock.return_value = {
+            'address': {
+                'country': 'Suomi / Finland',
+                'country_code': 'fi',
+                'city': 'Espoo',
+            }
+        }
+        query_sparql_mock.return_value = [
+            {'item': {'value': 'http://www.wikidata.org/entity/Q33'}},
+        ]
+
+        def resolve_side_effect(label, lang=None, allow_fuzzy=True):
+            if label == 'Espoo':
+                return 'Q1793'
+            return ''
+
+        resolve_wikidata_qid_mock.side_effect = resolve_side_effect
+
+        result = services.reverse_geocode_places(latitude=60.2055, longitude=24.6559, lang='fi')
+
+        self.assertEqual(result['country'], {'id': 'Q33', 'label': 'Suomi'})
+        self.assertEqual(result['municipality'], {'id': 'Q1793', 'label': 'Espoo'})
+        self.assertEqual(query_sparql_mock.call_count, 1)
+        self.assertIn('wdt:P297 "FI"', query_sparql_mock.call_args.args[0])

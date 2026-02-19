@@ -1057,20 +1057,133 @@ def _resolve_wikidata_qid(
     return ''
 
 
+def _looks_like_regional_admin_label(label: str) -> bool:
+    normalized = str(label or '').strip().casefold()
+    if not normalized:
+        return False
+    regional_markers = (
+        'seutukunta',
+        'maakunta',
+        'county',
+        'region',
+        'district',
+        'province',
+    )
+    return any(marker in normalized for marker in regional_markers)
+
+
+def _country_labels_from_address(address: dict[str, Any]) -> list[str]:
+    raw_country = str(address.get('country') or '').strip()
+    if not raw_country:
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _append(label: str) -> None:
+        normalized_label = str(label or '').strip()
+        if not normalized_label:
+            return
+        dedupe_key = normalized_label.casefold()
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        candidates.append(normalized_label)
+
+    split_candidates = re.split(r'\s*/\s*|\s*[|;]\s*', raw_country)
+    if len(split_candidates) > 1:
+        for candidate in split_candidates:
+            _append(candidate)
+
+    without_parentheses = re.sub(r'\s*\([^)]*\)', '', raw_country).strip()
+    if without_parentheses and without_parentheses != raw_country:
+        _append(without_parentheses)
+
+    comma_split = [part.strip() for part in raw_country.split(',') if part.strip()]
+    if len(comma_split) > 1:
+        for candidate in comma_split:
+            _append(candidate)
+
+    _append(raw_country)
+    return candidates
+
+
+def _resolve_country_qid_from_iso_code(country_code: str) -> str:
+    normalized_country_code = str(country_code or '').strip().upper()
+    if not re.fullmatch(r'[A-Z]{2}', normalized_country_code):
+        return ''
+
+    query = f'''
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?item
+WHERE {{
+  ?item wdt:P297 "{normalized_country_code}" ;
+        wdt:P31/wdt:P279* wd:Q6256 .
+}}
+LIMIT 1
+'''
+    try:
+        bindings = _query_sparql(query)
+    except SPARQLServiceError:
+        return ''
+
+    for binding in bindings:
+        qid = _extract_wikidata_qid(_binding_value(binding, ['item'], ''))
+        if qid:
+            return qid
+    return ''
+
+
 def _municipality_labels_from_address(address: dict[str, Any]) -> list[str]:
+    municipality_label = str(address.get('municipality') or '').strip()
+
+    preferred_candidates: list[str] = [
+        str(address.get('city') or '').strip(),
+        str(address.get('town') or '').strip(),
+        str(address.get('village') or '').strip(),
+        municipality_label if municipality_label and not _looks_like_regional_admin_label(municipality_label) else '',
+        str(address.get('hamlet') or '').strip(),
+        str(address.get('suburb') or '').strip(),
+        str(address.get('neighbourhood') or '').strip(),
+        str(address.get('borough') or '').strip(),
+        str(address.get('city_district') or '').strip(),
+        str(address.get('locality') or '').strip(),
+    ]
+    fallback_candidates: list[str] = [
+        municipality_label if municipality_label and _looks_like_regional_admin_label(municipality_label) else '',
+        str(address.get('county') or '').strip(),
+        str(address.get('state_district') or '').strip(),
+        str(address.get('region') or '').strip(),
+    ]
+    raw_candidates = [*preferred_candidates, *fallback_candidates]
+
+    labels: list[str] = []
+    seen: set[str] = set()
+    for item in raw_candidates:
+        label = str(item or '').strip()
+        if not label:
+            continue
+        normalized = label.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        labels.append(label)
+    return labels
+
+
+def _detailed_location_labels_from_address(address: dict[str, Any]) -> list[str]:
     raw_candidates = [
-        address.get('municipality'),
-        address.get('city'),
-        address.get('town'),
-        address.get('village'),
-        address.get('hamlet'),
-        address.get('suburb'),
-        address.get('neighbourhood'),
-        address.get('borough'),
-        address.get('city_district'),
-        address.get('county'),
-        address.get('state_district'),
-        address.get('region'),
+        str(address.get('suburb') or '').strip(),
+        str(address.get('neighbourhood') or '').strip(),
+        str(address.get('quarter') or '').strip(),
+        str(address.get('city_district') or '').strip(),
+        str(address.get('borough') or '').strip(),
+        str(address.get('residential') or '').strip(),
+        str(address.get('district') or '').strip(),
+        str(address.get('locality') or '').strip(),
+        str(address.get('hamlet') or '').strip(),
     ]
 
     labels: list[str] = []
@@ -1078,6 +1191,8 @@ def _municipality_labels_from_address(address: dict[str, Any]) -> list[str]:
     for item in raw_candidates:
         label = str(item or '').strip()
         if not label:
+            continue
+        if _looks_like_regional_admin_label(label):
             continue
         normalized = label.casefold()
         if normalized in seen:
@@ -1100,7 +1215,7 @@ def reverse_geocode_places(latitude: float, longitude: float, lang: str | None =
             'format': 'jsonv2',
             'lat': lat,
             'lon': lon,
-            'zoom': 10,
+            'zoom': 16,
             'addressdetails': 1,
         },
     )
@@ -1115,18 +1230,66 @@ def reverse_geocode_places(latitude: float, longitude: float, lang: str | None =
         return {
             'country': None,
             'municipality': None,
+            'detailed_location': None,
         }
 
-    country_name = str(address.get('country') or '').strip()
+    country_candidates = _country_labels_from_address(address)
+    country_name = country_candidates[0] if country_candidates else ''
     municipality_candidates = _municipality_labels_from_address(address)
     municipality_name = municipality_candidates[0] if municipality_candidates else ''
+    detailed_location_candidates = _detailed_location_labels_from_address(address)
+    detailed_location_name = detailed_location_candidates[0] if detailed_location_candidates else ''
 
-    country_qid = _resolve_wikidata_qid(country_name, lang=lang) if country_name else ''
+    country_qid = ''
+    for allow_fuzzy in (False, True):
+        for country_candidate in country_candidates:
+            country_qid = _resolve_wikidata_qid(country_candidate, lang=lang, allow_fuzzy=allow_fuzzy)
+            if country_qid:
+                country_name = country_candidate
+                break
+        if country_qid:
+            break
+
+    if not country_qid:
+        country_code = str(address.get('country_code') or '').strip()
+        country_qid = _resolve_country_qid_from_iso_code(country_code)
+
     municipality_qid = ''
     if municipality_name:
         municipality_qid = _resolve_wikidata_qid(municipality_name, lang=lang)
         if not municipality_qid and country_name:
             municipality_qid = _resolve_wikidata_qid(f'{municipality_name}, {country_name}', lang=lang)
+
+    detailed_location_qid = ''
+    if detailed_location_name:
+        municipality_context = municipality_name if municipality_name else ''
+        country_context = country_name if country_name else ''
+        for allow_fuzzy in (False, True):
+            for detailed_location_candidate in detailed_location_candidates:
+                if municipality_context and detailed_location_candidate.casefold() == municipality_context.casefold():
+                    continue
+                detailed_location_qid = _resolve_wikidata_qid(
+                    detailed_location_candidate,
+                    lang=lang,
+                    allow_fuzzy=allow_fuzzy,
+                )
+                if not detailed_location_qid and municipality_context:
+                    detailed_location_qid = _resolve_wikidata_qid(
+                        f'{detailed_location_candidate}, {municipality_context}',
+                        lang=lang,
+                        allow_fuzzy=allow_fuzzy,
+                    )
+                if not detailed_location_qid and country_context:
+                    detailed_location_qid = _resolve_wikidata_qid(
+                        f'{detailed_location_candidate}, {country_context}',
+                        lang=lang,
+                        allow_fuzzy=allow_fuzzy,
+                    )
+                if detailed_location_qid:
+                    detailed_location_name = detailed_location_candidate
+                    break
+            if detailed_location_qid:
+                break
 
     return {
         'country': (
@@ -1134,6 +1297,11 @@ def reverse_geocode_places(latitude: float, longitude: float, lang: str | None =
         ),
         'municipality': (
             {'id': municipality_qid, 'label': municipality_name} if municipality_name and municipality_qid else None
+        ),
+        'detailed_location': (
+            {'id': detailed_location_qid, 'label': detailed_location_name}
+            if detailed_location_name and detailed_location_qid
+            else None
         ),
     }
 
@@ -2973,8 +3141,28 @@ def _wikidata_monolingual_text_datavalue(text: str, language: str, fallback: str
     }
 
 
-def _wikidata_time_datavalue(value: str) -> dict[str, Any]:
+def _normalize_wikidata_time_input(value: str) -> str:
     normalized = str(value or '').strip()
+    if not normalized:
+        return ''
+
+    # Finnish date format: D.M.YYYY / DD.MM.YYYY
+    fi_match = re.fullmatch(r'(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})', normalized)
+    if fi_match:
+        parsed_day = int(fi_match.group(1))
+        parsed_month = int(fi_match.group(2))
+        parsed_year = int(fi_match.group(3))
+        try:
+            parsed = date(parsed_year, parsed_month, parsed_day)
+        except ValueError as exc:
+            raise WikidataWriteError(f'Invalid date value: {normalized}') from exc
+        return f'{parsed.year:04d}-{parsed.month:02d}-{parsed.day:02d}'
+
+    return normalized
+
+
+def _wikidata_time_datavalue(value: str) -> dict[str, Any]:
+    normalized = _normalize_wikidata_time_input(value)
     if not normalized:
         raise WikidataWriteError('Empty time value is not allowed.')
 
@@ -3023,7 +3211,7 @@ def _wikidata_time_datavalue(value: str) -> dict[str, Any]:
         }
 
     raise WikidataWriteError(
-        'Unsupported date format. Use YYYY or YYYY-MM or YYYY-MM-DD.'
+        'Unsupported date format. Use YYYY or YYYY-MM or YYYY-MM-DD or D.M.YYYY.'
     )
 
 
@@ -3479,16 +3667,35 @@ def create_wikidata_building_item(
     oauth_token: str = '',
     oauth_token_secret: str = '',
 ) -> dict[str, Any]:
-    label = str(payload.get('label') or '').strip()
-    description = str(payload.get('description') or '').strip()
-    if not label:
-        raise WikidataWriteError('Label is required.')
-    if not description:
-        raise WikidataWriteError('Description is required.')
+    def _collect_qid_values(raw_values: Any, single_value: Any = '') -> list[str]:
+        qids: list[str] = []
+        seen: set[str] = set()
 
-    instance_of_qid = _extract_wikidata_qid(str(payload.get('instance_of_p31') or ''))
+        def _add_qid(raw_value: Any) -> None:
+            qid = _extract_wikidata_qid(str(raw_value or ''))
+            if not qid or qid in seen:
+                return
+            seen.add(qid)
+            qids.append(qid)
+
+        _add_qid(single_value)
+        if isinstance(raw_values, list):
+            for raw_value in raw_values:
+                _add_qid(raw_value)
+        return qids
+
+    instance_of_qids = _collect_qid_values(
+        payload.get('instance_of_p31_values'),
+        payload.get('instance_of_p31'),
+    )
+    instance_of_qid = instance_of_qids[0] if instance_of_qids else ''
     country_qid = _extract_wikidata_qid(str(payload.get('country_p17') or ''))
     municipality_qid = _extract_wikidata_qid(str(payload.get('municipality_p131') or ''))
+    part_of_qids = _collect_qid_values(
+        payload.get('part_of_p361_values'),
+        payload.get('part_of_p361'),
+    )
+    location_qid = _extract_wikidata_qid(str(payload.get('location_p276') or ''))
     if not instance_of_qid or not country_qid or not municipality_qid:
         raise WikidataWriteError('P31, P17 and P131 are required.')
 
@@ -3508,11 +3715,66 @@ def create_wikidata_building_item(
 
     language_fallbacks = _language_fallbacks(lang, include_mul=False)
     edit_language = language_fallbacks[0] if language_fallbacks else 'en'
-    label_language = _wikidata_language_code(str(payload.get('label_language') or ''), fallback=edit_language)
-    description_language = _wikidata_language_code(
+
+    def _normalize_language_key(value: Any) -> str:
+        normalized = str(value or '').strip().lower()
+        if re.fullmatch(r'[a-z]{2,12}', normalized):
+            return normalized
+        return ''
+
+    labels_by_language: dict[str, str] = {}
+    descriptions_by_language: dict[str, str] = {}
+
+    raw_labels = payload.get('labels')
+    if isinstance(raw_labels, dict):
+        for raw_language, raw_value in raw_labels.items():
+            language_code = _normalize_language_key(raw_language)
+            label_value = str(raw_value or '').strip()
+            if not language_code or not label_value:
+                continue
+            labels_by_language[language_code] = label_value
+
+    raw_descriptions = payload.get('descriptions')
+    if isinstance(raw_descriptions, dict):
+        for raw_language, raw_value in raw_descriptions.items():
+            language_code = _normalize_language_key(raw_language)
+            description_value = str(raw_value or '').strip()
+            if not language_code or not description_value:
+                continue
+            descriptions_by_language[language_code] = description_value
+
+    legacy_label = str(payload.get('label') or '').strip()
+    legacy_label_language = _wikidata_language_code(
+        str(payload.get('label_language') or ''),
+        fallback=edit_language,
+    )
+    if legacy_label:
+        labels_by_language[legacy_label_language] = legacy_label
+
+    legacy_description = str(payload.get('description') or '').strip()
+    legacy_description_language = _wikidata_language_code(
         str(payload.get('description_language') or ''),
         fallback=edit_language,
     )
+    if legacy_description:
+        descriptions_by_language[legacy_description_language] = legacy_description
+
+    if not set(labels_by_language).intersection(descriptions_by_language):
+        raise WikidataWriteError('At least one label/description language pair is required.')
+
+    source_url = str(payload.get('source_url') or '').strip()
+    if not source_url:
+        raise WikidataWriteError('Source URL is required.')
+    source_title = str(payload.get('source_title') or '').strip()
+    source_title_language = _wikidata_language_code(
+        str(payload.get('source_title_language') or ''),
+        fallback=edit_language,
+    )
+    source_author = str(payload.get('source_author') or '').strip()
+    source_publication_date = str(payload.get('source_publication_date') or '').strip()
+    source_publisher_p123 = _extract_wikidata_qid(str(payload.get('source_publisher_p123') or ''))
+    source_published_in_p1433 = _extract_wikidata_qid(str(payload.get('source_published_in_p1433') or ''))
+    source_language_of_work_p407 = _extract_wikidata_qid(str(payload.get('source_language_of_work_p407') or ''))
     address_language = _wikidata_language_code(
         str(payload.get('address_text_language_p6375') or ''),
         fallback=edit_language,
@@ -3537,16 +3799,18 @@ def create_wikidata_building_item(
             'data': json.dumps(
                 {
                     'labels': {
-                        label_language: {
-                            'language': label_language,
-                            'value': label,
+                        language_code: {
+                            'language': language_code,
+                            'value': label_value,
                         }
+                        for language_code, label_value in labels_by_language.items()
                     },
                     'descriptions': {
-                        description_language: {
-                            'language': description_language,
-                            'value': description,
+                        language_code: {
+                            'language': language_code,
+                            'value': description_value,
                         }
+                        for language_code, description_value in descriptions_by_language.items()
                     },
                 },
                 ensure_ascii=False,
@@ -3559,13 +3823,14 @@ def create_wikidata_building_item(
     if not created_qid:
         raise WikidataWriteError('Wikidata API did not return created item id.')
 
-    _create_wikidata_claim(
-        session,
-        csrf_token,
-        created_qid,
-        'P31',
-        _wikidata_entity_datavalue(instance_of_qid),
-    )
+    for instance_qid in instance_of_qids:
+        _create_wikidata_claim(
+            session,
+            csrf_token,
+            created_qid,
+            'P31',
+            _wikidata_entity_datavalue(instance_qid),
+        )
     _create_wikidata_claim(
         session,
         csrf_token,
@@ -3580,6 +3845,22 @@ def create_wikidata_building_item(
         'P131',
         _wikidata_entity_datavalue(municipality_qid),
     )
+    for part_of_qid in part_of_qids:
+        _create_wikidata_claim(
+            session,
+            csrf_token,
+            created_qid,
+            'P361',
+            _wikidata_entity_datavalue(part_of_qid),
+        )
+    if location_qid:
+        _create_wikidata_claim(
+            session,
+            csrf_token,
+            created_qid,
+            'P276',
+            _wikidata_entity_datavalue(location_qid),
+        )
     _create_wikidata_claim(
         session,
         csrf_token,
@@ -3598,28 +3879,44 @@ def create_wikidata_building_item(
         created_qid,
         'P5008',
         _wikidata_entity_datavalue(normalized_collection_qid),
+        source_url=source_url,
+        source_title=source_title,
+        source_title_language=source_title_language,
+        source_author=source_author,
+        source_publication_date=source_publication_date,
+        source_publisher_p123=source_publisher_p123,
+        source_published_in_p1433=source_published_in_p1433,
+        source_language_of_work_p407=source_language_of_work_p407,
     )
 
-    architect_qid = _extract_wikidata_qid(str(payload.get('architect_p84') or ''))
-    if architect_qid:
+    architect_qids = _collect_qid_values(
+        payload.get('architect_p84_values'),
+        payload.get('architect_p84'),
+    )
+    architect_source_url = str(payload.get('architect_source_url') or '').strip()
+    for architect_qid in architect_qids:
         _create_wikidata_claim(
             session,
             csrf_token,
             created_qid,
             'P84',
             _wikidata_entity_datavalue(architect_qid),
-            source_url=str(payload.get('architect_source_url') or '').strip(),
+            source_url=architect_source_url,
         )
 
-    heritage_qid = _extract_wikidata_qid(str(payload.get('heritage_designation_p1435') or ''))
-    if heritage_qid:
+    heritage_qids = _collect_qid_values(
+        payload.get('heritage_designation_p1435_values'),
+        payload.get('heritage_designation_p1435'),
+    )
+    heritage_source_url = str(payload.get('heritage_source_url') or '').strip() or source_url
+    for heritage_qid in heritage_qids:
         _create_wikidata_claim(
             session,
             csrf_token,
             created_qid,
             'P1435',
             _wikidata_entity_datavalue(heritage_qid),
-            source_url=str(payload.get('heritage_source_url') or '').strip(),
+            source_url=heritage_source_url,
         )
 
     architectural_style_qid = _extract_wikidata_qid(str(payload.get('architectural_style_p149') or ''))

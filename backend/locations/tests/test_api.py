@@ -275,6 +275,29 @@ class LocationApiTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         search_geocode_places_mock.assert_called_once_with(query='Helsinki', limit=8)
 
+    @patch('locations.views.reverse_geocode_places')
+    def test_geocode_reverse_endpoint(self, reverse_geocode_places_mock):
+        reverse_geocode_places_mock.return_value = {
+            'country': {'id': 'Q33', 'label': 'Suomi'},
+            'municipality': {'id': 'Q1793', 'label': 'Espoo'},
+            'detailed_location': {'id': 'Q11889564', 'label': 'Pohjois-Tapiola'},
+        }
+
+        response = self.client.get(
+            reverse('geocode-reverse'),
+            {'lat': '60.2055', 'lon': '24.6559', 'lang': 'fi'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['country'], {'id': 'Q33', 'label': 'Suomi'})
+        self.assertEqual(response.data['municipality'], {'id': 'Q1793', 'label': 'Espoo'})
+        self.assertEqual(response.data['detailed_location'], {'id': 'Q11889564', 'label': 'Pohjois-Tapiola'})
+        reverse_geocode_places_mock.assert_called_once_with(
+            latitude=60.2055,
+            longitude=24.6559,
+            lang='fi',
+        )
+
     @override_settings(SOCIAL_AUTH_MEDIAWIKI_KEY='', SOCIAL_AUTH_MEDIAWIKI_SECRET='')
     def test_auth_status_endpoint_reports_disabled_when_social_auth_not_configured(self):
         response = self.client.get(reverse('auth-status'))
@@ -423,6 +446,38 @@ class LocationApiTests(APITestCase):
         'locations.views._mediawiki_oauth_credentials_for_request',
         return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
     )
+    def test_wikidata_add_existing_endpoint_normalizes_finnish_publication_date(
+        self,
+        oauth_credentials_mock,
+        ensure_wikidata_collection_membership_mock,
+    ):
+        ensure_wikidata_collection_membership_mock.return_value = {
+            'qid': 'Q1757',
+            'uri': 'https://www.wikidata.org/entity/Q1757',
+            'already_listed': False,
+        }
+
+        response = self.client.post(
+            reverse('wikidata-add-existing'),
+            {
+                'wikidata_item': 'Q1757',
+                'source_url': 'https://example.org/article',
+                'source_publication_date': '1.11.2026',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        oauth_credentials_mock.assert_called_once()
+        ensure_wikidata_collection_membership_mock.assert_called_once()
+        call_args = ensure_wikidata_collection_membership_mock.call_args
+        self.assertEqual(call_args.kwargs['source_publication_date'], '2026-11-01')
+
+    @patch('locations.views.ensure_wikidata_collection_membership')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
     def test_wikidata_add_existing_endpoint_returns_502_for_write_error(
         self,
         oauth_credentials_mock,
@@ -522,10 +577,14 @@ class LocationApiTests(APITestCase):
             'label': 'Example Building',
             'description': 'Historic building in test city',
             'instance_of_p31': 'Q41176',
+            'instance_of_p31_values': ['Q41176', 'Q811979'],
             'country_p17': 'Q33',
             'municipality_p131': 'Q1757',
+            'part_of_p361': 'Q42',
+            'part_of_p361_values': ['Q42', 'Q42'],
             'latitude': 60.1699,
             'longitude': 24.9384,
+            'source_url': 'https://example.org/article',
         }
 
         response = self.client.post(
@@ -543,6 +602,88 @@ class LocationApiTests(APITestCase):
         self.assertEqual(call_args.kwargs['oauth_token'], 'token')
         self.assertEqual(call_args.kwargs['oauth_token_secret'], 'secret')
         self.assertEqual(call_args.args[0]['instance_of_p31'], 'Q41176')
+        self.assertEqual(call_args.args[0]['instance_of_p31_values'], ['Q41176', 'Q811979'])
+        self.assertEqual(call_args.args[0]['part_of_p361'], 'Q42')
+        self.assertEqual(call_args.args[0]['part_of_p361_values'], ['Q42'])
+
+    @patch('locations.views.create_wikidata_building_item')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_wikidata_create_item_endpoint_normalizes_finnish_date_formats(
+        self,
+        oauth_credentials_mock,
+        create_wikidata_building_item_mock,
+    ):
+        create_wikidata_building_item_mock.return_value = {
+            'qid': 'Q123456',
+            'uri': 'https://www.wikidata.org/entity/Q123456',
+            'added_to_collection_qid': 'Q138299296',
+        }
+        payload = {
+            'label': 'Example Building',
+            'description': 'Historic building in test city',
+            'instance_of_p31': 'Q41176',
+            'country_p17': 'Q33',
+            'municipality_p131': 'Q1757',
+            'latitude': 60.1699,
+            'longitude': 24.9384,
+            'inception_p571': '1.2.2026',
+            'inception_source_url': 'https://example.org/article',
+            'official_closure_date_p3999': '9.10.2027',
+            'official_closure_date_source_url': 'https://example.org/article',
+            'source_url': 'https://example.org/article',
+            'source_publication_date': '1.11.2026',
+        }
+
+        response = self.client.post(
+            reverse('wikidata-create-item'),
+            payload,
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['qid'], 'Q123456')
+        create_wikidata_building_item_mock.assert_called_once()
+        oauth_credentials_mock.assert_called_once()
+        call_args = create_wikidata_building_item_mock.call_args
+        self.assertEqual(call_args.args[0]['inception_p571'], '2026-02-01')
+        self.assertEqual(call_args.args[0]['official_closure_date_p3999'], '2027-10-09')
+        self.assertEqual(call_args.args[0]['source_publication_date'], '2026-11-01')
+
+    @patch('locations.views.create_wikidata_building_item')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_wikidata_create_item_endpoint_rejects_invalid_part_of_qid(
+        self,
+        oauth_credentials_mock,
+        create_wikidata_building_item_mock,
+    ):
+        payload = {
+            'label': 'Example Building',
+            'description': 'Historic building in test city',
+            'instance_of_p31': 'Q41176',
+            'country_p17': 'Q33',
+            'municipality_p131': 'Q1757',
+            'part_of_p361': 'not-a-qid',
+            'latitude': 60.1699,
+            'longitude': 24.9384,
+            'source_url': 'https://example.org/article',
+        }
+
+        response = self.client.post(
+            reverse('wikidata-create-item'),
+            payload,
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('part_of_p361', response.data)
+        create_wikidata_building_item_mock.assert_not_called()
+        oauth_credentials_mock.assert_called_once()
 
     @patch('locations.views.create_wikidata_building_item')
     @patch(
@@ -563,6 +704,7 @@ class LocationApiTests(APITestCase):
             'latitude': 60.1699,
             'longitude': 24.9384,
             'architect_p84': 'Q6313',
+            'source_url': 'https://example.org/article',
         }
 
         response = self.client.post(
@@ -595,6 +737,7 @@ class LocationApiTests(APITestCase):
             'latitude': 60.1699,
             'longitude': 24.9384,
             'official_closure_date_p3999': '1999-12-31',
+            'source_url': 'https://example.org/article',
         }
 
         response = self.client.post(

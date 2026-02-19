@@ -1,4 +1,5 @@
 import re
+from datetime import date
 
 from rest_framework import serializers
 
@@ -6,6 +7,8 @@ from .models import DraftLocation
 
 
 _WIKIDATA_QID_PATTERN = re.compile(r'(Q\d+)', flags=re.IGNORECASE)
+_DATE_LIKE_ISO_PATTERN = re.compile(r'(?P<year>\d{4})(?:-(?P<month>\d{2})(?:-(?P<day>\d{2}))?)?$')
+_DATE_LIKE_FI_PATTERN = re.compile(r'(?P<day>\d{1,2})\.\s*(?P<month>\d{1,2})\.\s*(?P<year>\d{4})')
 
 
 def _normalize_wikidata_qid(value: str) -> str:
@@ -13,6 +16,47 @@ def _normalize_wikidata_qid(value: str) -> str:
     if not match:
         return ''
     return match.group(1).upper()
+
+
+def _normalize_date_like_input(value: str, field_name: str) -> str:
+    raw_value = (value or '').strip()
+    if not raw_value:
+        return ''
+
+    iso_match = _DATE_LIKE_ISO_PATTERN.fullmatch(raw_value)
+    if iso_match:
+        parsed_year = int(iso_match.group('year'))
+        if parsed_year < 1:
+            raise serializers.ValidationError(f'{field_name} year must be greater than 0.')
+
+        parsed_month = iso_match.group('month')
+        parsed_day = iso_match.group('day')
+        if parsed_month and not parsed_day:
+            try:
+                date(parsed_year, int(parsed_month), 1)
+            except ValueError as exc:
+                raise serializers.ValidationError(f'{field_name} has an invalid month value.') from exc
+        elif parsed_month and parsed_day:
+            try:
+                date(parsed_year, int(parsed_month), int(parsed_day))
+            except ValueError as exc:
+                raise serializers.ValidationError(f'{field_name} has an invalid date value.') from exc
+        return raw_value
+
+    fi_match = _DATE_LIKE_FI_PATTERN.fullmatch(raw_value)
+    if fi_match:
+        parsed_year = int(fi_match.group('year'))
+        parsed_month = int(fi_match.group('month'))
+        parsed_day = int(fi_match.group('day'))
+        try:
+            parsed = date(parsed_year, parsed_month, parsed_day)
+        except ValueError as exc:
+            raise serializers.ValidationError(f'{field_name} has an invalid date value.') from exc
+        return f'{parsed.year:04d}-{parsed.month:02d}-{parsed.day:02d}'
+
+    raise serializers.ValidationError(
+        f'{field_name} must use YYYY or YYYY-MM or YYYY-MM-DD or D.M.YYYY format.'
+    )
 
 
 class LocationSerializer(serializers.Serializer):
@@ -149,12 +193,7 @@ class AddExistingWikidataItemSerializer(serializers.Serializer):
         raise serializers.ValidationError('source_title_language must be a valid language code.')
 
     def validate_source_publication_date(self, value: str) -> str:
-        raw_value = (value or '').strip()
-        if not raw_value:
-            return ''
-        if re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', raw_value):
-            return raw_value
-        raise serializers.ValidationError('source_publication_date must use YYYY or YYYY-MM or YYYY-MM-DD format.')
+        return _normalize_date_like_input(value, 'source_publication_date')
 
     def validate_source_publisher_p123(self, value: str) -> str:
         raw_value = (value or '').strip()
@@ -185,13 +224,19 @@ class AddExistingWikidataItemSerializer(serializers.Serializer):
 
 
 class CreateWikidataItemSerializer(serializers.Serializer):
-    label = serializers.CharField(max_length=250)
+    label = serializers.CharField(max_length=250, required=False, allow_blank=True)
     label_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
-    description = serializers.CharField(max_length=500)
+    description = serializers.CharField(max_length=500, required=False, allow_blank=True)
     description_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
-    instance_of_p31 = serializers.CharField(max_length=32)
+    labels = serializers.DictField(child=serializers.CharField(max_length=250, allow_blank=True), required=False)
+    descriptions = serializers.DictField(child=serializers.CharField(max_length=500, allow_blank=True), required=False)
+    instance_of_p31 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    instance_of_p31_values = serializers.ListField(child=serializers.CharField(max_length=32), required=False)
     country_p17 = serializers.CharField(max_length=32)
     municipality_p131 = serializers.CharField(max_length=32)
+    part_of_p361 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    part_of_p361_values = serializers.ListField(child=serializers.CharField(max_length=32), required=False)
+    location_p276 = serializers.CharField(max_length=32, required=False, allow_blank=True)
     latitude = serializers.FloatField()
     longitude = serializers.FloatField()
     address_text_p6375 = serializers.CharField(max_length=255, required=False, allow_blank=True)
@@ -199,12 +244,14 @@ class CreateWikidataItemSerializer(serializers.Serializer):
     postal_code_p281 = serializers.CharField(max_length=40, required=False, allow_blank=True)
     commons_category_p373 = serializers.CharField(max_length=255, required=False, allow_blank=True)
     architect_p84 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    architect_p84_values = serializers.ListField(child=serializers.CharField(max_length=32), required=False)
     architect_source_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
     inception_p571 = serializers.CharField(max_length=32, required=False, allow_blank=True)
     inception_source_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
     official_closure_date_p3999 = serializers.CharField(max_length=32, required=False, allow_blank=True)
     official_closure_date_source_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
     heritage_designation_p1435 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    heritage_designation_p1435_values = serializers.ListField(child=serializers.CharField(max_length=32), required=False)
     heritage_source_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
     architectural_style_p149 = serializers.CharField(max_length=32, required=False, allow_blank=True)
     state_of_use_p5817 = serializers.CharField(max_length=32, required=False, allow_blank=True)
@@ -212,6 +259,14 @@ class CreateWikidataItemSerializer(serializers.Serializer):
     house_number_p670 = serializers.CharField(max_length=64, required=False, allow_blank=True)
     route_instruction_p2795 = serializers.CharField(max_length=255, required=False, allow_blank=True)
     route_instruction_language_p2795 = serializers.CharField(max_length=12, required=False, allow_blank=True)
+    source_url = serializers.URLField(max_length=500)
+    source_title = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    source_title_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
+    source_author = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    source_publication_date = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    source_publisher_p123 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    source_published_in_p1433 = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    source_language_of_work_p407 = serializers.CharField(max_length=32, required=False, allow_blank=True)
 
     def _validate_qid(self, value: str, field_name: str) -> str:
         qid = _normalize_wikidata_qid(value)
@@ -225,13 +280,23 @@ class CreateWikidataItemSerializer(serializers.Serializer):
             return ''
         return self._validate_qid(raw_value, field_name)
 
+    def _validate_optional_qid_list(self, values: list, field_name: str) -> list[str]:
+        if not isinstance(values, list):
+            raise serializers.ValidationError(f'{field_name} must be a list.')
+
+        normalized_values: list[str] = []
+        seen: set[str] = set()
+        for raw_value in values:
+            qid = self._validate_optional_qid(str(raw_value or ''), field_name)
+            if not qid or qid in seen:
+                continue
+            seen.add(qid)
+            normalized_values.append(qid)
+
+        return normalized_values
+
     def _validate_date_like(self, value: str, field_name: str) -> str:
-        raw_value = (value or '').strip()
-        if not raw_value:
-            return ''
-        if re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', raw_value):
-            return raw_value
-        raise serializers.ValidationError(f'{field_name} must use YYYY or YYYY-MM or YYYY-MM-DD format.')
+        return _normalize_date_like_input(value, field_name)
 
     def _validate_optional_language(self, value: str, field_name: str) -> str:
         raw_value = (value or '').strip().lower()
@@ -241,8 +306,25 @@ class CreateWikidataItemSerializer(serializers.Serializer):
             return raw_value
         raise serializers.ValidationError(f'{field_name} must be a valid language code.')
 
+    def _validate_language_text_map(self, value: dict, field_name: str) -> dict[str, str]:
+        if not isinstance(value, dict):
+            raise serializers.ValidationError(f'{field_name} must be an object keyed by language code.')
+        normalized: dict[str, str] = {}
+        for raw_language, raw_text in value.items():
+            language = str(raw_language or '').strip().lower()
+            if not re.fullmatch(r'[a-z]{2,12}', language):
+                raise serializers.ValidationError(f'{field_name} keys must be valid language codes.')
+            text = str(raw_text or '').strip()
+            if not text:
+                continue
+            normalized[language] = text
+        return normalized
+
     def validate_instance_of_p31(self, value: str) -> str:
-        return self._validate_qid(value, 'instance_of_p31')
+        return self._validate_optional_qid(value, 'instance_of_p31')
+
+    def validate_instance_of_p31_values(self, value: list) -> list[str]:
+        return self._validate_optional_qid_list(value, 'instance_of_p31_values')
 
     def validate_label_language(self, value: str) -> str:
         return self._validate_optional_language(value, 'label_language')
@@ -250,17 +332,38 @@ class CreateWikidataItemSerializer(serializers.Serializer):
     def validate_description_language(self, value: str) -> str:
         return self._validate_optional_language(value, 'description_language')
 
+    def validate_labels(self, value: dict) -> dict[str, str]:
+        return self._validate_language_text_map(value, 'labels')
+
+    def validate_descriptions(self, value: dict) -> dict[str, str]:
+        return self._validate_language_text_map(value, 'descriptions')
+
     def validate_country_p17(self, value: str) -> str:
         return self._validate_qid(value, 'country_p17')
 
     def validate_municipality_p131(self, value: str) -> str:
         return self._validate_qid(value, 'municipality_p131')
 
+    def validate_part_of_p361(self, value: str) -> str:
+        return self._validate_optional_qid(value, 'part_of_p361')
+
+    def validate_part_of_p361_values(self, value: list) -> list[str]:
+        return self._validate_optional_qid_list(value, 'part_of_p361_values')
+
+    def validate_location_p276(self, value: str) -> str:
+        return self._validate_optional_qid(value, 'location_p276')
+
     def validate_architect_p84(self, value: str) -> str:
         return self._validate_optional_qid(value, 'architect_p84')
 
+    def validate_architect_p84_values(self, value: list) -> list[str]:
+        return self._validate_optional_qid_list(value, 'architect_p84_values')
+
     def validate_heritage_designation_p1435(self, value: str) -> str:
         return self._validate_optional_qid(value, 'heritage_designation_p1435')
+
+    def validate_heritage_designation_p1435_values(self, value: list) -> list[str]:
+        return self._validate_optional_qid_list(value, 'heritage_designation_p1435_values')
 
     def validate_architectural_style_p149(self, value: str) -> str:
         return self._validate_optional_qid(value, 'architectural_style_p149')
@@ -283,6 +386,21 @@ class CreateWikidataItemSerializer(serializers.Serializer):
     def validate_route_instruction_language_p2795(self, value: str) -> str:
         return self._validate_optional_language(value, 'route_instruction_language_p2795')
 
+    def validate_source_title_language(self, value: str) -> str:
+        return self._validate_optional_language(value, 'source_title_language')
+
+    def validate_source_publication_date(self, value: str) -> str:
+        return self._validate_date_like(value, 'source_publication_date')
+
+    def validate_source_publisher_p123(self, value: str) -> str:
+        return self._validate_optional_qid(value, 'source_publisher_p123')
+
+    def validate_source_published_in_p1433(self, value: str) -> str:
+        return self._validate_optional_qid(value, 'source_published_in_p1433')
+
+    def validate_source_language_of_work_p407(self, value: str) -> str:
+        return self._validate_optional_qid(value, 'source_language_of_work_p407')
+
     def validate_latitude(self, value: float) -> float:
         if value < -90 or value > 90:
             raise serializers.ValidationError('Latitude must be between -90 and 90.')
@@ -294,14 +412,75 @@ class CreateWikidataItemSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
+        def _merge_qid_values(single_value: str, values: list[str]) -> list[str]:
+            merged_values: list[str] = []
+            seen: set[str] = set()
+            for raw_value in [single_value, *(values or [])]:
+                normalized = str(raw_value or '').strip().upper()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                merged_values.append(normalized)
+            return merged_values
+
+        labels = dict(attrs.get('labels') or {})
+        descriptions = dict(attrs.get('descriptions') or {})
+        legacy_label = str(attrs.get('label') or '').strip()
+        legacy_label_language = str(attrs.get('label_language') or '').strip().lower() or 'en'
+        legacy_description = str(attrs.get('description') or '').strip()
+        legacy_description_language = str(attrs.get('description_language') or '').strip().lower() or 'en'
+        if legacy_label:
+            labels[legacy_label_language] = legacy_label
+        if legacy_description:
+            descriptions[legacy_description_language] = legacy_description
+
+        if not set(labels).intersection(descriptions):
+            raise serializers.ValidationError(
+                {'non_field_errors': ['At least one label/description language pair is required.']}
+            )
+
+        attrs['labels'] = labels
+        attrs['descriptions'] = descriptions
+
+        instance_values = _merge_qid_values(
+            str(attrs.get('instance_of_p31') or ''),
+            list(attrs.get('instance_of_p31_values') or []),
+        )
+        if not instance_values:
+            raise serializers.ValidationError({'instance_of_p31': 'At least one instance_of_p31 value is required.'})
+        attrs['instance_of_p31_values'] = instance_values
+        attrs['instance_of_p31'] = instance_values[0]
+
+        part_of_values = _merge_qid_values(
+            str(attrs.get('part_of_p361') or ''),
+            list(attrs.get('part_of_p361_values') or []),
+        )
+        attrs['part_of_p361_values'] = part_of_values
+        attrs['part_of_p361'] = part_of_values[0] if part_of_values else ''
+
+        architect_values = _merge_qid_values(
+            str(attrs.get('architect_p84') or ''),
+            list(attrs.get('architect_p84_values') or []),
+        )
+        attrs['architect_p84_values'] = architect_values
+        attrs['architect_p84'] = architect_values[0] if architect_values else ''
+
+        heritage_values = _merge_qid_values(
+            str(attrs.get('heritage_designation_p1435') or ''),
+            list(attrs.get('heritage_designation_p1435_values') or []),
+        )
+        attrs['heritage_designation_p1435_values'] = heritage_values
+        attrs['heritage_designation_p1435'] = heritage_values[0] if heritage_values else ''
+
         architect = str(attrs.get('architect_p84') or '').strip()
         architect_source = str(attrs.get('architect_source_url') or '').strip()
         inception = str(attrs.get('inception_p571') or '').strip()
         inception_source = str(attrs.get('inception_source_url') or '').strip()
         closure_date = str(attrs.get('official_closure_date_p3999') or '').strip()
         closure_date_source = str(attrs.get('official_closure_date_source_url') or '').strip()
+        source_url = str(attrs.get('source_url') or '').strip()
         heritage = str(attrs.get('heritage_designation_p1435') or '').strip()
-        heritage_source = str(attrs.get('heritage_source_url') or '').strip()
+        heritage_source = str(attrs.get('heritage_source_url') or '').strip() or source_url
 
         if architect and not architect_source:
             raise serializers.ValidationError({'architect_source_url': 'Source URL is required when architect is set.'})
@@ -313,5 +492,7 @@ class CreateWikidataItemSerializer(serializers.Serializer):
             )
         if heritage and not heritage_source:
             raise serializers.ValidationError({'heritage_source_url': 'Source URL is required when heritage status is set.'})
+        if heritage_source:
+            attrs['heritage_source_url'] = heritage_source
 
         return attrs

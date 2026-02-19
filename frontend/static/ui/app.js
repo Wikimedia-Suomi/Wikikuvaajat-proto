@@ -19,8 +19,174 @@
       : []
   const API_BASE_URL = configuredApiBaseUrl
   const SUPPORTED_LOCALES = ['en', 'sv', 'fi']
+  const WIKIDATA_LANGUAGE_SEARCH_URL = 'https://commons.wikimedia.org/w/api.php'
+  const WIKIDATA_LANGUAGE_CODE_CANONICAL = {
+    sme: 'se',
+  }
   const AUTOCOMPLETE_RESULT_LIMIT = 20
   const LOCATION_SILENT_REFRESH_DELAY_MS = 5000
+  const DETAIL_IMAGE_PLACEHOLDER_DATA_URI = (() => {
+    const svg = (
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">'
+      + '<defs><linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">'
+      + '<stop offset="0%" stop-color="#eef3f8"/><stop offset="100%" stop-color="#d7e2ee"/>'
+      + '</linearGradient></defs>'
+      + '<rect width="1200" height="800" fill="url(#bg)"/>'
+      + '<rect x="250" y="180" width="700" height="440" rx="28" fill="#9eb1c5"/>'
+      + '<circle cx="500" cy="350" r="65" fill="#d7e2ee"/>'
+      + '<path d="M320 550l130-150 125 110 95-85 210 125z" fill="#d7e2ee"/>'
+      + '</svg>'
+    )
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
+  })()
+
+  function normalizeLanguageSearchToken(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+  }
+
+  function normalizeLanguageCode(value) {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (!normalized) {
+      return ''
+    }
+    return WIKIDATA_LANGUAGE_CODE_CANONICAL[normalized] || normalized
+  }
+
+  function extractLanguageSearchItems(payload) {
+    const normalizeObjectItems = (rawItems) => {
+      if (!rawItems || typeof rawItems !== 'object' || Array.isArray(rawItems)) {
+        return []
+      }
+      const items = []
+      for (const [code, name] of Object.entries(rawItems)) {
+        const normalizedCode = normalizeLanguageCode(code)
+        const normalizedName = String(name || '').trim()
+        if (!normalizedCode) {
+          continue
+        }
+        items.push({
+          code: normalizedCode,
+          name: normalizedName,
+        })
+      }
+      return items
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      return []
+    }
+    if (Array.isArray(payload.search)) {
+      return payload.search
+    }
+    if (Array.isArray(payload.languagesearch)) {
+      return payload.languagesearch
+    }
+    if (payload.languagesearch && typeof payload.languagesearch === 'object') {
+      return normalizeObjectItems(payload.languagesearch)
+    }
+    if (Array.isArray(payload.languages)) {
+      return payload.languages
+    }
+    if (payload.query && typeof payload.query === 'object' && Array.isArray(payload.query.languagesearch)) {
+      return payload.query.languagesearch
+    }
+    if (
+      payload.query &&
+      typeof payload.query === 'object' &&
+      payload.query.languagesearch &&
+      typeof payload.query.languagesearch === 'object'
+    ) {
+      return normalizeObjectItems(payload.query.languagesearch)
+    }
+    return []
+  }
+
+  function normalizeWikidataLanguageOption(option) {
+    if (!option || typeof option !== 'object') {
+      return null
+    }
+
+    const code = normalizeLanguageCode(option.code || option.language || option.lang || '')
+    if (!code) {
+      return null
+    }
+
+    const name = String(option.name || option.localname || option.localName || option.language || '').trim()
+    const autonym = String(option.autonym || option.native || option.autonymname || option.autonymName || '').trim()
+    const searchTokens = new Set([normalizeLanguageSearchToken(code)])
+
+    if (name) {
+      searchTokens.add(normalizeLanguageSearchToken(name))
+    }
+    if (autonym) {
+      searchTokens.add(normalizeLanguageSearchToken(autonym))
+    }
+    if (Array.isArray(option.searchTokens)) {
+      for (const token of option.searchTokens) {
+        const normalizedToken = normalizeLanguageSearchToken(token)
+        if (normalizedToken) {
+          searchTokens.add(normalizedToken)
+        }
+      }
+    }
+
+    return {
+      code,
+      name,
+      autonym,
+      searchTokens: Array.from(searchTokens).filter(Boolean),
+    }
+  }
+
+  async function searchWikidataLanguages(query, lang = null, limit = AUTOCOMPLETE_RESULT_LIMIT) {
+    const searchTerm = String(query || '').trim()
+    if (!searchTerm) {
+      return []
+    }
+
+    const requestLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || AUTOCOMPLETE_RESULT_LIMIT, 50))
+    const searchUrl = new URL(WIKIDATA_LANGUAGE_SEARCH_URL)
+    searchUrl.searchParams.set('action', 'languagesearch')
+    searchUrl.searchParams.set('format', 'json')
+    searchUrl.searchParams.set('formatversion', '2')
+    searchUrl.searchParams.set('search', searchTerm)
+    searchUrl.searchParams.set('limit', String(requestLimit))
+    searchUrl.searchParams.set('origin', '*')
+    const normalizedUiLocale = normalizeSupportedLocale(lang) || 'en'
+    searchUrl.searchParams.set('uselang', normalizedUiLocale)
+
+    const response = await fetch(searchUrl.toString(), { method: 'GET' })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const items = extractLanguageSearchItems(payload)
+    if (!Array.isArray(items)) {
+      return []
+    }
+
+    const seenCodes = new Set()
+    const options = []
+    for (const item of items) {
+      const normalizedOption = normalizeWikidataLanguageOption(item)
+      if (!normalizedOption) {
+        continue
+      }
+      if (seenCodes.has(normalizedOption.code)) {
+        continue
+      }
+      seenCodes.add(normalizedOption.code)
+      options.push(normalizedOption)
+    }
+
+    return options
+  }
 
   const PREDEFINED_ENDPOINTS = configuredPredefinedEndpoints
     .filter((entry) => entry && typeof entry.url === 'string' && entry.url.trim() !== '')
@@ -752,7 +918,7 @@
       locatedOnStreetP669: 'Located on street (P669)',
       houseNumberP670: 'House number (P670)',
       heritageDesignationP1435: 'Heritage designation (P1435)',
-      instanceOfP31: 'Instance of (P31)',
+      instanceOfP31: 'instance of (P31)',
       architecturalStyleP149: 'Architectural style (P149)',
       routeInstructionP2795: 'Route instruction (P2795)',
       ysoIdP2347: 'YSO ID (P2347)',
@@ -770,11 +936,13 @@
       imageSourcePetScan: 'petscan',
       imageSourceViewIt: 'view-it',
       inceptionP571: 'Inception (P571)',
+      partOfP361: 'Part of (P361)',
       locationP276: 'Location (P276)',
       architectP84: 'Architect (P84)',
       officialClosureDateP3999: 'Date of official closure (P3999)',
       stateOfUseP5817: 'State of use (P5817)',
       image: 'Image',
+      imagePlaceholderLabel: 'No image available yet',
       parentLocation: 'Parent location',
       parentLocationPlaceholder: 'Search parent location...',
       clearParent: 'Clear parent',
@@ -832,25 +1000,42 @@
       createLocationTypeStepTitle: 'How do you want to create the location?',
       createWizardIntro: 'Choose the creation method first. You can return and change this selection.',
       createModeExistingTitle: 'Add existing Wikidata item',
-      createModeExistingDesc: 'Pick an existing Wikidata item and add P5008 = Q138299296 if missing.',
+      createModeExistingDesc: 'Pick an existing Wikidata item and add it to the Wikikuvaajat endangered buildings list.',
       createModeNewWikidataTitle: 'Create new Wikidata item',
       createModeNewWikidataDesc: 'Use a guided form to create a new Wikidata item for a building.',
       createModeLocalTitle: 'Create local draft',
       createModeLocalDesc: 'Create a locally stored draft as before.',
       addExistingWikidataTitle: 'Add Existing Wikidata Item',
-      addExistingWikidataHelp: 'Select an existing Wikidata item. The app adds P5008 = Q138299296 only if it is missing.',
+      addExistingWikidataHelp: 'Select an existing Wikidata item and add it to the Wikikuvaajat endangered buildings list.',
       addExistingWikidataSourceHelp: 'Add a source for this item.',
       addExistingWikidataSuccess: 'Added successfully. The list has been refreshed.',
       createNewWikidataTitle: 'Create New Wikidata Item',
-      createNewWikidataHelp: 'Required for building: label, description, P31, P17, P131, coordinates.',
+      createNewWikidataHelp: 'Required for building: at least one FI/SV/EN name-description pair, location, P31, and source.',
+      newWikidataPrimaryLanguageHelp: 'Fill name and description in Finnish, Swedish, and English. At least one language pair is required.',
+      languageGroupFi: 'Finnish',
+      languageGroupSv: 'Swedish',
+      languageGroupEn: 'English',
+      additionalLanguages: 'Additional languages',
+      additionalLanguagesHelp: 'You can add name and description in other languages too.',
+      languageCode: 'Language code',
+      languageCodePlaceholder: 'Type code or language name (e.g. de or German)',
+      addLanguage: 'Add language',
+      removeLanguage: 'Remove language',
       locationAndCoordinates: 'Location and coordinates',
       createWikidataItem: 'Create Wikidata item',
       addToList: 'Add to list',
       next: 'Next',
       wikidataItemRequired: 'Wikidata item is required.',
       locationDescriptionRequired: 'Description is required.',
+      locationNameDescriptionPairRequired: 'Fill at least one name and description pair in FI, SV, or EN.',
+      locationNameRequiredForLanguage: 'Name is required for language {language}.',
+      locationDescriptionRequiredForLanguage: 'Description is required for language {language}.',
+      additionalLanguageCodeRequired: 'Language code is required for additional language entries.',
+      additionalLanguageCodeInvalid: 'Use a valid language code or select a language from suggestions.',
       countryP17: 'Country (P17)',
       countrySelectionRequired: 'Select country from suggestions.',
+      detailedLocationP276: 'Detailed location (P276)',
+      partOfPlaceholder: 'Search parent item (Wikidata)...',
       sourceUrl: 'Source URL',
       sourceUrlPlaceholder: 'https://example.org/source',
       sourceTitle: 'Source title',
@@ -858,7 +1043,7 @@
       sourceAuthor: 'Source author',
       sourcePublicationDate: 'Publication date',
       sourceRetrievedDate: 'Retrieved date',
-      sourcePublicationDatePlaceholder: 'YYYY-MM-DD',
+      sourcePublicationDatePlaceholder: 'YYYY-MM-DD or D.M.YYYY',
       sourcePublisherP123: 'Publisher (P123)',
       sourcePublisherPlaceholder: 'Search publisher (Wikidata)...',
       sourcePublisherInvalid: 'Publisher (P123) must be a valid Wikidata item.',
@@ -869,6 +1054,7 @@
       sourceLanguageOfWorkPlaceholder: 'Search language (Wikidata)...',
       sourceLanguageOfWorkInvalid: 'Language of work or name (P407) must be a valid Wikidata item.',
       sourceUrlRequiredForAddExisting: 'Source URL is required.',
+      newWikidataSourceHelp: 'Add the source for the new item using the same format as for existing Wikidata items.',
       autofillSourceWithCitoid: 'Auto-fill metadata (Citoid)',
       citoidAutofillLoading: 'Loading source metadata...',
       sourceUrlRequiredForArchitect: 'Architect source URL is required.',
@@ -878,6 +1064,7 @@
       keyPropertiesWithSources: 'Key properties with source',
       optionalProperties: 'Optional properties',
       countryPlaceholder: 'Search country (Wikidata)...',
+      detailedLocationPlaceholder: 'Search detailed location (Wikidata)...',
       signInWikimedia: 'Sign in with Wikimedia',
       signOut: 'Sign out',
       signedInAs: 'Signed in as {name}',
@@ -976,7 +1163,7 @@
       locatedOnStreetP669: 'Belägen på gata (P669)',
       houseNumberP670: 'Husnummer (P670)',
       heritageDesignationP1435: 'Kulturminnesklassning (P1435)',
-      instanceOfP31: 'Instans av (P31)',
+      instanceOfP31: 'instans av (P31)',
       architecturalStyleP149: 'Arkitektonisk stil (P149)',
       routeInstructionP2795: 'Vägbeskrivning (P2795)',
       ysoIdP2347: 'YSO-ID (P2347)',
@@ -994,11 +1181,13 @@
       imageSourcePetScan: 'petscan',
       imageSourceViewIt: 'view-it',
       inceptionP571: 'Starttid (P571)',
+      partOfP361: 'Del av (P361)',
       locationP276: 'Plats (P276)',
       architectP84: 'Arkitekt (P84)',
       officialClosureDateP3999: 'Datum för officiell stängning (P3999)',
       stateOfUseP5817: 'Användningsstatus (P5817)',
       image: 'Bild',
+      imagePlaceholderLabel: 'Ingen bild ännu',
       parentLocation: 'Överordnad plats',
       parentLocationPlaceholder: 'Sök överordnad plats...',
       clearParent: 'Rensa overordnad',
@@ -1056,25 +1245,42 @@
       createLocationTypeStepTitle: 'Hur vill du skapa platsen?',
       createWizardIntro: 'Välj först hur platsen ska skapas. Du kan gå tillbaka och byta val.',
       createModeExistingTitle: 'Lägg till befintligt Wikidata-objekt',
-      createModeExistingDesc: 'Välj ett befintligt Wikidata-objekt och lägg till P5008 = Q138299296 vid behov.',
+      createModeExistingDesc: 'Välj ett befintligt Wikidata-objekt och lägg till det i Wikikuvaajat-listan över hotade byggnader.',
       createModeNewWikidataTitle: 'Skapa nytt Wikidata-objekt',
       createModeNewWikidataDesc: 'Använd ett guidat formulär för att skapa ett nytt Wikidata-objekt för en byggnad.',
       createModeLocalTitle: 'Skapa lokalt utkast',
       createModeLocalDesc: 'Skapa ett lokalt sparat utkast som tidigare.',
       addExistingWikidataTitle: 'Lägg till befintligt Wikidata-objekt',
-      addExistingWikidataHelp: 'Välj ett befintligt Wikidata-objekt. Appen lägger till P5008 = Q138299296 om den saknas.',
+      addExistingWikidataHelp: 'Välj ett befintligt Wikidata-objekt och lägg till det i Wikikuvaajat-listan över hotade byggnader.',
       addExistingWikidataSourceHelp: 'Lägg till en källa för objektet.',
       addExistingWikidataSuccess: 'Tillägg lyckades. Listan har uppdaterats.',
       createNewWikidataTitle: 'Skapa nytt Wikidata-objekt',
-      createNewWikidataHelp: 'Obligatoriskt för byggnad: etikett, beskrivning, P31, P17, P131, koordinater.',
+      createNewWikidataHelp: 'Obligatoriskt för byggnad: minst ett namn-beskrivningspar på FI/SV/EN, plats, P31 och källa.',
+      newWikidataPrimaryLanguageHelp: 'Fyll i namn och beskrivning på finska, svenska och engelska. Minst ett språkpar krävs.',
+      languageGroupFi: 'Finska',
+      languageGroupSv: 'Svenska',
+      languageGroupEn: 'Engelska',
+      additionalLanguages: 'Ytterligare språk',
+      additionalLanguagesHelp: 'Du kan också lägga till namn och beskrivning på andra språk.',
+      languageCode: 'Språkkod',
+      languageCodePlaceholder: 'Skriv kod eller språkets namn (t.ex. de eller tyska)',
+      addLanguage: 'Lägg till språk',
+      removeLanguage: 'Ta bort språk',
       locationAndCoordinates: 'Plats och koordinater',
       createWikidataItem: 'Skapa Wikidata-objekt',
       addToList: 'Lägg till i listan',
       next: 'Nästa',
       wikidataItemRequired: 'Wikidata-objekt krävs.',
       locationDescriptionRequired: 'Beskrivning krävs.',
+      locationNameDescriptionPairRequired: 'Fyll i minst ett namn- och beskrivningspar på FI, SV eller EN.',
+      locationNameRequiredForLanguage: 'Namn krävs för språket {language}.',
+      locationDescriptionRequiredForLanguage: 'Beskrivning krävs för språket {language}.',
+      additionalLanguageCodeRequired: 'Språkkod krävs för ytterligare språkrader.',
+      additionalLanguageCodeInvalid: 'Använd en giltig språkkod eller välj ett språk från förslagen.',
       countryP17: 'Land (P17)',
       countrySelectionRequired: 'Välj land från förslag.',
+      detailedLocationP276: 'Noggrannare plats (P276)',
+      partOfPlaceholder: 'Sök överordnat objekt (Wikidata)...',
       sourceUrl: 'Käll-URL',
       sourceUrlPlaceholder: 'https://example.org/source',
       sourceTitle: 'Källtitel',
@@ -1082,7 +1288,7 @@
       sourceAuthor: 'Källans författare',
       sourcePublicationDate: 'Publiceringsdatum',
       sourceRetrievedDate: 'Hämtningsdatum',
-      sourcePublicationDatePlaceholder: 'ÅÅÅÅ-MM-DD',
+      sourcePublicationDatePlaceholder: 'ÅÅÅÅ-MM-DD eller D.M.ÅÅÅÅ',
       sourcePublisherP123: 'Utgivare (P123)',
       sourcePublisherPlaceholder: 'Sök utgivare (Wikidata)...',
       sourcePublisherInvalid: 'Utgivare (P123) måste vara ett giltigt Wikidata-objekt.',
@@ -1093,6 +1299,7 @@
       sourceLanguageOfWorkPlaceholder: 'Sök språk (Wikidata)...',
       sourceLanguageOfWorkInvalid: 'Språk för verk eller namn (P407) måste vara ett giltigt Wikidata-objekt.',
       sourceUrlRequiredForAddExisting: 'Käll-URL krävs.',
+      newWikidataSourceHelp: 'Lägg till källa för det nya objektet i samma format som för befintliga Wikidata-objekt.',
       autofillSourceWithCitoid: 'Autofyll metadata (Citoid)',
       citoidAutofillLoading: 'Hämtar källmetadata...',
       sourceUrlRequiredForArchitect: 'Käll-URL krävs för arkitekt.',
@@ -1102,6 +1309,7 @@
       keyPropertiesWithSources: 'Nyckelegenskaper med källa',
       optionalProperties: 'Valfria egenskaper',
       countryPlaceholder: 'Sök land (Wikidata)...',
+      detailedLocationPlaceholder: 'Sök noggrannare plats (Wikidata)...',
       signInWikimedia: 'Logga in med Wikimedia',
       signOut: 'Logga ut',
       signedInAs: 'Inloggad som {name}',
@@ -1200,7 +1408,7 @@
       locatedOnStreetP669: 'Sijaitsee kadulla (P669)',
       houseNumberP670: 'Talonumero (P670)',
       heritageDesignationP1435: 'Suojelustatus (P1435)',
-      instanceOfP31: 'Luokka (P31)',
+      instanceOfP31: 'Esiintymä kohteesta (P31)',
       architecturalStyleP149: 'Arkkitehtoninen tyyli (P149)',
       routeInstructionP2795: 'Reittiohje (P2795)',
       ysoIdP2347: 'YSO-tunniste (P2347)',
@@ -1218,11 +1426,13 @@
       imageSourcePetScan: 'petscan',
       imageSourceViewIt: 'view-it',
       inceptionP571: 'Aloitusajankohta (P571)',
+      partOfP361: 'Osa kohdetta (P361)',
       locationP276: 'Sijainti (P276)',
       architectP84: 'Arkkitehti (P84)',
       officialClosureDateP3999: 'Virallinen sulkemispäivä (P3999)',
       stateOfUseP5817: 'Käytön tila (P5817)',
       image: 'Kuva',
+      imagePlaceholderLabel: 'Kuva puuttuu toistaiseksi',
       parentLocation: 'Yläkohde',
       parentLocationPlaceholder: 'Hae yläkohdetta...',
       clearParent: 'Tyhjennä yläkohde',
@@ -1290,15 +1500,32 @@
       addExistingWikidataSourceHelp: 'Lisää kohteelle lähde.',
       addExistingWikidataSuccess: 'Lisäys onnistui. Luettelo päivitettiin.',
       createNewWikidataTitle: 'Luo uusi Wikidata-kohde',
-      createNewWikidataHelp: 'Rakennukselle pakolliset tiedot: nimi, kuvaus, P31, P17, P131 ja koordinaatit.',
+      createNewWikidataHelp: 'Rakennukselle pakolliset tiedot: vähintään yksi FI/SV/EN nimi-kuvauspari, sijainti, P31 ja lähde.',
+      newWikidataPrimaryLanguageHelp: 'Täytä nimi ja kuvaus suomeksi, ruotsiksi ja englanniksi. Vähintään yksi kielipari vaaditaan.',
+      languageGroupFi: 'Suomi',
+      languageGroupSv: 'Ruotsi',
+      languageGroupEn: 'Englanti',
+      additionalLanguages: 'Muut kielet',
+      additionalLanguagesHelp: 'Voit lisätä nimen ja kuvauksen myös muilla kielillä.',
+      languageCode: 'Kielikoodi',
+      languageCodePlaceholder: 'Kirjoita koodi tai kielen nimi (esim. de tai saksa)',
+      addLanguage: 'Lisää kieli',
+      removeLanguage: 'Poista kieli',
       locationAndCoordinates: 'Sijainti ja koordinaatit',
       createWikidataItem: 'Luo Wikidata-kohde',
       addToList: 'Lisää listaan',
       next: 'Seuraava',
       wikidataItemRequired: 'Wikidata-kohde vaaditaan.',
       locationDescriptionRequired: 'Kuvaus vaaditaan.',
+      locationNameDescriptionPairRequired: 'Täytä vähintään yksi nimi- ja kuvauspari kielillä FI, SV tai EN.',
+      locationNameRequiredForLanguage: 'Nimi vaaditaan kielelle {language}.',
+      locationDescriptionRequiredForLanguage: 'Kuvaus vaaditaan kielelle {language}.',
+      additionalLanguageCodeRequired: 'Lisäkieliriville vaaditaan kielikoodi.',
+      additionalLanguageCodeInvalid: 'Anna kelvollinen kielikoodi tai valitse kieli ehdotuksista.',
       countryP17: 'Maa (P17)',
       countrySelectionRequired: 'Valitse maa ehdotuksista.',
+      detailedLocationP276: 'Tarkempi sijainti (P276)',
+      partOfPlaceholder: 'Hae yläkohdetta (Wikidata)...',
       sourceUrl: 'Lähde-URL',
       sourceUrlPlaceholder: 'https://example.org/source',
       sourceTitle: 'Lähteen otsikko',
@@ -1306,7 +1533,7 @@
       sourceAuthor: 'Lähteen tekijä',
       sourcePublicationDate: 'Julkaisupäivä',
       sourceRetrievedDate: 'Hakupäivä',
-      sourcePublicationDatePlaceholder: 'YYYY-MM-DD',
+      sourcePublicationDatePlaceholder: 'YYYY-MM-DD tai D.M.YYYY',
       sourcePublisherP123: 'Julkaisija (P123)',
       sourcePublisherPlaceholder: 'Hae julkaisija (Wikidata)...',
       sourcePublisherInvalid: 'Julkaisija (P123) pitää olla kelvollinen Wikidata-kohde.',
@@ -1317,6 +1544,7 @@
       sourceLanguageOfWorkPlaceholder: 'Hae kieli (Wikidata)...',
       sourceLanguageOfWorkInvalid: 'Teoksen tai nimen kieli (P407) pitää olla kelvollinen Wikidata-kohde.',
       sourceUrlRequiredForAddExisting: 'Lähde-URL vaaditaan.',
+      newWikidataSourceHelp: 'Lisää uuden kohteen lähde samalla tavalla kuin olemassa olevan Wikidata-kohteen kohdalla.',
       autofillSourceWithCitoid: 'Täytä metatiedot automaattisesti (Citoid)',
       citoidAutofillLoading: 'Haetaan lähteen metatietoja...',
       sourceUrlRequiredForArchitect: 'Arkkitehdin lähde-URL vaaditaan.',
@@ -1326,6 +1554,7 @@
       keyPropertiesWithSources: 'Keskeiset ominaisuudet ja lähteet',
       optionalProperties: 'Valinnaiset ominaisuudet',
       countryPlaceholder: 'Hae maa (Wikidata)...',
+      detailedLocationPlaceholder: 'Hae tarkempaa sijaintia (Wikidata)...',
       signInWikimedia: 'Kirjaudu Wikimediaan',
       signOut: 'Kirjaudu ulos',
       signedInAs: 'Kirjautunut: {name}',
@@ -4191,6 +4420,42 @@ LIMIT {{limit}}`,
         return t('noValue')
       }
 
+      function hasDetailImage(item) {
+        if (!item || typeof item !== 'object') {
+          return false
+        }
+        const thumbUrl = typeof item.image_thumb_url === 'string' ? item.image_thumb_url.trim() : ''
+        const imageUrl = typeof item.image_url === 'string' ? item.image_url.trim() : ''
+        return Boolean(thumbUrl || imageUrl)
+      }
+
+      function detailImageSrc(item) {
+        if (!item || typeof item !== 'object') {
+          return DETAIL_IMAGE_PLACEHOLDER_DATA_URI
+        }
+        const thumbUrl = typeof item.image_thumb_url === 'string' ? item.image_thumb_url.trim() : ''
+        if (thumbUrl) {
+          return thumbUrl
+        }
+        const imageUrl = typeof item.image_url === 'string' ? item.image_url.trim() : ''
+        if (imageUrl) {
+          return imageUrl
+        }
+        return DETAIL_IMAGE_PLACEHOLDER_DATA_URI
+      }
+
+      function detailImageFallbackSrc(item) {
+        if (!item || typeof item !== 'object') {
+          return DETAIL_IMAGE_PLACEHOLDER_DATA_URI
+        }
+        const thumbUrl = typeof item.image_thumb_url === 'string' ? item.image_thumb_url.trim() : ''
+        const imageUrl = typeof item.image_url === 'string' ? item.image_url.trim() : ''
+        if (thumbUrl && imageUrl && thumbUrl !== imageUrl) {
+          return imageUrl
+        }
+        return DETAIL_IMAGE_PLACEHOLDER_DATA_URI
+      }
+
       const detailInlineAddress = computed(() => inlineAddressText(location.value))
 
       const hasMediaMetadata = computed(() => {
@@ -4327,6 +4592,9 @@ LIMIT {{limit}}`,
         commonsImagesLabel,
         formatCoordinates,
         locationDisplayName,
+        hasDetailImage,
+        detailImageSrc,
+        detailImageFallbackSrc,
         hasMediaMetadata,
         detailsAriaLabel,
         handleImageLoadError,
@@ -4369,19 +4637,23 @@ LIMIT {{limit}}`,
               </button>
             </div>
           </header>
-          <div
-            v-if="(location.image_thumb_url || location.image_url) || hasDetailMapCoordinates || hasMediaMetadata"
-            class="detail-media-layout"
-          >
-            <figure v-if="location.image_thumb_url || location.image_url" class="detail-image">
+          <div class="detail-media-layout">
+            <figure class="detail-image">
               <img
-                class="thumb-image"
-                :src="location.image_thumb_url || location.image_url"
+                :class="['thumb-image', { 'thumb-image--placeholder': !hasDetailImage(location) }]"
+                :src="detailImageSrc(location)"
                 :alt="location.image_name || locationDisplayName(location)"
                 loading="lazy"
-                @error="(event) => handleImageLoadError(event, location.image_url)"
+                @error="(event) => handleImageLoadError(event, detailImageFallbackSrc(location))"
               />
-              <figcaption v-if="hasMediaMetadata" class="detail-media-caption" :aria-label="t('mediaAndCounts')">
+              <figcaption
+                v-if="hasMediaMetadata || !hasDetailImage(location)"
+                class="detail-media-caption"
+                :aria-label="t('mediaAndCounts')"
+              >
+                <span v-if="!hasDetailImage(location)" class="detail-media-caption-line">
+                  {{ t('imagePlaceholderLabel') }}
+                </span>
                 <span v-if="location.commons_category" class="detail-media-caption-line">
                   <span class="detail-media-caption-label">{{ t('commonsCategory') }}:</span>
                   <a
@@ -4420,36 +4692,6 @@ LIMIT {{limit}}`,
                 <span>{{ formatCoordinates(location.latitude, location.longitude) }}</span>
               </p>
             </div>
-            <p
-              v-if="hasMediaMetadata && !(location.image_thumb_url || location.image_url)"
-              class="detail-media-caption detail-media-caption-standalone"
-              :aria-label="t('mediaAndCounts')"
-            >
-              <span v-if="location.commons_category" class="detail-media-caption-line">
-                <span class="detail-media-caption-label">{{ t('commonsCategory') }}:</span>
-                <a
-                  v-if="isHttpUrl(location.commons_category_url)"
-                  :href="location.commons_category_url"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {{ location.commons_category }}
-                </a>
-                <span v-else>{{ location.commons_category }}</span>
-              </span>
-              <span v-if="preferredImageSource(location)" class="detail-media-caption-line">
-                <span class="detail-media-caption-label">{{ commonsImagesLabel(location) }}:</span>
-                <a
-                  v-if="preferredImageHref(location)"
-                  :href="preferredImageHref(location)"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {{ formatImageCount(preferredImageCount(location)) }}
-                </a>
-                <span v-else>{{ formatImageCount(preferredImageCount(location)) }}</span>
-              </span>
-            </p>
           </div>
           <section class="detail-section">
             <h3>{{ t('basicInformation') }}</h3>
@@ -4956,14 +5198,21 @@ LIMIT {{limit}}`,
       const wizardExistingCitoidError = ref('')
       const wizardExistingLastCitoidUrl = ref('')
       const wikidataTextLanguageOptions = [...SUPPORTED_LOCALES]
+      const wikidataAddressLanguageOptions = [...SUPPORTED_LOCALES, 'se', 'smn', 'sms']
+      const wikidataLanguageCodePattern = /^[a-z]{2,12}$/
       function defaultWikidataTextLanguage() {
         return normalizeSupportedLocale(locale.value) || 'en'
       }
-      const newWikidataLabel = ref('')
-      const newWikidataLabelLanguage = ref(defaultWikidataTextLanguage())
-      const newWikidataDescription = ref('')
-      const newWikidataDescriptionLanguage = ref(defaultWikidataTextLanguage())
+      const newWikidataPrimaryLabels = ref({ fi: '', sv: '', en: '' })
+      const newWikidataPrimaryDescriptions = ref({ fi: '', sv: '', en: '' })
+      const newWikidataAdditionalLanguageEntries = ref([])
+      const newWikidataPartOfP361 = ref('')
+      const newWikidataPartOfP361Values = ref([])
+      const newWikidataPartOfSearch = ref('')
+      const newWikidataPartOfSuggestions = ref([])
+      const newWikidataPartOfLoading = ref(false)
       const newWikidataInstanceOf = ref('')
+      const newWikidataInstanceOfValues = ref([])
       const newWikidataInstanceSearch = ref('')
       const newWikidataInstanceSuggestions = ref([])
       const newWikidataInstanceLoading = ref(false)
@@ -4975,9 +5224,14 @@ LIMIT {{limit}}`,
       const newWikidataMunicipalitySearch = ref('')
       const newWikidataMunicipalitySuggestions = ref([])
       const newWikidataMunicipalityLoading = ref(false)
+      const newWikidataLocationP276 = ref('')
+      const newWikidataLocationSearch = ref('')
+      const newWikidataLocationSuggestions = ref([])
+      const newWikidataLocationLoading = ref(false)
       const newWikidataLatitude = ref('')
       const newWikidataLongitude = ref('')
       const newWikidataArchitectP84 = ref('')
+      const newWikidataArchitectP84Values = ref([])
       const newWikidataArchitectSearch = ref('')
       const newWikidataArchitectSuggestions = ref([])
       const newWikidataArchitectLoading = ref(false)
@@ -4985,6 +5239,7 @@ LIMIT {{limit}}`,
       const newWikidataArchitectSourceUrl = ref('')
       const newWikidataInceptionSourceUrl = ref('')
       const newWikidataHeritageP1435 = ref('')
+      const newWikidataHeritageP1435Values = ref([])
       const newWikidataHeritageSearch = ref('')
       const newWikidataHeritageSuggestions = ref([])
       const newWikidataHeritageLoading = ref(false)
@@ -5057,6 +5312,8 @@ LIMIT {{limit}}`,
       const isWizardNewMode = computed(() => !isEditMode.value && createWizardMode.value === 'new-wikidata' && createWizardStep.value === 'form')
       const isWizardNewBasicStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'basic')
       const isWizardNewLocationStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'location')
+      const isWizardNewPropertiesStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'properties')
+      const isWizardNewSourceStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'source')
       const showLocalDraftForm = computed(() => isEditMode.value || createWizardMode.value === 'local-draft')
       const canReturnToWizardChoice = computed(() => !isEditMode.value && !wizardChoiceLocked.value && createWizardStep.value === 'form')
       const canCreateLocation = computed(() => !authStatusLoading.value && (!authEnabled.value || authAuthenticated.value))
@@ -5086,7 +5343,7 @@ LIMIT {{limit}}`,
           return t('addToList')
         }
         if (isWizardNewMode.value) {
-          if (isWizardNewBasicStep.value) {
+          if (!isWizardNewSourceStep.value) {
             return t('next')
           }
           return t('createWikidataItem')
@@ -5299,6 +5556,10 @@ LIMIT {{limit}}`,
         wizardExistingSourceLanguageOfWorkSuggestions,
         wizardExistingSourceLanguageOfWorkLoading,
       )
+      const searchNewPartOfSuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataPartOfSuggestions,
+        newWikidataPartOfLoading,
+      )
       const searchNewInstanceSuggestionsDebounced = createWikidataSuggestionSearch(
         newWikidataInstanceSuggestions,
         newWikidataInstanceLoading,
@@ -5310,6 +5571,10 @@ LIMIT {{limit}}`,
       const searchNewMunicipalitySuggestionsDebounced = createWikidataSuggestionSearch(
         newWikidataMunicipalitySuggestions,
         newWikidataMunicipalityLoading,
+      )
+      const searchNewLocationSuggestionsDebounced = createWikidataSuggestionSearch(
+        newWikidataLocationSuggestions,
+        newWikidataLocationLoading,
       )
       const searchNewArchitectSuggestionsDebounced = createWikidataSuggestionSearch(
         newWikidataArchitectSuggestions,
@@ -5327,9 +5592,275 @@ LIMIT {{limit}}`,
         newWikidataCommonsSuggestions,
         newWikidataCommonsLoading,
       )
+      let wikidataSelectionUidCounter = 0
+
+      function nextWikidataSelectionUid() {
+        wikidataSelectionUidCounter += 1
+        return `wdsel-${wikidataSelectionUidCounter}`
+      }
 
       function resolveWizardQid(rawValue, searchValue = '') {
         return extractWikidataId(rawValue || searchValue || '')
+      }
+
+      function extractWikidataSelectionLabel(searchValue, qid) {
+        const normalizedQid = extractWikidataId(qid)
+        if (!normalizedQid) {
+          return ''
+        }
+        const text = String(searchValue || '').trim()
+        if (!text) {
+          return ''
+        }
+
+        const qidMatch = text.match(/^(.*)\(\s*(Q\d+)\s*\)\s*$/i)
+        if (qidMatch) {
+          const matchedQid = extractWikidataId(qidMatch[2])
+          if (matchedQid && matchedQid === normalizedQid) {
+            return String(qidMatch[1] || '').trim()
+          }
+        }
+
+        if (text.toUpperCase() === normalizedQid) {
+          return ''
+        }
+
+        return text
+      }
+
+      function normalizeWikidataSelection(option, fallbackSearchValue = '') {
+        let qid = ''
+        let label = ''
+        let description = ''
+
+        if (option && typeof option === 'object') {
+          const nestedTextCandidates = (
+            option.value && typeof option.value === 'object'
+              ? [
+                option.value.label,
+                option.value.name,
+                option.value.title,
+                option.value.text,
+              ]
+              : []
+          )
+          const textCandidates = [
+            option.label,
+            option.name,
+            option.title,
+            option.text,
+            ...nestedTextCandidates,
+          ]
+          const nestedValue = (
+            option.value && typeof option.value === 'object'
+              ? (
+                option.value.id ||
+                option.value.uri ||
+                option.value.qid ||
+                option.value.value ||
+                ''
+              )
+              : option.value
+          )
+          const qidCandidates = [
+            option.id,
+            option.qid,
+            option.entityId,
+            option.concepturi,
+            option.uri,
+            nestedValue,
+            option.description,
+            ...textCandidates,
+            fallbackSearchValue,
+          ]
+          for (const candidate of qidCandidates) {
+            qid = extractWikidataId(String(candidate || ''))
+            if (qid) {
+              break
+            }
+          }
+          label = String(textCandidates.find((candidate) => String(candidate || '').trim()) || '').trim()
+          description = String(option.description || option.desc || option.info || '').trim()
+        } else {
+          qid = extractWikidataId(String(option || ''))
+        }
+
+        if (!qid) {
+          return null
+        }
+        if (!label) {
+          label = extractWikidataSelectionLabel(fallbackSearchValue, qid)
+        }
+
+        return {
+          uid: nextWikidataSelectionUid(),
+          id: qid,
+          label,
+          description,
+        }
+      }
+
+      function enrichWikidataSelectionLabel(targetValuesRef, rawQid) {
+        const qid = extractWikidataId(rawQid)
+        if (!qid) {
+          return
+        }
+        const hasMissingLabel = targetValuesRef.value.some((item) => {
+          const itemQid = extractWikidataId(String(item && item.id ? item.id : ''))
+          const itemLabel = String(item && item.label ? item.label : '').trim()
+          return itemQid === qid && !itemLabel
+        })
+        if (!hasMissingLabel) {
+          return
+        }
+
+        void (async () => {
+          try {
+            const entity = await fetchWikidataEntity(qid, locale.value)
+            const resolvedLabel = entity && typeof entity === 'object'
+              ? String(entity.label || '').trim()
+              : ''
+            if (!resolvedLabel) {
+              return
+            }
+            targetValuesRef.value = targetValuesRef.value.map((item) => {
+              const itemQid = extractWikidataId(String(item && item.id ? item.id : ''))
+              const itemLabel = String(item && item.label ? item.label : '').trim()
+              if (itemQid !== qid || itemLabel) {
+                return item
+              }
+              return {
+                ...(item && typeof item === 'object' ? item : {}),
+                uid: item && typeof item === 'object' && item.uid ? item.uid : nextWikidataSelectionUid(),
+                id: qid,
+                label: resolvedLabel,
+              }
+            })
+          } catch (error) {
+            void error
+          }
+        })()
+      }
+
+      function setWikidataSelectionInputFromOption(option, targetValueRef, targetSearchRef, targetSuggestionsRef) {
+        const normalizedSelection = normalizeWikidataSelection(option)
+        if (!normalizedSelection) {
+          return false
+        }
+        targetValueRef.value = normalizedSelection.id
+        targetSearchRef.value = normalizedSelection.label
+          ? `${normalizedSelection.label} (${normalizedSelection.id})`
+          : normalizedSelection.id
+        targetSuggestionsRef.value = []
+        return true
+      }
+
+      function addNewWikidataSelection(
+        targetValuesRef,
+        targetValueRef,
+        targetSearchRef,
+        targetSuggestionsRef,
+        selectedOption = null,
+      ) {
+        targetValuesRef.value = targetValuesRef.value.map((item) => {
+          if (item && typeof item === 'object' && item.uid) {
+            return item
+          }
+          return {
+            ...(item && typeof item === 'object' ? item : {}),
+            uid: nextWikidataSelectionUid(),
+          }
+        })
+
+        const currentSearchValue = String(targetSearchRef.value || '').trim()
+        let normalizedSelection = normalizeWikidataSelection(
+          selectedOption,
+          currentSearchValue,
+        )
+        if (!normalizedSelection) {
+          const resolvedQid = resolveWizardQid(targetValueRef.value, targetSearchRef.value)
+          normalizedSelection = normalizeWikidataSelection(
+            resolvedQid,
+            currentSearchValue,
+          )
+        }
+        if (!normalizedSelection) {
+          return false
+        }
+
+        const alreadySelected = targetValuesRef.value.some(
+          (item) => extractWikidataId(String(item && item.id ? item.id : '')) === normalizedSelection.id
+        )
+        if (!alreadySelected) {
+          targetValuesRef.value = [...targetValuesRef.value, normalizedSelection]
+          if (!normalizedSelection.label) {
+            enrichWikidataSelectionLabel(targetValuesRef, normalizedSelection.id)
+          }
+        }
+
+        targetValueRef.value = ''
+        targetSearchRef.value = ''
+        targetSuggestionsRef.value = []
+        return true
+      }
+
+      function removeNewWikidataSelection(targetValuesRef, rawUid, rawIndex = null) {
+        const uid = String(rawUid || '').trim()
+        if (uid) {
+          const originalLength = targetValuesRef.value.length
+          targetValuesRef.value = targetValuesRef.value.filter(
+            (item) => String(item && item.uid ? item.uid : '').trim() !== uid
+          )
+          if (targetValuesRef.value.length !== originalLength) {
+            return
+          }
+        }
+
+        const index = Number.parseInt(String(rawIndex), 10)
+        if (!Number.isNaN(index) && index >= 0 && index < targetValuesRef.value.length) {
+          targetValuesRef.value = targetValuesRef.value.filter((_, itemIndex) => itemIndex !== index)
+        }
+      }
+
+      function collectWikidataSelectionQids(selectedValues, pendingValue = '', pendingSearchValue = '') {
+        const normalizedQids = []
+        const seenQids = new Set()
+
+        const addQid = (rawValue) => {
+          const qid = extractWikidataId(rawValue)
+          if (!qid || seenQids.has(qid)) {
+            return
+          }
+          seenQids.add(qid)
+          normalizedQids.push(qid)
+        }
+
+        if (Array.isArray(selectedValues)) {
+          for (const item of selectedValues) {
+            if (!item || typeof item !== 'object') {
+              continue
+            }
+            addQid(String(item.id || item.value || ''))
+          }
+        }
+        addQid(resolveWizardQid(pendingValue, pendingSearchValue))
+
+        return normalizedQids
+      }
+
+      function wikidataSelectionChipLabel(item) {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        const qid = extractWikidataId(String(item.id || item.value || ''))
+        if (!qid) {
+          return ''
+        }
+        const label = String(item.label || '').trim()
+        if (label) {
+          return `${label} (${qid})`
+        }
+        return qid
       }
 
       function parentCandidatesKey() {
@@ -5623,11 +6154,17 @@ LIMIT {{limit}}`,
         wizardExistingCitoidLoading.value = false
         wizardExistingCitoidError.value = ''
         wizardExistingLastCitoidUrl.value = ''
-        newWikidataLabel.value = ''
-        newWikidataLabelLanguage.value = defaultWikidataTextLanguage()
-        newWikidataDescription.value = ''
-        newWikidataDescriptionLanguage.value = defaultWikidataTextLanguage()
+        newWikidataPrimaryLabels.value = { fi: '', sv: '', en: '' }
+        newWikidataPrimaryDescriptions.value = { fi: '', sv: '', en: '' }
+        clearAllNewWikidataAdditionalLanguageEntries()
+        newWikidataAdditionalLanguageEntries.value = []
+        newWikidataPartOfP361.value = ''
+        newWikidataPartOfP361Values.value = []
+        newWikidataPartOfSearch.value = ''
+        newWikidataPartOfSuggestions.value = []
+        newWikidataPartOfLoading.value = false
         newWikidataInstanceOf.value = ''
+        newWikidataInstanceOfValues.value = []
         newWikidataInstanceSearch.value = ''
         newWikidataInstanceSuggestions.value = []
         newWikidataInstanceLoading.value = false
@@ -5639,9 +6176,14 @@ LIMIT {{limit}}`,
         newWikidataMunicipalitySearch.value = ''
         newWikidataMunicipalitySuggestions.value = []
         newWikidataMunicipalityLoading.value = false
+        newWikidataLocationP276.value = ''
+        newWikidataLocationSearch.value = ''
+        newWikidataLocationSuggestions.value = []
+        newWikidataLocationLoading.value = false
         newWikidataLatitude.value = ''
         newWikidataLongitude.value = ''
         newWikidataArchitectP84.value = ''
+        newWikidataArchitectP84Values.value = []
         newWikidataArchitectSearch.value = ''
         newWikidataArchitectSuggestions.value = []
         newWikidataArchitectLoading.value = false
@@ -5649,6 +6191,7 @@ LIMIT {{limit}}`,
         newWikidataArchitectSourceUrl.value = ''
         newWikidataInceptionSourceUrl.value = ''
         newWikidataHeritageP1435.value = ''
+        newWikidataHeritageP1435Values.value = []
         newWikidataHeritageSearch.value = ''
         newWikidataHeritageSuggestions.value = []
         newWikidataHeritageLoading.value = false
@@ -5688,35 +6231,435 @@ LIMIT {{limit}}`,
         draftError.value = ''
       }
 
-      function goToNewWikidataLocationStep() {
-        if (!isWizardNewMode.value || newWikidataWizardStep.value !== 'basic') {
-          return
+      let newWikidataAdditionalLanguageLookupSequence = 0
+
+      function wikidataLanguageOptionDisplayName(option) {
+        const normalizedOption = normalizeWikidataLanguageOption(option)
+        if (!normalizedOption) {
+          return ''
         }
-        wizardError.value = ''
-        const label = newWikidataLabel.value.trim()
-        const description = newWikidataDescription.value.trim()
-        const instanceQid = resolveWizardQid(newWikidataInstanceOf.value, newWikidataInstanceSearch.value)
-        if (!label) {
-          wizardError.value = t('locationNameRequired')
-          return
+
+        const code = String(normalizedOption.code || '').trim().toUpperCase()
+        const name = String(normalizedOption.name || '').trim()
+        const autonym = String(normalizedOption.autonym || '').trim()
+        const normalizedName = normalizeLanguageSearchToken(name)
+        const normalizedAutonym = normalizeLanguageSearchToken(autonym)
+
+        const labelParts = []
+        if (name) {
+          labelParts.push(name)
         }
-        if (!description) {
-          wizardError.value = t('locationDescriptionRequired')
-          return
+        if (autonym && normalizedAutonym && normalizedAutonym !== normalizedName) {
+          labelParts.push(autonym)
         }
-        if (!instanceQid) {
-          wizardError.value = t('locationTypeRequired')
-          return
+        const label = labelParts.join(' / ')
+
+        if (label && code) {
+          return `${label} (${code})`
         }
-        newWikidataWizardStep.value = 'location'
+        if (label) {
+          return label
+        }
+        return code
       }
 
-      function returnToNewWikidataBasicStep() {
-        if (!isWizardNewMode.value || newWikidataWizardStep.value !== 'location' || isCreateActionBusy.value) {
+      function languageOptionSearchTokens(option) {
+        const normalizedOption = normalizeWikidataLanguageOption(option)
+        if (!normalizedOption) {
+          return []
+        }
+
+        const tokens = new Set()
+        for (const token of normalizedOption.searchTokens) {
+          const normalizedToken = normalizeLanguageSearchToken(token)
+          if (normalizedToken) {
+            tokens.add(normalizedToken)
+          }
+        }
+
+        const displayLabel = normalizeLanguageSearchToken(wikidataLanguageOptionDisplayName(normalizedOption))
+        if (displayLabel) {
+          tokens.add(displayLabel)
+        }
+
+        return Array.from(tokens)
+      }
+
+      function resolveWikidataLanguageCode(value, suggestions = []) {
+        const rawValue = String(value || '').trim()
+        if (!rawValue) {
+          return ''
+        }
+        const normalizedSuggestions = Array.isArray(suggestions) ? suggestions : []
+
+        const explicitCodeMatch = rawValue.match(/\(([a-z]{2,12})\)\s*$/i)
+        if (explicitCodeMatch) {
+          return normalizeLanguageCode(explicitCodeMatch[1])
+        }
+
+        const loweredRawValue = rawValue.toLowerCase()
+        if (wikidataLanguageCodePattern.test(loweredRawValue)) {
+          return normalizeLanguageCode(loweredRawValue)
+        }
+
+        const normalizedValue = normalizeLanguageSearchToken(rawValue)
+        for (const suggestion of normalizedSuggestions) {
+          const normalizedSuggestion = normalizeWikidataLanguageOption(suggestion)
+          if (!normalizedSuggestion) {
+            continue
+          }
+          const searchTokens = languageOptionSearchTokens(normalizedSuggestion)
+          if (searchTokens.includes(normalizedValue)) {
+            return normalizedSuggestion.code
+          }
+        }
+        return ''
+      }
+
+      function disposeNewWikidataAdditionalLanguageEntry(entry) {
+        if (!entry || typeof entry !== 'object') {
+          return
+        }
+        if (entry.languageSearchTimer) {
+          window.clearTimeout(entry.languageSearchTimer)
+          entry.languageSearchTimer = null
+        }
+        entry.languageLookupToken = 0
+        entry.languageLoading = false
+        entry.languageSuggestionsOpen = false
+        entry.languageSuggestions = []
+      }
+
+      function clearAllNewWikidataAdditionalLanguageEntries() {
+        for (const entry of newWikidataAdditionalLanguageEntries.value) {
+          disposeNewWikidataAdditionalLanguageEntry(entry)
+        }
+      }
+
+      async function loadNewWikidataAdditionalLanguageSuggestions(entry, query) {
+        if (!entry || typeof entry !== 'object') {
+          return
+        }
+
+        const searchTerm = String(query || '').trim()
+        if (!searchTerm) {
+          entry.languageLookupToken = 0
+          entry.languageLoading = false
+          entry.languageSuggestionsOpen = false
+          entry.languageSuggestions = []
+          return
+        }
+
+        const lookupToken = ++newWikidataAdditionalLanguageLookupSequence
+        entry.languageLookupToken = lookupToken
+        entry.languageLoading = true
+
+        try {
+          const items = await searchWikidataLanguages(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
+          if (entry.languageLookupToken !== lookupToken) {
+            return
+          }
+
+          entry.languageSuggestions = Array.isArray(items) ? items : []
+          const resolvedCode = resolveWikidataLanguageCode(entry.languageSearch, entry.languageSuggestions)
+          if (resolvedCode) {
+            entry.language = resolvedCode
+          }
+        } catch (error) {
+          if (entry.languageLookupToken !== lookupToken) {
+            return
+          }
+          entry.languageSuggestions = []
+        } finally {
+          if (entry.languageLookupToken === lookupToken) {
+            entry.languageLoading = false
+          }
+        }
+      }
+
+      function scheduleNewWikidataAdditionalLanguageSearch(entry, query) {
+        if (!entry || typeof entry !== 'object') {
+          return
+        }
+        if (entry.languageSearchTimer) {
+          window.clearTimeout(entry.languageSearchTimer)
+          entry.languageSearchTimer = null
+        }
+
+        const searchTerm = String(query || '').trim()
+        if (!searchTerm) {
+          entry.languageLookupToken = 0
+          entry.languageLoading = false
+          entry.languageSuggestions = []
+          return
+        }
+
+        entry.languageSearchTimer = window.setTimeout(() => {
+          entry.languageSearchTimer = null
+          loadNewWikidataAdditionalLanguageSuggestions(entry, searchTerm)
+        }, 250)
+      }
+
+      function addNewWikidataAdditionalLanguage() {
+        newWikidataAdditionalLanguageEntries.value.push({
+          language: '',
+          languageSearch: '',
+          languageSuggestions: [],
+          languageSuggestionsOpen: false,
+          languageLoading: false,
+          languageLookupToken: 0,
+          languageSearchTimer: null,
+          label: '',
+          description: '',
+        })
+      }
+
+      function removeNewWikidataAdditionalLanguage(index) {
+        const parsedIndex = Number(index)
+        if (!Number.isInteger(parsedIndex) || parsedIndex < 0 || parsedIndex >= newWikidataAdditionalLanguageEntries.value.length) {
+          return
+        }
+        const entry = newWikidataAdditionalLanguageEntries.value[parsedIndex]
+        disposeNewWikidataAdditionalLanguageEntry(entry)
+        newWikidataAdditionalLanguageEntries.value.splice(parsedIndex, 1)
+      }
+
+      function onNewWikidataAdditionalLanguageInput(index) {
+        const parsedIndex = Number(index)
+        if (!Number.isInteger(parsedIndex) || parsedIndex < 0 || parsedIndex >= newWikidataAdditionalLanguageEntries.value.length) {
+          return
+        }
+        const entry = newWikidataAdditionalLanguageEntries.value[parsedIndex]
+        if (!entry || typeof entry !== 'object') {
+          return
+        }
+        entry.language = ''
+        const query = String(entry.languageSearch || '').trim()
+        const normalizedCode = normalizeLanguageCode(query)
+        if (wikidataLanguageCodePattern.test(normalizedCode) && wikidataLanguageCodePattern.test(query.toLowerCase())) {
+          entry.language = normalizedCode
+        }
+        entry.languageSuggestionsOpen = Boolean(query)
+        scheduleNewWikidataAdditionalLanguageSearch(entry, query)
+      }
+
+      function onNewWikidataAdditionalLanguageFocus(index) {
+        const parsedIndex = Number(index)
+        if (!Number.isInteger(parsedIndex) || parsedIndex < 0 || parsedIndex >= newWikidataAdditionalLanguageEntries.value.length) {
+          return
+        }
+        const entry = newWikidataAdditionalLanguageEntries.value[parsedIndex]
+        if (!entry || typeof entry !== 'object') {
+          return
+        }
+        const query = String(entry.languageSearch || '').trim()
+        if (!query) {
+          return
+        }
+        entry.languageSuggestionsOpen = true
+        if (entry.languageSearchTimer) {
+          window.clearTimeout(entry.languageSearchTimer)
+          entry.languageSearchTimer = null
+        }
+        loadNewWikidataAdditionalLanguageSuggestions(entry, query)
+      }
+
+      function selectNewWikidataAdditionalLanguage(index, option) {
+        const parsedIndex = Number(index)
+        if (!Number.isInteger(parsedIndex) || parsedIndex < 0 || parsedIndex >= newWikidataAdditionalLanguageEntries.value.length) {
+          return
+        }
+        if (!option || typeof option !== 'object') {
+          return
+        }
+        const entry = newWikidataAdditionalLanguageEntries.value[parsedIndex]
+        if (!entry || typeof entry !== 'object') {
+          return
+        }
+        const normalizedOption = normalizeWikidataLanguageOption(option)
+        if (!normalizedOption) {
+          return
+        }
+        entry.language = normalizedOption.code
+        entry.languageSearch = wikidataLanguageOptionDisplayName(normalizedOption)
+        entry.languageLookupToken = 0
+        entry.languageLoading = false
+        if (entry.languageSearchTimer) {
+          window.clearTimeout(entry.languageSearchTimer)
+          entry.languageSearchTimer = null
+        }
+        entry.languageSuggestionsOpen = false
+        entry.languageSuggestions = []
+      }
+
+      function hideNewWikidataAdditionalLanguageSuggestionsSoon(index) {
+        const parsedIndex = Number(index)
+        if (!Number.isInteger(parsedIndex) || parsedIndex < 0 || parsedIndex >= newWikidataAdditionalLanguageEntries.value.length) {
+          return
+        }
+        window.setTimeout(() => {
+          const entry = newWikidataAdditionalLanguageEntries.value[parsedIndex]
+          if (!entry || typeof entry !== 'object') {
+            return
+          }
+          entry.languageSuggestionsOpen = false
+        }, 120)
+      }
+
+      function collectNewWikidataLabelsAndDescriptions() {
+        const labels = {}
+        const descriptions = {}
+        let hasPrimaryPair = false
+
+        for (const langCode of ['fi', 'sv', 'en']) {
+          const label = String(newWikidataPrimaryLabels.value[langCode] || '').trim()
+          const description = String(newWikidataPrimaryDescriptions.value[langCode] || '').trim()
+          if (!label && !description) {
+            continue
+          }
+          if (!label) {
+            return {
+              error: t('locationNameRequiredForLanguage', { language: langCode.toUpperCase() }),
+            }
+          }
+          if (!description) {
+            return {
+              error: t('locationDescriptionRequiredForLanguage', { language: langCode.toUpperCase() }),
+            }
+          }
+          labels[langCode] = label
+          descriptions[langCode] = description
+          hasPrimaryPair = true
+        }
+
+        if (!hasPrimaryPair) {
+          return { error: t('locationNameDescriptionPairRequired') }
+        }
+
+        for (const entry of newWikidataAdditionalLanguageEntries.value) {
+          if (!entry || typeof entry !== 'object') {
+            continue
+          }
+          const languageInput = String(entry.language || entry.languageSearch || '').trim()
+          const label = String(entry.label || '').trim()
+          const description = String(entry.description || '').trim()
+          if (!languageInput && !label && !description) {
+            continue
+          }
+          if (!languageInput) {
+            return { error: t('additionalLanguageCodeRequired') }
+          }
+          const language = resolveWikidataLanguageCode(languageInput, entry.languageSuggestions || [])
+          if (!wikidataLanguageCodePattern.test(language)) {
+            return { error: t('additionalLanguageCodeInvalid') }
+          }
+          if (!label) {
+            return {
+              error: t('locationNameRequiredForLanguage', { language: language.toUpperCase() }),
+            }
+          }
+          if (!description) {
+            return {
+              error: t('locationDescriptionRequiredForLanguage', { language: language.toUpperCase() }),
+            }
+          }
+          labels[language] = label
+          descriptions[language] = description
+        }
+
+        return { labels, descriptions }
+      }
+
+      function validateNewWikidataTextStep() {
+        const textPayload = collectNewWikidataLabelsAndDescriptions()
+        if (textPayload.error) {
+          wizardError.value = textPayload.error
+          return false
+        }
+        return true
+      }
+
+      function validateNewWikidataLocationStep() {
+        const countryQid = resolveWizardQid(newWikidataCountryP17.value, newWikidataCountrySearch.value)
+        const municipalityQid = resolveWizardQid(newWikidataMunicipalityP131.value, newWikidataMunicipalitySearch.value)
+        if (!countryQid) {
+          wizardError.value = t('countrySelectionRequired')
+          return false
+        }
+        if (!municipalityQid) {
+          wizardError.value = t('municipalitySelectionRequired')
+          return false
+        }
+
+        const latitude = Number.parseFloat(String(newWikidataLatitude.value))
+        const longitude = Number.parseFloat(String(newWikidataLongitude.value))
+        if (Number.isNaN(latitude)) {
+          wizardError.value = t('latitudeRequired')
+          return false
+        }
+        if (Number.isNaN(longitude)) {
+          wizardError.value = t('longitudeRequired')
+          return false
+        }
+        return true
+      }
+
+      function validateNewWikidataPropertiesStep() {
+        const instanceQids = collectWikidataSelectionQids(
+          newWikidataInstanceOfValues.value,
+          newWikidataInstanceOf.value,
+          newWikidataInstanceSearch.value,
+        )
+        if (instanceQids.length === 0) {
+          wizardError.value = t('locationTypeRequired')
+          return false
+        }
+        return true
+      }
+
+      function goToNextNewWikidataStep() {
+        if (!isWizardNewMode.value || isCreateActionBusy.value) {
           return
         }
         wizardError.value = ''
-        newWikidataWizardStep.value = 'basic'
+        if (newWikidataWizardStep.value === 'basic') {
+          if (!validateNewWikidataTextStep()) {
+            return
+          }
+          newWikidataWizardStep.value = 'location'
+          return
+        }
+        if (newWikidataWizardStep.value === 'location') {
+          if (!validateNewWikidataLocationStep()) {
+            return
+          }
+          newWikidataWizardStep.value = 'properties'
+          return
+        }
+        if (newWikidataWizardStep.value === 'properties') {
+          if (!validateNewWikidataPropertiesStep()) {
+            return
+          }
+          newWikidataWizardStep.value = 'source'
+        }
+      }
+
+      function goToPreviousNewWikidataStep() {
+        if (!isWizardNewMode.value || isCreateActionBusy.value) {
+          return
+        }
+        wizardError.value = ''
+        if (newWikidataWizardStep.value === 'source') {
+          newWikidataWizardStep.value = 'properties'
+          return
+        }
+        if (newWikidataWizardStep.value === 'properties') {
+          newWikidataWizardStep.value = 'location'
+          return
+        }
+        if (newWikidataWizardStep.value === 'location') {
+          newWikidataWizardStep.value = 'basic'
+        }
       }
 
       function openCreateLocationDialog(initialParent = null) {
@@ -6182,6 +7125,49 @@ LIMIT {{limit}}`,
         hideSuggestionsSoon(wizardExistingSourceLanguageOfWorkSuggestions)
       }
 
+      function onNewWikidataPartOfInput() {
+        newWikidataPartOfP361.value = ''
+        if (!newWikidataPartOfSearch.value.trim()) {
+          newWikidataPartOfSuggestions.value = []
+          return
+        }
+        searchNewPartOfSuggestionsDebounced(newWikidataPartOfSearch.value.trim())
+      }
+
+      function addNewWikidataPartOfFromInput() {
+        addNewWikidataSelection(
+          newWikidataPartOfP361Values,
+          newWikidataPartOfP361,
+          newWikidataPartOfSearch,
+          newWikidataPartOfSuggestions,
+        )
+      }
+
+      function selectNewWikidataPartOf(option) {
+        if (!setWikidataSelectionInputFromOption(
+          option,
+          newWikidataPartOfP361,
+          newWikidataPartOfSearch,
+          newWikidataPartOfSuggestions,
+        )) {
+          return
+        }
+        addNewWikidataSelection(
+          newWikidataPartOfP361Values,
+          newWikidataPartOfP361,
+          newWikidataPartOfSearch,
+          newWikidataPartOfSuggestions,
+        )
+      }
+
+      function removeNewWikidataPartOf(uid, index = null) {
+        removeNewWikidataSelection(newWikidataPartOfP361Values, uid, index)
+      }
+
+      function hideNewWikidataPartOfSuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataPartOfSuggestions)
+      }
+
       function onNewWikidataInstanceInput() {
         newWikidataInstanceOf.value = ''
         if (!newWikidataInstanceSearch.value.trim()) {
@@ -6191,13 +7177,34 @@ LIMIT {{limit}}`,
         searchNewInstanceSuggestionsDebounced(newWikidataInstanceSearch.value.trim())
       }
 
-      function selectNewWikidataInstance(option) {
-        selectWikidataSuggestion(
-          option,
+      function addNewWikidataInstanceFromInput() {
+        addNewWikidataSelection(
+          newWikidataInstanceOfValues,
           newWikidataInstanceOf,
           newWikidataInstanceSearch,
           newWikidataInstanceSuggestions,
         )
+      }
+
+      function selectNewWikidataInstance(option) {
+        if (!setWikidataSelectionInputFromOption(
+          option,
+          newWikidataInstanceOf,
+          newWikidataInstanceSearch,
+          newWikidataInstanceSuggestions,
+        )) {
+          return
+        }
+        addNewWikidataSelection(
+          newWikidataInstanceOfValues,
+          newWikidataInstanceOf,
+          newWikidataInstanceSearch,
+          newWikidataInstanceSuggestions,
+        )
+      }
+
+      function removeNewWikidataInstance(uid, index = null) {
+        removeNewWikidataSelection(newWikidataInstanceOfValues, uid, index)
       }
 
       function hideNewWikidataInstanceSuggestionsSoon() {
@@ -6248,6 +7255,28 @@ LIMIT {{limit}}`,
         hideSuggestionsSoon(newWikidataMunicipalitySuggestions)
       }
 
+      function onNewWikidataLocationInput() {
+        newWikidataLocationP276.value = ''
+        if (!newWikidataLocationSearch.value.trim()) {
+          newWikidataLocationSuggestions.value = []
+          return
+        }
+        searchNewLocationSuggestionsDebounced(newWikidataLocationSearch.value.trim())
+      }
+
+      function selectNewWikidataLocation(option) {
+        selectWikidataSuggestion(
+          option,
+          newWikidataLocationP276,
+          newWikidataLocationSearch,
+          newWikidataLocationSuggestions,
+        )
+      }
+
+      function hideNewWikidataLocationSuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataLocationSuggestions)
+      }
+
       function onNewWikidataArchitectInput() {
         newWikidataArchitectP84.value = ''
         if (!newWikidataArchitectSearch.value.trim()) {
@@ -6257,13 +7286,34 @@ LIMIT {{limit}}`,
         searchNewArchitectSuggestionsDebounced(newWikidataArchitectSearch.value.trim())
       }
 
-      function selectNewWikidataArchitect(option) {
-        selectWikidataSuggestion(
-          option,
+      function addNewWikidataArchitectFromInput() {
+        addNewWikidataSelection(
+          newWikidataArchitectP84Values,
           newWikidataArchitectP84,
           newWikidataArchitectSearch,
           newWikidataArchitectSuggestions,
         )
+      }
+
+      function selectNewWikidataArchitect(option) {
+        if (!setWikidataSelectionInputFromOption(
+          option,
+          newWikidataArchitectP84,
+          newWikidataArchitectSearch,
+          newWikidataArchitectSuggestions,
+        )) {
+          return
+        }
+        addNewWikidataSelection(
+          newWikidataArchitectP84Values,
+          newWikidataArchitectP84,
+          newWikidataArchitectSearch,
+          newWikidataArchitectSuggestions,
+        )
+      }
+
+      function removeNewWikidataArchitect(uid, index = null) {
+        removeNewWikidataSelection(newWikidataArchitectP84Values, uid, index)
       }
 
       function hideNewWikidataArchitectSuggestionsSoon() {
@@ -6279,13 +7329,34 @@ LIMIT {{limit}}`,
         searchNewHeritageSuggestionsDebounced(newWikidataHeritageSearch.value.trim())
       }
 
-      function selectNewWikidataHeritage(option) {
-        selectWikidataSuggestion(
-          option,
+      function addNewWikidataHeritageFromInput() {
+        addNewWikidataSelection(
+          newWikidataHeritageP1435Values,
           newWikidataHeritageP1435,
           newWikidataHeritageSearch,
           newWikidataHeritageSuggestions,
         )
+      }
+
+      function selectNewWikidataHeritage(option) {
+        if (!setWikidataSelectionInputFromOption(
+          option,
+          newWikidataHeritageP1435,
+          newWikidataHeritageSearch,
+          newWikidataHeritageSuggestions,
+        )) {
+          return
+        }
+        addNewWikidataSelection(
+          newWikidataHeritageP1435Values,
+          newWikidataHeritageP1435,
+          newWikidataHeritageSearch,
+          newWikidataHeritageSuggestions,
+        )
+      }
+
+      function removeNewWikidataHeritage(uid, index = null) {
+        removeNewWikidataSelection(newWikidataHeritageP1435Values, uid, index)
       }
 
       function hideNewWikidataHeritageSuggestionsSoon() {
@@ -6412,26 +7483,61 @@ LIMIT {{limit}}`,
           return
         }
 
-        const label = newWikidataLabel.value.trim()
-        const labelLanguage = normalizeSupportedLocale(newWikidataLabelLanguage.value) || defaultWikidataTextLanguage()
-        const description = newWikidataDescription.value.trim()
-        const descriptionLanguage = normalizeSupportedLocale(newWikidataDescriptionLanguage.value) || defaultWikidataTextLanguage()
-        const instanceQid = resolveWizardQid(newWikidataInstanceOf.value, newWikidataInstanceSearch.value)
+        const textPayload = collectNewWikidataLabelsAndDescriptions()
+        if (textPayload.error) {
+          wizardError.value = textPayload.error
+          return
+        }
+        const labels = textPayload.labels
+        const descriptions = textPayload.descriptions
+        const legacyLanguagePreference = ['fi', 'sv', 'en']
+        const legacyLanguage = legacyLanguagePreference.find((langCode) => labels[langCode] && descriptions[langCode])
+          || Object.keys(labels)[0]
+          || defaultWikidataTextLanguage()
+
+        const partOfQids = collectWikidataSelectionQids(
+          newWikidataPartOfP361Values.value,
+          newWikidataPartOfP361.value,
+          newWikidataPartOfSearch.value,
+        )
+        const instanceQids = collectWikidataSelectionQids(
+          newWikidataInstanceOfValues.value,
+          newWikidataInstanceOf.value,
+          newWikidataInstanceSearch.value,
+        )
         const countryQid = resolveWizardQid(newWikidataCountryP17.value, newWikidataCountrySearch.value)
         const municipalityQid = resolveWizardQid(newWikidataMunicipalityP131.value, newWikidataMunicipalitySearch.value)
-        const heritageQid = resolveWizardQid(newWikidataHeritageP1435.value, newWikidataHeritageSearch.value)
-        const heritageSourceUrl = newWikidataHeritageSourceUrl.value.trim()
-        const addressLanguage = normalizeSupportedLocale(newWikidataAddressTextLanguageP6375.value) || defaultWikidataTextLanguage()
+        const locationQid = resolveWizardQid(newWikidataLocationP276.value, newWikidataLocationSearch.value)
+        const architectQids = collectWikidataSelectionQids(
+          newWikidataArchitectP84Values.value,
+          newWikidataArchitectP84.value,
+          newWikidataArchitectSearch.value,
+        )
+        const inceptionValue = String(newWikidataInceptionP571.value || '').trim()
+        const heritageQids = collectWikidataSelectionQids(
+          newWikidataHeritageP1435Values.value,
+          newWikidataHeritageP1435.value,
+          newWikidataHeritageSearch.value,
+        )
+        const normalizedAddressLanguage = normalizeLanguageCode(newWikidataAddressTextLanguageP6375.value)
+        const addressLanguage = wikidataLanguageCodePattern.test(normalizedAddressLanguage)
+          ? normalizedAddressLanguage
+          : defaultWikidataTextLanguage()
+        const sourceUrl = String(wizardExistingSourceUrl.value || '').trim()
+        const sourcePublisherQid = resolveWizardQid(
+          wizardExistingSourcePublisherP123.value,
+          wizardExistingSourcePublisherSearch.value,
+        )
+        const sourcePublishedInQid = resolveWizardQid(
+          wizardExistingSourcePublishedInP1433.value,
+          wizardExistingSourcePublishedInSearch.value,
+        )
+        const sourceLanguageOfWorkQid = resolveWizardQid(
+          wizardExistingSourceLanguageOfWorkP407.value,
+          wizardExistingSourceLanguageOfWorkSearch.value,
+        )
 
-        if (!label) {
-          wizardError.value = t('locationNameRequired')
-          return
-        }
-        if (!description) {
-          wizardError.value = t('locationDescriptionRequired')
-          return
-        }
-        if (!instanceQid) {
+        if (instanceQids.length === 0) {
           wizardError.value = t('locationTypeRequired')
           return
         }
@@ -6454,34 +7560,72 @@ LIMIT {{limit}}`,
           wizardError.value = t('longitudeRequired')
           return
         }
-
-        if (heritageQid && !heritageSourceUrl) {
-          wizardError.value = t('sourceUrlRequiredForHeritage')
+        if (!sourceUrl || !isHttpUrl(sourceUrl)) {
+          wizardError.value = t('sourceUrlRequiredForAddExisting')
+          return
+        }
+        if (wizardExistingSourcePublisherSearch.value.trim() && !sourcePublisherQid) {
+          wizardError.value = t('sourcePublisherInvalid')
+          return
+        }
+        if (wizardExistingSourcePublishedInSearch.value.trim() && !sourcePublishedInQid) {
+          wizardError.value = t('sourcePublishedInInvalid')
+          return
+        }
+        if (wizardExistingSourceLanguageOfWorkSearch.value.trim() && !sourceLanguageOfWorkQid) {
+          wizardError.value = t('sourceLanguageOfWorkInvalid')
           return
         }
 
+        const instanceQid = instanceQids[0] || ''
+        const partOfQid = partOfQids[0] || ''
+        const architectQid = architectQids[0] || ''
+        const heritageQid = heritageQids[0] || ''
+
         const payload = {
-          label,
-          label_language: labelLanguage,
-          description,
-          description_language: descriptionLanguage,
+          labels,
+          descriptions,
+          label: labels[legacyLanguage],
+          label_language: legacyLanguage,
+          description: descriptions[legacyLanguage],
+          description_language: legacyLanguage,
+          part_of_p361: partOfQid,
+          part_of_p361_values: partOfQids,
           instance_of_p31: instanceQid,
+          instance_of_p31_values: instanceQids,
           country_p17: countryQid,
           municipality_p131: municipalityQid,
+          location_p276: locationQid,
+          architect_p84: architectQid,
+          architect_p84_values: architectQids,
+          architect_source_url: architectQids.length > 0 ? sourceUrl : '',
+          inception_p571: inceptionValue,
+          inception_source_url: inceptionValue ? sourceUrl : '',
           latitude,
           longitude,
           heritage_designation_p1435: heritageQid,
-          heritage_source_url: heritageSourceUrl,
+          heritage_designation_p1435_values: heritageQids,
+          heritage_source_url: heritageQids.length > 0 ? sourceUrl : '',
           address_text_p6375: newWikidataAddressTextP6375.value.trim(),
           address_text_language_p6375: addressLanguage,
           commons_category_p373: newWikidataCommonsCategoryP373.value.trim(),
+          source_url: sourceUrl,
+          source_title: String(wizardExistingSourceTitle.value || '').trim(),
+          source_title_language: String(wizardExistingSourceTitleLanguage.value || '').trim(),
+          source_author: String(wizardExistingSourceAuthor.value || '').trim(),
+          source_publication_date: String(wizardExistingSourcePublicationDate.value || '').trim(),
+          source_publisher_p123: sourcePublisherQid,
+          source_published_in_p1433: sourcePublishedInQid,
+          source_language_of_work_p407: sourceLanguageOfWorkQid,
         }
 
         wizardSaving.value = true
         try {
           await createWikidataItem(payload, locale.value)
-          showCreateLocationDialog.value = false
+          window.alert(t('addExistingWikidataSuccess'))
           notifyLocationsChanged()
+          await getLocationsCached(locale.value, { force: true })
+          showCreateLocationDialog.value = false
         } catch (error) {
           wizardError.value = error.message || t('loadError')
         } finally {
@@ -6684,24 +7828,35 @@ LIMIT {{limit}}`,
       }
 
       async function fillNewWikidataAdministrativeFieldsFromCoordinates(latitude, longitude) {
-        if (
+        const hasCountry = (
           hasTextValue(newWikidataCountryP17.value) ||
-          hasTextValue(newWikidataCountrySearch.value) ||
+          hasTextValue(newWikidataCountrySearch.value)
+        )
+        const hasMunicipality = (
           hasTextValue(newWikidataMunicipalityP131.value) ||
           hasTextValue(newWikidataMunicipalitySearch.value)
-        ) {
+        )
+        const hasDetailedLocation = (
+          hasTextValue(newWikidataLocationP276.value) ||
+          hasTextValue(newWikidataLocationSearch.value)
+        )
+        if (hasCountry && hasMunicipality && hasDetailedLocation) {
           return
         }
 
         try {
           const result = await reverseGeocodeCoordinates(latitude, longitude, locale.value)
-          if (result?.country?.id && result?.country?.label) {
+          if (!hasCountry && result?.country?.id && result?.country?.label) {
             newWikidataCountryP17.value = result.country.id
             newWikidataCountrySearch.value = `${result.country.label} (${result.country.id})`
           }
-          if (result?.municipality?.id && result?.municipality?.label) {
+          if (!hasMunicipality && result?.municipality?.id && result?.municipality?.label) {
             newWikidataMunicipalityP131.value = result.municipality.id
             newWikidataMunicipalitySearch.value = `${result.municipality.label} (${result.municipality.id})`
+          }
+          if (!hasDetailedLocation && result?.detailed_location?.id && result?.detailed_location?.label) {
+            newWikidataLocationP276.value = result.detailed_location.id
+            newWikidataLocationSearch.value = `${result.detailed_location.label} (${result.detailed_location.id})`
           }
         } catch (error) {
           void error
@@ -6768,8 +7923,8 @@ LIMIT {{limit}}`,
           return
         }
         if (isWizardNewMode.value) {
-          if (isWizardNewBasicStep.value) {
-            goToNewWikidataLocationStep()
+          if (!isWizardNewSourceStep.value) {
+            goToNextNewWikidataStep()
             return
           }
           await submitNewWikidataItem()
@@ -6992,6 +8147,8 @@ LIMIT {{limit}}`,
         isWizardNewMode,
         isWizardNewBasicStep,
         isWizardNewLocationStep,
+        isWizardNewPropertiesStep,
+        isWizardNewSourceStep,
         showLocalDraftForm,
         canCreateLocation,
         canReturnToWizardChoice,
@@ -7081,10 +8238,15 @@ LIMIT {{limit}}`,
         wizardExistingCitoidLoading,
         wizardExistingCitoidError,
         wikidataTextLanguageOptions,
-        newWikidataLabel,
-        newWikidataLabelLanguage,
-        newWikidataDescription,
-        newWikidataDescriptionLanguage,
+        wikidataAddressLanguageOptions,
+        newWikidataPrimaryLabels,
+        newWikidataPrimaryDescriptions,
+        newWikidataAdditionalLanguageEntries,
+        newWikidataPartOfP361Values,
+        newWikidataPartOfSearch,
+        newWikidataPartOfSuggestions,
+        newWikidataPartOfLoading,
+        newWikidataInstanceOfValues,
         newWikidataInstanceSearch,
         newWikidataInstanceSuggestions,
         newWikidataInstanceLoading,
@@ -7094,14 +8256,19 @@ LIMIT {{limit}}`,
         newWikidataMunicipalitySearch,
         newWikidataMunicipalitySuggestions,
         newWikidataMunicipalityLoading,
+        newWikidataLocationSearch,
+        newWikidataLocationSuggestions,
+        newWikidataLocationLoading,
         newWikidataLatitude,
         newWikidataLongitude,
+        newWikidataArchitectP84Values,
         newWikidataArchitectSearch,
         newWikidataArchitectSuggestions,
         newWikidataArchitectLoading,
         newWikidataArchitectSourceUrl,
         newWikidataInceptionP571,
         newWikidataInceptionSourceUrl,
+        newWikidataHeritageP1435Values,
         newWikidataHeritageSearch,
         newWikidataHeritageSuggestions,
         newWikidataHeritageLoading,
@@ -7152,7 +8319,14 @@ LIMIT {{limit}}`,
         closeCreateLocationDialog,
         chooseCreateWizardMode,
         returnToCreateWizardChoice,
-        returnToNewWikidataBasicStep,
+        goToPreviousNewWikidataStep,
+        addNewWikidataAdditionalLanguage,
+        removeNewWikidataAdditionalLanguage,
+        onNewWikidataAdditionalLanguageInput,
+        onNewWikidataAdditionalLanguageFocus,
+        selectNewWikidataAdditionalLanguage,
+        hideNewWikidataAdditionalLanguageSuggestionsSoon,
+        wikidataLanguageOptionDisplayName,
         onWizardExistingWikidataInput,
         selectWizardExistingWikidataItem,
         hideWizardExistingSuggestionsSoon,
@@ -7168,8 +8342,16 @@ LIMIT {{limit}}`,
         onWizardExistingSourceLanguageOfWorkInput,
         selectWizardExistingSourceLanguageOfWork,
         hideWizardExistingSourceLanguageOfWorkSuggestionsSoon,
+        wikidataSelectionChipLabel,
+        onNewWikidataPartOfInput,
+        addNewWikidataPartOfFromInput,
+        selectNewWikidataPartOf,
+        removeNewWikidataPartOf,
+        hideNewWikidataPartOfSuggestionsSoon,
         onNewWikidataInstanceInput,
+        addNewWikidataInstanceFromInput,
         selectNewWikidataInstance,
+        removeNewWikidataInstance,
         hideNewWikidataInstanceSuggestionsSoon,
         onNewWikidataCountryInput,
         selectNewWikidataCountry,
@@ -7177,11 +8359,18 @@ LIMIT {{limit}}`,
         onNewWikidataMunicipalityInput,
         selectNewWikidataMunicipality,
         hideNewWikidataMunicipalitySuggestionsSoon,
+        onNewWikidataLocationInput,
+        selectNewWikidataLocation,
+        hideNewWikidataLocationSuggestionsSoon,
         onNewWikidataArchitectInput,
+        addNewWikidataArchitectFromInput,
         selectNewWikidataArchitect,
+        removeNewWikidataArchitect,
         hideNewWikidataArchitectSuggestionsSoon,
         onNewWikidataHeritageInput,
+        addNewWikidataHeritageFromInput,
         selectNewWikidataHeritage,
+        removeNewWikidataHeritage,
         hideNewWikidataHeritageSuggestionsSoon,
         onNewWikidataArchitecturalStyleInput,
         selectNewWikidataArchitecturalStyle,
@@ -7301,7 +8490,7 @@ LIMIT {{limit}}`,
         </div>
 
         <div v-if="showCreateLocationDialog" class="dialog-backdrop" @click.self="closeCreateLocationDialog">
-          <section class="dialog-card" role="dialog" aria-modal="true">
+          <section class="dialog-card dialog-card-form" role="dialog" aria-modal="true">
             <h2>{{ locationDialogTitle }}</h2>
             <fieldset class="dialog-fieldset" :disabled="isCreateActionBusy">
               <p v-if="draftLoading && showLocalDraftForm" class="status">{{ t('loading') }}</p>
@@ -7457,112 +8646,99 @@ LIMIT {{limit}}`,
               </template>
 
               <template v-else-if="isWizardNewMode">
-                <p class="dialog-help">{{ t('createNewWikidataHelp') }}</p>
                 <div v-if="isWizardNewBasicStep" class="wizard-section">
-                  <h3>{{ t('basicInformation') }} (1/2)</h3>
-                  <div class="form-row form-row-language">
+                  <h3>{{ t('basicInformation') }} (1/4)</h3>
+                  <p class="dialog-help">{{ t('newWikidataPrimaryLanguageHelp') }}</p>
+                  <div class="wizard-section">
                     <label class="form-field">
-                      <span>{{ t('locationName') }}</span>
-                      <input v-model="newWikidataLabel" type="text" maxlength="250" />
+                      <span>{{ t('locationName') }} ({{ t('languageGroupFi') }})</span>
+                      <input v-model="newWikidataPrimaryLabels.fi" type="text" maxlength="250" />
                     </label>
-                    <label class="form-field form-field-language">
-                      <span>{{ t('language') }}</span>
-                      <select v-model="newWikidataLabelLanguage">
-                        <option
-                          v-for="langCode in wikidataTextLanguageOptions"
-                          :key="'label-language-' + langCode"
-                          :value="langCode"
-                        >
-                          {{ langCode.toUpperCase() }}
-                        </option>
-                      </select>
+                    <label class="form-field">
+                      <span>{{ t('locationDescription') }} ({{ t('languageGroupFi') }})</span>
+                      <input v-model="newWikidataPrimaryDescriptions.fi" type="text" maxlength="500" />
                     </label>
                   </div>
-                  <div class="form-row form-row-language">
+                  <div class="wizard-section">
                     <label class="form-field">
-                      <span>{{ t('locationDescription') }}</span>
-                      <input v-model="newWikidataDescription" type="text" maxlength="500" />
+                      <span>{{ t('locationName') }} ({{ t('languageGroupSv') }})</span>
+                      <input v-model="newWikidataPrimaryLabels.sv" type="text" maxlength="250" />
                     </label>
-                    <label class="form-field form-field-language">
-                      <span>{{ t('language') }}</span>
-                      <select v-model="newWikidataDescriptionLanguage">
-                        <option
-                          v-for="langCode in wikidataTextLanguageOptions"
-                          :key="'description-language-' + langCode"
-                          :value="langCode"
-                        >
-                          {{ langCode.toUpperCase() }}
-                        </option>
-                      </select>
+                    <label class="form-field">
+                      <span>{{ t('locationDescription') }} ({{ t('languageGroupSv') }})</span>
+                      <input v-model="newWikidataPrimaryDescriptions.sv" type="text" maxlength="500" />
                     </label>
                   </div>
-                  <label class="form-field">
-                    <span>{{ t('instanceOfP31') }}</span>
-                    <input
-                      v-model="newWikidataInstanceSearch"
-                      type="text"
-                      :placeholder="t('typePlaceholder')"
-                      @input="onNewWikidataInstanceInput"
-                      @blur="hideNewWikidataInstanceSuggestionsSoon"
-                    />
-                    <ul v-if="newWikidataInstanceSuggestions.length > 0" class="autocomplete-list">
-                      <li v-for="item in newWikidataInstanceSuggestions" :key="item.id">
-                        <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataInstance(item)">
-                          {{ wikidataAutocompleteLabel(item) }}
-                        </button>
-                      </li>
-                    </ul>
-                    <p v-if="newWikidataInstanceLoading" class="dialog-help">{{ t('searching') }}</p>
-                  </label>
-                  <div class="form-row">
+                  <div class="wizard-section">
                     <label class="form-field">
-                      <span>{{ t('heritageDesignationP1435') }}</span>
+                      <span>{{ t('locationName') }} ({{ t('languageGroupEn') }})</span>
+                      <input v-model="newWikidataPrimaryLabels.en" type="text" maxlength="250" />
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('locationDescription') }} ({{ t('languageGroupEn') }})</span>
+                      <input v-model="newWikidataPrimaryDescriptions.en" type="text" maxlength="500" />
+                    </label>
+                  </div>
+                  <h3>{{ t('additionalLanguages') }}</h3>
+                  <p class="dialog-help">{{ t('additionalLanguagesHelp') }}</p>
+                  <div
+                    v-for="(entry, index) in newWikidataAdditionalLanguageEntries"
+                    :key="'new-wikidata-language-' + index"
+                    class="wizard-section"
+                  >
+                    <label class="form-field form-field-language">
+                      <span>{{ t('languageCode') }}</span>
                       <input
-                        v-model="newWikidataHeritageSearch"
+                        v-model="entry.languageSearch"
                         type="text"
-                        :placeholder="t('typePlaceholder')"
-                        @input="onNewWikidataHeritageInput"
-                        @blur="hideNewWikidataHeritageSuggestionsSoon"
+                        maxlength="80"
+                        :placeholder="t('languageCodePlaceholder')"
+                        @input="onNewWikidataAdditionalLanguageInput(index)"
+                        @focus="onNewWikidataAdditionalLanguageFocus(index)"
+                        @blur="hideNewWikidataAdditionalLanguageSuggestionsSoon(index)"
                       />
-                      <ul v-if="newWikidataHeritageSuggestions.length > 0" class="autocomplete-list">
-                        <li v-for="item in newWikidataHeritageSuggestions" :key="item.id">
-                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataHeritage(item)">
-                            {{ wikidataAutocompleteLabel(item) }}
+                      <ul
+                        v-if="entry.languageSuggestionsOpen && entry.languageSuggestions && entry.languageSuggestions.length > 0"
+                        class="autocomplete-list"
+                      >
+                        <li v-for="option in entry.languageSuggestions" :key="'additional-language-option-' + index + '-' + option.code">
+                          <button
+                            type="button"
+                            class="autocomplete-option"
+                            @mousedown.prevent
+                            @click="selectNewWikidataAdditionalLanguage(index, option)"
+                          >
+                            {{ wikidataLanguageOptionDisplayName(option) }}
                           </button>
                         </li>
                       </ul>
-                      <p v-if="newWikidataHeritageLoading" class="dialog-help">{{ t('searching') }}</p>
                     </label>
                     <label class="form-field">
-                      <span>{{ t('sourceUrl') }}</span>
-                      <input
-                        v-model="newWikidataHeritageSourceUrl"
-                        type="url"
-                        :placeholder="t('sourceUrlPlaceholder')"
-                      />
+                      <span>{{ t('locationName') }}</span>
+                      <input v-model="entry.label" type="text" maxlength="250" />
                     </label>
+                    <label class="form-field">
+                      <span>{{ t('locationDescription') }}</span>
+                      <input v-model="entry.description" type="text" maxlength="500" />
+                    </label>
+                    <div class="form-row single-action">
+                      <button
+                        type="button"
+                        class="text-btn"
+                        @click="removeNewWikidataAdditionalLanguage(index)"
+                      >
+                        {{ t('removeLanguage') }}
+                      </button>
+                    </div>
                   </div>
-                  <label class="form-field">
-                    <span>{{ t('commonsCategory') }}</span>
-                    <input
-                      v-model="newWikidataCommonsSearch"
-                      type="text"
-                      :placeholder="t('commonsPlaceholder')"
-                      @input="onNewWikidataCommonsInput"
-                      @blur="hideNewWikidataCommonsSuggestionsSoon"
-                    />
-                    <ul v-if="newWikidataCommonsSuggestions.length > 0" class="autocomplete-list">
-                      <li v-for="item in newWikidataCommonsSuggestions" :key="item.title">
-                        <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataCommons(item)">
-                          {{ item.title }}
-                        </button>
-                      </li>
-                    </ul>
-                    <p v-if="newWikidataCommonsLoading" class="dialog-help">{{ t('searching') }}</p>
-                  </label>
+                  <div class="form-row single-action">
+                    <button type="button" class="secondary-btn" @click="addNewWikidataAdditionalLanguage">
+                      {{ t('addLanguage') }}
+                    </button>
+                  </div>
                 </div>
                 <div v-else-if="isWizardNewLocationStep" class="wizard-section">
-                  <h3>{{ t('locationAndCoordinates') }} (2/2)</h3>
+                  <h3>{{ t('locationAndCoordinates') }} (2/4)</h3>
                   <div class="form-row single-action">
                     <button type="button" class="secondary-btn" @click="openCoordinatePickerDialog('new-wikidata')">
                       {{ t('pickCoordinates') }}
@@ -7609,6 +8785,24 @@ LIMIT {{limit}}`,
                       <p v-if="newWikidataMunicipalityLoading" class="dialog-help">{{ t('searching') }}</p>
                     </label>
                   </div>
+                  <label class="form-field">
+                    <span>{{ t('detailedLocationP276') }}</span>
+                    <input
+                      v-model="newWikidataLocationSearch"
+                      type="text"
+                      :placeholder="t('detailedLocationPlaceholder')"
+                      @input="onNewWikidataLocationInput"
+                      @blur="hideNewWikidataLocationSuggestionsSoon"
+                    />
+                    <ul v-if="newWikidataLocationSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataLocationSuggestions" :key="item.id">
+                        <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataLocation(item)">
+                          {{ wikidataAutocompleteLabel(item) }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataLocationLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
                   <div class="form-row form-row-language">
                     <label class="form-field">
                       <span>{{ t('addressText') }}</span>
@@ -7618,7 +8812,7 @@ LIMIT {{limit}}`,
                       <span>{{ t('language') }}</span>
                       <select v-model="newWikidataAddressTextLanguageP6375">
                         <option
-                          v-for="langCode in wikidataTextLanguageOptions"
+                          v-for="langCode in wikidataAddressLanguageOptions"
                           :key="'address-language-' + langCode"
                           :value="langCode"
                         >
@@ -7635,6 +8829,345 @@ LIMIT {{limit}}`,
                     <label class="form-field">
                       <span>{{ t('longitude') }}</span>
                       <input v-model="newWikidataLongitude" type="number" step="any" />
+                    </label>
+                  </div>
+                </div>
+                <div v-else-if="isWizardNewPropertiesStep" class="wizard-section">
+                  <h3>{{ t('keyPropertiesWithSources') }} (3/4)</h3>
+                  <label class="form-field">
+                    <span>{{ t('instanceOfP31') }}</span>
+                    <ul v-if="newWikidataInstanceOfValues.length > 0" class="category-chip-list">
+                      <li v-for="(item, index) in newWikidataInstanceOfValues" :key="item.uid || ('instance-p31-' + item.id + '-' + index)" class="category-chip">
+                        <span>{{ wikidataSelectionChipLabel(item) }}</span>
+                        <button
+                          type="button"
+                          class="chip-remove"
+                          :aria-label="t('removeCategory')"
+                          @mousedown.stop.prevent="removeNewWikidataInstance(item.uid, index)"
+                          @click.stop.prevent
+                        >
+                          ×
+                        </button>
+                      </li>
+                    </ul>
+                    <div class="save-image-category-entry">
+                      <input
+                        v-model="newWikidataInstanceSearch"
+                        type="text"
+                        :placeholder="t('typePlaceholder')"
+                        @input="onNewWikidataInstanceInput"
+                        @blur="hideNewWikidataInstanceSuggestionsSoon"
+                        @keydown.enter.prevent="addNewWikidataInstanceFromInput"
+                      />
+                      <button
+                        type="button"
+                        class="secondary-btn"
+                        :disabled="!newWikidataInstanceSearch.trim()"
+                        @click.stop="addNewWikidataInstanceFromInput"
+                      >
+                        {{ t('addCategory') }}
+                      </button>
+                    </div>
+                    <ul v-if="newWikidataInstanceSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataInstanceSuggestions" :key="item.id">
+                        <button
+                          type="button"
+                          class="autocomplete-option"
+                          @mousedown.prevent.stop="selectNewWikidataInstance(item)"
+                          @click.prevent.stop
+                        >
+                          {{ wikidataAutocompleteLabel(item) }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataInstanceLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
+                  <label class="form-field">
+                    <span>{{ t('partOfP361') }}</span>
+                    <ul v-if="newWikidataPartOfP361Values.length > 0" class="category-chip-list">
+                      <li v-for="(item, index) in newWikidataPartOfP361Values" :key="item.uid || ('part-of-p361-' + item.id + '-' + index)" class="category-chip">
+                        <span>{{ wikidataSelectionChipLabel(item) }}</span>
+                        <button
+                          type="button"
+                          class="chip-remove"
+                          :aria-label="t('removeCategory')"
+                          @mousedown.stop.prevent="removeNewWikidataPartOf(item.uid, index)"
+                          @click.stop.prevent
+                        >
+                          ×
+                        </button>
+                      </li>
+                    </ul>
+                    <div class="save-image-category-entry">
+                      <input
+                        v-model="newWikidataPartOfSearch"
+                        type="text"
+                        :placeholder="t('partOfPlaceholder')"
+                        @input="onNewWikidataPartOfInput"
+                        @blur="hideNewWikidataPartOfSuggestionsSoon"
+                        @keydown.enter.prevent="addNewWikidataPartOfFromInput"
+                      />
+                      <button
+                        type="button"
+                        class="secondary-btn"
+                        :disabled="!newWikidataPartOfSearch.trim()"
+                        @click.stop="addNewWikidataPartOfFromInput"
+                      >
+                        {{ t('addCategory') }}
+                      </button>
+                    </div>
+                    <ul v-if="newWikidataPartOfSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataPartOfSuggestions" :key="item.id">
+                        <button
+                          type="button"
+                          class="autocomplete-option"
+                          @mousedown.prevent.stop="selectNewWikidataPartOf(item)"
+                          @click.prevent.stop
+                        >
+                          {{ wikidataAutocompleteLabel(item) }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataPartOfLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
+                  <label class="form-field">
+                    <span>{{ t('architectP84') }}</span>
+                    <ul v-if="newWikidataArchitectP84Values.length > 0" class="category-chip-list">
+                      <li v-for="(item, index) in newWikidataArchitectP84Values" :key="item.uid || ('architect-p84-' + item.id + '-' + index)" class="category-chip">
+                        <span>{{ wikidataSelectionChipLabel(item) }}</span>
+                        <button
+                          type="button"
+                          class="chip-remove"
+                          :aria-label="t('removeCategory')"
+                          @mousedown.stop.prevent="removeNewWikidataArchitect(item.uid, index)"
+                          @click.stop.prevent
+                        >
+                          ×
+                        </button>
+                      </li>
+                    </ul>
+                    <div class="save-image-category-entry">
+                      <input
+                        v-model="newWikidataArchitectSearch"
+                        type="text"
+                        :placeholder="t('typePlaceholder')"
+                        @input="onNewWikidataArchitectInput"
+                        @blur="hideNewWikidataArchitectSuggestionsSoon"
+                        @keydown.enter.prevent="addNewWikidataArchitectFromInput"
+                      />
+                      <button
+                        type="button"
+                        class="secondary-btn"
+                        :disabled="!newWikidataArchitectSearch.trim()"
+                        @click.stop="addNewWikidataArchitectFromInput"
+                      >
+                        {{ t('addCategory') }}
+                      </button>
+                    </div>
+                    <ul v-if="newWikidataArchitectSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataArchitectSuggestions" :key="item.id">
+                        <button
+                          type="button"
+                          class="autocomplete-option"
+                          @mousedown.prevent.stop="selectNewWikidataArchitect(item)"
+                          @click.prevent.stop
+                        >
+                          {{ wikidataAutocompleteLabel(item) }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataArchitectLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
+                  <label class="form-field">
+                    <span>{{ t('inceptionP571') }}</span>
+                    <input
+                      v-model="newWikidataInceptionP571"
+                      type="text"
+                      maxlength="32"
+                      :placeholder="t('sourcePublicationDatePlaceholder')"
+                    />
+                  </label>
+                  <label class="form-field">
+                    <span>{{ t('heritageDesignationP1435') }}</span>
+                    <ul v-if="newWikidataHeritageP1435Values.length > 0" class="category-chip-list">
+                      <li v-for="(item, index) in newWikidataHeritageP1435Values" :key="item.uid || ('heritage-p1435-' + item.id + '-' + index)" class="category-chip">
+                        <span>{{ wikidataSelectionChipLabel(item) }}</span>
+                        <button
+                          type="button"
+                          class="chip-remove"
+                          :aria-label="t('removeCategory')"
+                          @mousedown.stop.prevent="removeNewWikidataHeritage(item.uid, index)"
+                          @click.stop.prevent
+                        >
+                          ×
+                        </button>
+                      </li>
+                    </ul>
+                    <div class="save-image-category-entry">
+                      <input
+                        v-model="newWikidataHeritageSearch"
+                        type="text"
+                        :placeholder="t('typePlaceholder')"
+                        @input="onNewWikidataHeritageInput"
+                        @blur="hideNewWikidataHeritageSuggestionsSoon"
+                        @keydown.enter.prevent="addNewWikidataHeritageFromInput"
+                      />
+                      <button
+                        type="button"
+                        class="secondary-btn"
+                        :disabled="!newWikidataHeritageSearch.trim()"
+                        @click.stop="addNewWikidataHeritageFromInput"
+                      >
+                        {{ t('addCategory') }}
+                      </button>
+                    </div>
+                    <ul v-if="newWikidataHeritageSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataHeritageSuggestions" :key="item.id">
+                        <button
+                          type="button"
+                          class="autocomplete-option"
+                          @mousedown.prevent.stop="selectNewWikidataHeritage(item)"
+                          @click.prevent.stop
+                        >
+                          {{ wikidataAutocompleteLabel(item) }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataHeritageLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
+                  <label class="form-field">
+                    <span>{{ t('commonsCategory') }}</span>
+                    <input
+                      v-model="newWikidataCommonsSearch"
+                      type="text"
+                      :placeholder="t('commonsPlaceholder')"
+                      @input="onNewWikidataCommonsInput"
+                      @blur="hideNewWikidataCommonsSuggestionsSoon"
+                    />
+                    <ul v-if="newWikidataCommonsSuggestions.length > 0" class="autocomplete-list">
+                      <li v-for="item in newWikidataCommonsSuggestions" :key="item.title">
+                        <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectNewWikidataCommons(item)">
+                          {{ item.title }}
+                        </button>
+                      </li>
+                    </ul>
+                    <p v-if="newWikidataCommonsLoading" class="dialog-help">{{ t('searching') }}</p>
+                  </label>
+                </div>
+                <div v-else-if="isWizardNewSourceStep" class="wizard-section">
+                  <h3>{{ t('sourcesSectionTitle') }} (4/4)</h3>
+                  <p class="dialog-help">{{ t('newWikidataSourceHelp') }}</p>
+                  <label class="form-field">
+                    <span>{{ t('sourceUrl') }}</span>
+                    <input
+                      v-model="wizardExistingSourceUrl"
+                      type="url"
+                      :placeholder="t('sourceUrlPlaceholder')"
+                      @input="onWizardExistingSourceUrlInput"
+                      @blur="onWizardExistingSourceUrlBlur"
+                    />
+                    <div class="inline-form-actions">
+                      <button
+                        type="button"
+                        class="text-btn"
+                        :disabled="!wizardExistingSourceUrl.trim() || wizardExistingCitoidLoading"
+                        @click="autofillWizardExistingSourceMetadata(true)"
+                      >
+                        {{ t('autofillSourceWithCitoid') }}
+                      </button>
+                    </div>
+                    <p v-if="wizardExistingCitoidLoading" class="dialog-help">{{ t('citoidAutofillLoading') }}</p>
+                    <p v-else-if="wizardExistingCitoidError" class="status error">{{ wizardExistingCitoidError }}</p>
+                  </label>
+                  <div class="form-row form-row-language">
+                    <label class="form-field">
+                      <span>{{ t('sourceTitle') }}</span>
+                      <input v-model="wizardExistingSourceTitle" type="text" maxlength="500" />
+                    </label>
+                    <label class="form-field form-field-language">
+                      <span>{{ t('sourceTitleLanguage') }}</span>
+                      <select v-model="wizardExistingSourceTitleLanguage">
+                        <option
+                          v-for="langCode in wikidataTextLanguageOptions"
+                          :key="'new-source-language-' + langCode"
+                          :value="langCode"
+                        >
+                          {{ langCode.toUpperCase() }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('sourceAuthor') }}</span>
+                      <input v-model="wizardExistingSourceAuthor" type="text" maxlength="500" />
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('sourcePublicationDate') }}</span>
+                      <input
+                        v-model="wizardExistingSourcePublicationDate"
+                        type="text"
+                        maxlength="32"
+                        :placeholder="t('sourcePublicationDatePlaceholder')"
+                      />
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('sourcePublishedInP1433') }}</span>
+                      <input
+                        v-model="wizardExistingSourcePublishedInSearch"
+                        type="text"
+                        :placeholder="t('sourcePublishedInPlaceholder')"
+                        @input="onWizardExistingSourcePublishedInInput"
+                        @blur="hideWizardExistingSourcePublishedInSuggestionsSoon"
+                      />
+                      <ul v-if="wizardExistingSourcePublishedInSuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in wizardExistingSourcePublishedInSuggestions" :key="'new-source-p1433-' + item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectWizardExistingSourcePublishedIn(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="wizardExistingSourcePublishedInLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                    <label class="form-field">
+                      <span>{{ t('sourcePublisherP123') }}</span>
+                      <input
+                        v-model="wizardExistingSourcePublisherSearch"
+                        type="text"
+                        :placeholder="t('sourcePublisherPlaceholder')"
+                        @input="onWizardExistingSourcePublisherInput"
+                        @blur="hideWizardExistingSourcePublisherSuggestionsSoon"
+                      />
+                      <ul v-if="wizardExistingSourcePublisherSuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in wizardExistingSourcePublisherSuggestions" :key="'new-source-p123-' + item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectWizardExistingSourcePublisher(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="wizardExistingSourcePublisherLoading" class="dialog-help">{{ t('searching') }}</p>
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-field">
+                      <span>{{ t('sourceLanguageOfWorkP407') }}</span>
+                      <input
+                        v-model="wizardExistingSourceLanguageOfWorkSearch"
+                        type="text"
+                        :placeholder="t('sourceLanguageOfWorkPlaceholder')"
+                        @input="onWizardExistingSourceLanguageOfWorkInput"
+                        @blur="hideWizardExistingSourceLanguageOfWorkSuggestionsSoon"
+                      />
+                      <ul v-if="wizardExistingSourceLanguageOfWorkSuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in wizardExistingSourceLanguageOfWorkSuggestions" :key="'new-source-p407-' + item.id">
+                          <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectWizardExistingSourceLanguageOfWork(item)">
+                            {{ wikidataAutocompleteLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="wizardExistingSourceLanguageOfWorkLoading" class="dialog-help">{{ t('searching') }}</p>
                     </label>
                   </div>
                 </div>
@@ -7967,11 +9500,11 @@ LIMIT {{limit}}`,
             <div class="dialog-actions">
               <button type="button" class="secondary-btn" :disabled="isCreateActionBusy" @click="closeCreateLocationDialog">{{ t('cancel') }}</button>
               <button
-                v-if="isWizardNewLocationStep"
+                v-if="isWizardNewMode && !isWizardNewBasicStep"
                 type="button"
                 class="secondary-btn"
                 :disabled="isCreateActionBusy"
-                @click="returnToNewWikidataBasicStep"
+                @click="goToPreviousNewWikidataStep"
               >
                 {{ t('back') }}
               </button>
