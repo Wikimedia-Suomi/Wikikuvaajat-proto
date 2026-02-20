@@ -190,6 +190,19 @@ class WikidataWriteAuthTests(SimpleTestCase):
         self.assertEqual(datavalue['time'], '+2026-11-01T00:00:00Z')
         self.assertEqual(datavalue['precision'], 11)
 
+    def test_wikidata_coordinate_datavalue_accepts_latitude_and_longitude(self):
+        datavalue = services._wikidata_coordinate_datavalue('60.1699, 24.9384')
+
+        self.assertEqual(datavalue['latitude'], 60.1699)
+        self.assertEqual(datavalue['longitude'], 24.9384)
+        self.assertEqual(datavalue['globe'], services._WIKIDATA_GLOBE)
+
+    def test_wikidata_quantity_datavalue_accepts_amount_and_unit(self):
+        datavalue = services._wikidata_quantity_datavalue('12.5 Q11573')
+
+        self.assertEqual(datavalue['amount'], '+12.5')
+        self.assertEqual(datavalue['unit'], 'http://www.wikidata.org/entity/Q11573')
+
     @patch('locations.services._set_claim_reference')
     @patch('locations.services._wikidata_api_get')
     @patch('locations.services._wikidata_oauth_session')

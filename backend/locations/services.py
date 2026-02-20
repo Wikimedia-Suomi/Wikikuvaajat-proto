@@ -2292,6 +2292,13 @@ def _extract_wikidata_qid(value: str) -> str:
     return match.group(1).upper()
 
 
+def _extract_wikidata_pid(value: str) -> str:
+    match = re.search(r'(P\d+)', value, flags=re.IGNORECASE)
+    if not match:
+        return ''
+    return match.group(1).upper()
+
+
 def _label_for_language(value_map: dict[str, Any], fallbacks: list[str]) -> str:
     for lang in fallbacks:
         entry = value_map.get(lang)
@@ -3215,6 +3222,125 @@ def _wikidata_time_datavalue(value: str) -> dict[str, Any]:
     )
 
 
+def _wikidata_coordinate_datavalue(value: str) -> dict[str, Any]:
+    normalized_value = str(value or '').strip()
+    if not normalized_value:
+        raise WikidataWriteError('Coordinate value is required.')
+
+    coordinate_parts = [part for part in re.split(r'[,\s]+', normalized_value) if part]
+    if len(coordinate_parts) != 2:
+        raise WikidataWriteError('Coordinate value must use "latitude,longitude" format.')
+
+    try:
+        latitude = float(coordinate_parts[0])
+        longitude = float(coordinate_parts[1])
+    except ValueError as exc:
+        raise WikidataWriteError('Coordinate value must contain valid numbers.') from exc
+
+    if latitude < -90 or latitude > 90 or longitude < -180 or longitude > 180:
+        raise WikidataWriteError('Coordinate value is out of bounds.')
+
+    return {
+        'latitude': latitude,
+        'longitude': longitude,
+        'precision': 0.0001,
+        'globe': _WIKIDATA_GLOBE,
+    }
+
+
+def _wikidata_quantity_datavalue(value: str) -> dict[str, Any]:
+    normalized_value = str(value or '').strip()
+    if not normalized_value:
+        raise WikidataWriteError('Quantity value is required.')
+
+    quantity_match = re.fullmatch(
+        r'(?P<amount>[+-]?(?:\d+(?:\.\d+)?|\.\d+))(?:\s+(?P<unit>(?:Q\d+)|1))?',
+        normalized_value,
+        flags=re.IGNORECASE,
+    )
+    if not quantity_match:
+        raise WikidataWriteError(
+            'Quantity value must use "<amount>" or "<amount> <unit>" format (for example "12.5 Q11573").'
+        )
+
+    amount = quantity_match.group('amount')
+    if amount.startswith('.'):
+        amount = f'0{amount}'
+    elif amount.startswith('-.'):
+        amount = amount.replace('-.', '-0.', 1)
+    elif amount.startswith('+.'):
+        amount = amount.replace('+.', '+0.', 1)
+    if not amount.startswith(('+', '-')):
+        amount = f'+{amount}'
+
+    raw_unit = str(quantity_match.group('unit') or '').strip()
+    unit_qid = _extract_wikidata_qid(raw_unit)
+    unit = f'http://www.wikidata.org/entity/{unit_qid}' if unit_qid else '1'
+
+    return {
+        'amount': amount,
+        'unit': unit,
+    }
+
+
+def _wikidata_property_datavalue(
+    property_id: str,
+    value: str,
+    datatype: str,
+    *,
+    language: str,
+) -> Any:
+    normalized_property_id = _extract_wikidata_pid(property_id)
+    if not normalized_property_id:
+        raise WikidataWriteError('A valid property id is required.')
+
+    normalized_value = str(value or '').strip()
+    if not normalized_value:
+        raise WikidataWriteError(f'Property {normalized_property_id} is missing a value.')
+
+    normalized_datatype = str(datatype or '').strip().lower()
+    if not normalized_datatype:
+        raise WikidataWriteError(f'Could not determine datatype for {normalized_property_id}.')
+
+    if normalized_datatype in {'wikibase-item', 'wikibase-entityid'}:
+        entity_qid = _extract_wikidata_qid(normalized_value)
+        if not entity_qid:
+            raise WikidataWriteError(f'Property {normalized_property_id} requires a Wikidata item value (Q...).')
+        return _wikidata_entity_datavalue(entity_qid)
+
+    if normalized_datatype in {
+        'string',
+        'external-id',
+        'commonsmedia',
+        'url',
+        'math',
+        'musical-notation',
+        'tabular-data',
+        'geo-shape',
+    }:
+        return normalized_value
+
+    if normalized_datatype == 'monolingualtext':
+        return _wikidata_monolingual_text_datavalue(
+            normalized_value,
+            language,
+            fallback=language,
+        )
+
+    if normalized_datatype == 'time':
+        return _wikidata_time_datavalue(normalized_value)
+
+    if normalized_datatype == 'quantity':
+        return _wikidata_quantity_datavalue(normalized_value)
+
+    if normalized_datatype in {'globe-coordinate', 'globecoordinate'}:
+        return _wikidata_coordinate_datavalue(normalized_value)
+
+    raise WikidataWriteError(
+        f'Unsupported datatype "{normalized_datatype}" for property {normalized_property_id}.'
+    )
+
+
 def _wikidata_today_datavalue() -> dict[str, Any]:
     today = timezone.now().date()
     return {
@@ -3667,6 +3793,43 @@ def create_wikidata_building_item(
     oauth_token: str = '',
     oauth_token_secret: str = '',
 ) -> dict[str, Any]:
+    def _property_datatypes_by_id(property_ids: list[str]) -> dict[str, str]:
+        normalized_property_ids: list[str] = []
+        seen_property_ids: set[str] = set()
+        for raw_property_id in property_ids:
+            property_id = _extract_wikidata_pid(str(raw_property_id or ''))
+            if not property_id or property_id in seen_property_ids:
+                continue
+            seen_property_ids.add(property_id)
+            normalized_property_ids.append(property_id)
+
+        if not normalized_property_ids:
+            return {}
+
+        payload_data = _wikidata_api_get(
+            session,
+            {
+                'action': 'wbgetentities',
+                'ids': '|'.join(normalized_property_ids),
+                'props': 'datatype',
+                'format': 'json',
+            },
+        )
+        entities = payload_data.get('entities', {})
+        if not isinstance(entities, dict):
+            return {}
+
+        datatypes: dict[str, str] = {}
+        for property_id in normalized_property_ids:
+            entity = entities.get(property_id, {})
+            if not isinstance(entity, dict):
+                continue
+            datatype = str(entity.get('datatype') or '').strip().lower()
+            if not datatype:
+                continue
+            datatypes[property_id] = datatype
+        return datatypes
+
     def _collect_qid_values(raw_values: Any, single_value: Any = '') -> list[str]:
         qids: list[str] = []
         seen: set[str] = set()
@@ -3783,6 +3946,54 @@ def create_wikidata_building_item(
         str(payload.get('route_instruction_language_p2795') or ''),
         fallback=edit_language,
     )
+    reserved_property_ids = {
+        'P17',
+        'P31',
+        'P84',
+        'P131',
+        'P1435',
+        'P149',
+        'P276',
+        'P281',
+        'P361',
+        'P373',
+        'P3999',
+        'P5008',
+        'P571',
+        'P5817',
+        'P625',
+        'P6375',
+        'P669',
+        'P670',
+        'P2795',
+    }
+    custom_property_entries: list[dict[str, str]] = []
+    seen_custom_entries: set[tuple[str, str, str]] = set()
+    raw_custom_properties = payload.get('custom_properties')
+    if isinstance(raw_custom_properties, list):
+        for raw_entry in raw_custom_properties:
+            if not isinstance(raw_entry, dict):
+                continue
+            property_id = _extract_wikidata_pid(
+                str(raw_entry.get('property_id') or raw_entry.get('propertyId') or '')
+            )
+            if not property_id or property_id in reserved_property_ids:
+                continue
+            property_value = str(raw_entry.get('value') or '').strip()
+            if not property_value:
+                continue
+            datatype = str(raw_entry.get('datatype') or '').strip().lower()
+            unique_key = (property_id, property_value, datatype)
+            if unique_key in seen_custom_entries:
+                continue
+            seen_custom_entries.add(unique_key)
+            custom_property_entries.append(
+                {
+                    'property_id': property_id,
+                    'value': property_value,
+                    'datatype': datatype,
+                }
+            )
 
     session, csrf_token = _wikidata_oauth_session(
         oauth_token=oauth_token,
@@ -4023,6 +4234,44 @@ def create_wikidata_building_item(
                 route_instruction_language,
                 fallback=edit_language,
             ),
+        )
+
+    missing_datatype_property_ids = [
+        entry['property_id']
+        for entry in custom_property_entries
+        if not str(entry.get('datatype') or '').strip()
+    ]
+    custom_datatypes_by_property_id = _property_datatypes_by_id(missing_datatype_property_ids)
+    for entry in custom_property_entries:
+        property_id = str(entry.get('property_id') or '').strip().upper()
+        if not property_id:
+            continue
+        property_value = str(entry.get('value') or '').strip()
+        if not property_value:
+            continue
+        datatype = str(entry.get('datatype') or '').strip().lower()
+        if not datatype:
+            datatype = str(custom_datatypes_by_property_id.get(property_id) or '').strip().lower()
+        datavalue = _wikidata_property_datavalue(
+            property_id,
+            property_value,
+            datatype,
+            language=edit_language,
+        )
+        _create_wikidata_claim(
+            session,
+            csrf_token,
+            created_qid,
+            property_id,
+            datavalue,
+            source_url=source_url,
+            source_title=source_title,
+            source_title_language=source_title_language,
+            source_author=source_author,
+            source_publication_date=source_publication_date,
+            source_publisher_p123=source_publisher_p123,
+            source_published_in_p1433=source_published_in_p1433,
+            source_language_of_work_p407=source_language_of_work_p407,
         )
 
     return {

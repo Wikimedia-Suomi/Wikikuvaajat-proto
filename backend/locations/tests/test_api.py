@@ -24,6 +24,11 @@ class LocationApiTests(APITestCase):
         )
         self.fetch_location_children_mock = self._fetch_children_patcher.start()
 
+    def _authenticate(self, username='api-writer'):
+        user = get_user_model().objects.create_user(username=username)
+        self.client.force_authenticate(user=user)
+        return user
+
     def tearDown(self):
         self._enrich_counts_patcher.stop()
         self._fetch_children_patcher.stop()
@@ -402,6 +407,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         ensure_wikidata_collection_membership_mock,
     ):
+        self._authenticate()
         ensure_wikidata_collection_membership_mock.return_value = {
             'qid': 'Q1757',
             'uri': 'https://www.wikidata.org/entity/Q1757',
@@ -451,6 +457,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         ensure_wikidata_collection_membership_mock,
     ):
+        self._authenticate()
         ensure_wikidata_collection_membership_mock.return_value = {
             'qid': 'Q1757',
             'uri': 'https://www.wikidata.org/entity/Q1757',
@@ -483,6 +490,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         ensure_wikidata_collection_membership_mock,
     ):
+        self._authenticate()
         ensure_wikidata_collection_membership_mock.side_effect = WikidataWriteError('login failed')
 
         response = self.client.post(
@@ -537,6 +545,27 @@ class LocationApiTests(APITestCase):
             source_language_of_work_p407='',
         )
 
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    def test_create_draft_location_uses_local_access_token_as_authentication(self):
+        payload = {
+            'name': 'Test Draft',
+            'description': 'Draft description',
+            'location_type': 'building',
+            'latitude': 60.1699,
+            'longitude': 24.9384,
+        }
+
+        response = self.client.post(reverse('draft-location-list-create'), payload, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(DraftLocation.objects.count(), 1)
+
     @patch('locations.views.ensure_wikidata_collection_membership')
     @patch(
         'locations.views._mediawiki_oauth_credentials_for_request',
@@ -547,6 +576,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         ensure_wikidata_collection_membership_mock,
     ):
+        self._authenticate()
         response = self.client.post(
             reverse('wikidata-add-existing'),
             {'wikidata_item': 'Q1757'},
@@ -568,6 +598,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         create_wikidata_building_item_mock,
     ):
+        self._authenticate()
         create_wikidata_building_item_mock.return_value = {
             'qid': 'Q123456',
             'uri': 'https://www.wikidata.org/entity/Q123456',
@@ -582,6 +613,11 @@ class LocationApiTests(APITestCase):
             'municipality_p131': 'Q1757',
             'part_of_p361': 'Q42',
             'part_of_p361_values': ['Q42', 'Q42'],
+            'custom_properties': [
+                {'property_id': 'P18', 'value': 'Example.jpg', 'datatype': 'commonsMedia'},
+                {'property_id': 'p18', 'value': 'Example.jpg', 'datatype': 'commonsmedia'},
+                {'property_id': 'P2048', 'value': '12.5 Q11573'},
+            ],
             'latitude': 60.1699,
             'longitude': 24.9384,
             'source_url': 'https://example.org/article',
@@ -605,6 +641,13 @@ class LocationApiTests(APITestCase):
         self.assertEqual(call_args.args[0]['instance_of_p31_values'], ['Q41176', 'Q811979'])
         self.assertEqual(call_args.args[0]['part_of_p361'], 'Q42')
         self.assertEqual(call_args.args[0]['part_of_p361_values'], ['Q42'])
+        self.assertEqual(
+            call_args.args[0]['custom_properties'],
+            [
+                {'property_id': 'P18', 'value': 'Example.jpg', 'datatype': 'commonsmedia'},
+                {'property_id': 'P2048', 'value': '12.5 Q11573', 'datatype': ''},
+            ],
+        )
 
     @patch('locations.views.create_wikidata_building_item')
     @patch(
@@ -616,6 +659,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         create_wikidata_building_item_mock,
     ):
+        self._authenticate()
         create_wikidata_building_item_mock.return_value = {
             'qid': 'Q123456',
             'uri': 'https://www.wikidata.org/entity/Q123456',
@@ -662,6 +706,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         create_wikidata_building_item_mock,
     ):
+        self._authenticate()
         payload = {
             'label': 'Example Building',
             'description': 'Historic building in test city',
@@ -690,11 +735,48 @@ class LocationApiTests(APITestCase):
         'locations.views._mediawiki_oauth_credentials_for_request',
         return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
     )
+    def test_wikidata_create_item_endpoint_rejects_invalid_custom_property_id(
+        self,
+        oauth_credentials_mock,
+        create_wikidata_building_item_mock,
+    ):
+        self._authenticate()
+        payload = {
+            'label': 'Example Building',
+            'description': 'Historic building in test city',
+            'instance_of_p31': 'Q41176',
+            'country_p17': 'Q33',
+            'municipality_p131': 'Q1757',
+            'latitude': 60.1699,
+            'longitude': 24.9384,
+            'custom_properties': [
+                {'property_id': 'invalid', 'value': 'foo'},
+            ],
+            'source_url': 'https://example.org/article',
+        }
+
+        response = self.client.post(
+            reverse('wikidata-create-item'),
+            payload,
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('custom_properties', response.data)
+        create_wikidata_building_item_mock.assert_not_called()
+        oauth_credentials_mock.assert_called_once()
+
+    @patch('locations.views.create_wikidata_building_item')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
     def test_wikidata_create_item_endpoint_enforces_source_for_architect(
         self,
         oauth_credentials_mock,
         create_wikidata_building_item_mock,
     ):
+        self._authenticate()
         payload = {
             'label': 'Example Building',
             'description': 'Historic building in test city',
@@ -728,6 +810,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock,
         create_wikidata_building_item_mock,
     ):
+        self._authenticate()
         payload = {
             'label': 'Example Building',
             'description': 'Historic building in test city',
@@ -752,15 +835,31 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock.assert_called_once()
 
     def test_wikidata_write_endpoints_require_authentication(self):
-        response = self.client.post(
+        add_existing_response = self.client.post(
             reverse('wikidata-add-existing'),
             {'wikidata_item': 'Q1757', 'source_url': 'https://example.org/article'},
             format='json',
         )
+        create_item_response = self.client.post(
+            reverse('wikidata-create-item'),
+            {
+                'label': 'Example Building',
+                'description': 'Historic building in test city',
+                'instance_of_p31': 'Q41176',
+                'country_p17': 'Q33',
+                'municipality_p131': 'Q1757',
+                'latitude': 60.1699,
+                'longitude': 24.9384,
+                'source_url': 'https://example.org/article',
+            },
+            format='json',
+        )
 
-        self.assertIn(response.status_code, (401, 503))
+        self.assertEqual(add_existing_response.status_code, 401)
+        self.assertEqual(create_item_response.status_code, 401)
 
     def test_create_draft_location(self):
+        self._authenticate()
         payload = {
             'name': 'Test Draft',
             'description': 'Draft description',
@@ -781,6 +880,20 @@ class LocationApiTests(APITestCase):
         self.assertEqual(DraftLocation.objects.count(), 1)
         self.assertEqual(response.data['name'], payload['name'])
         self.assertEqual(response.data['parent_uri'], payload['parent_uri'])
+
+    def test_create_draft_location_requires_authentication(self):
+        payload = {
+            'name': 'Test Draft',
+            'description': 'Draft description',
+            'location_type': 'building',
+            'latitude': 60.1699,
+            'longitude': 24.9384,
+        }
+
+        response = self.client.post(reverse('draft-location-list-create'), payload, format='json')
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(DraftLocation.objects.count(), 0)
 
     def test_draft_location_list_returns_all_drafts(self):
         DraftLocation.objects.create(
@@ -806,6 +919,7 @@ class LocationApiTests(APITestCase):
         self.assertEqual(len(response.data), 2)
 
     def test_update_draft_location(self):
+        self._authenticate()
         draft = DraftLocation.objects.create(
             name='Old name',
             description='Old description',
@@ -830,6 +944,26 @@ class LocationApiTests(APITestCase):
         self.assertEqual(draft.name, 'Updated name')
         self.assertEqual(draft.description, 'Updated description')
         self.assertEqual(draft.parent_uri, 'https://www.wikidata.org/entity/Q1757')
+
+    def test_update_draft_location_requires_authentication(self):
+        draft = DraftLocation.objects.create(
+            name='Old name',
+            description='Old description',
+            location_type='poi',
+            wikidata_item='',
+            latitude=60.0,
+            longitude=24.0,
+        )
+
+        response = self.client.patch(
+            reverse('draft-location-detail', kwargs={'draft_id': draft.id}),
+            {'name': 'Updated name'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 401)
+        draft.refresh_from_db()
+        self.assertEqual(draft.name, 'Old name')
 
     def test_get_draft_location_detail(self):
         draft = DraftLocation.objects.create(

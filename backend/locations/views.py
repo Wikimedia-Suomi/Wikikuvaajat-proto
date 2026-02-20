@@ -508,6 +508,17 @@ class BaseLocationAPIView(APIView):
         lang = request.query_params.get('lang') or translation.get_language()
         return lang or 'en'
 
+    def _require_authenticated_user(self, request):
+        user = getattr(request, 'user', None)
+        if user is not None and user.is_authenticated:
+            return None
+        if _local_dev_access_token_enabled():
+            return None
+        return Response(
+            {'detail': 'Authentication required. Sign in with Wikimedia OAuth first.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
     def _get_limit(self, request, default: int = 10, maximum: int = 20) -> int:
         raw_limit = request.query_params.get('limit')
         if raw_limit is None:
@@ -725,6 +736,9 @@ class DraftLocationListCreateAPIView(BaseLocationAPIView):
         return Response(serializer.data)
 
     def post(self, request):
+        auth_error = self._require_authenticated_user(request)
+        if auth_error is not None:
+            return auth_error
         serializer = DraftLocationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         draft = serializer.save()
@@ -741,6 +755,9 @@ class DraftLocationDetailAPIView(BaseLocationAPIView):
         return Response(serializer.data)
 
     def patch(self, request, draft_id: int):
+        auth_error = self._require_authenticated_user(request)
+        if auth_error is not None:
+            return auth_error
         draft = _draft_by_id(draft_id)
         if draft is None:
             return Response({'detail': 'Draft location not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -781,6 +798,9 @@ class WikidataEntityAPIView(BaseLocationAPIView):
 
 class WikidataAddExistingAPIView(BaseLocationAPIView):
     def post(self, request):
+        auth_error = self._require_authenticated_user(request)
+        if auth_error is not None:
+            return auth_error
         oauth_credentials, oauth_error, oauth_status = _mediawiki_oauth_credentials_for_request(request)
         if oauth_credentials is None:
             return Response({'detail': oauth_error}, status=oauth_status)
@@ -827,6 +847,9 @@ class CitoidMetadataAPIView(BaseLocationAPIView):
 
 class WikidataCreateItemAPIView(BaseLocationAPIView):
     def post(self, request):
+        auth_error = self._require_authenticated_user(request)
+        if auth_error is not None:
+            return auth_error
         oauth_credentials, oauth_error, oauth_status = _mediawiki_oauth_credentials_for_request(request)
         if oauth_credentials is None:
             return Response({'detail': oauth_error}, status=oauth_status)

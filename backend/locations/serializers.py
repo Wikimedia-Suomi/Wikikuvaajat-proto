@@ -7,12 +7,20 @@ from .models import DraftLocation
 
 
 _WIKIDATA_QID_PATTERN = re.compile(r'(Q\d+)', flags=re.IGNORECASE)
+_WIKIDATA_PID_PATTERN = re.compile(r'(P\d+)', flags=re.IGNORECASE)
 _DATE_LIKE_ISO_PATTERN = re.compile(r'(?P<year>\d{4})(?:-(?P<month>\d{2})(?:-(?P<day>\d{2}))?)?$')
 _DATE_LIKE_FI_PATTERN = re.compile(r'(?P<day>\d{1,2})\.\s*(?P<month>\d{1,2})\.\s*(?P<year>\d{4})')
 
 
 def _normalize_wikidata_qid(value: str) -> str:
     match = _WIKIDATA_QID_PATTERN.search((value or '').strip())
+    if not match:
+        return ''
+    return match.group(1).upper()
+
+
+def _normalize_wikidata_pid(value: str) -> str:
+    match = _WIKIDATA_PID_PATTERN.search((value or '').strip())
     if not match:
         return ''
     return match.group(1).upper()
@@ -259,6 +267,7 @@ class CreateWikidataItemSerializer(serializers.Serializer):
     house_number_p670 = serializers.CharField(max_length=64, required=False, allow_blank=True)
     route_instruction_p2795 = serializers.CharField(max_length=255, required=False, allow_blank=True)
     route_instruction_language_p2795 = serializers.CharField(max_length=12, required=False, allow_blank=True)
+    custom_properties = serializers.ListField(child=serializers.DictField(), required=False)
     source_url = serializers.URLField(max_length=500)
     source_title = serializers.CharField(max_length=500, required=False, allow_blank=True)
     source_title_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
@@ -279,6 +288,12 @@ class CreateWikidataItemSerializer(serializers.Serializer):
         if not raw_value:
             return ''
         return self._validate_qid(raw_value, field_name)
+
+    def _validate_pid(self, value: str, field_name: str) -> str:
+        pid = _normalize_wikidata_pid(value)
+        if not pid:
+            raise serializers.ValidationError(f'{field_name} must be a valid Wikidata property id.')
+        return pid
 
     def _validate_optional_qid_list(self, values: list, field_name: str) -> list[str]:
         if not isinstance(values, list):
@@ -385,6 +400,41 @@ class CreateWikidataItemSerializer(serializers.Serializer):
 
     def validate_route_instruction_language_p2795(self, value: str) -> str:
         return self._validate_optional_language(value, 'route_instruction_language_p2795')
+
+    def validate_custom_properties(self, value: list) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            raise serializers.ValidationError('custom_properties must be a list.')
+
+        normalized_entries: list[dict[str, str]] = []
+        seen_entries: set[tuple[str, str, str]] = set()
+        for index, raw_entry in enumerate(value):
+            if not isinstance(raw_entry, dict):
+                raise serializers.ValidationError(f'custom_properties[{index}] must be an object.')
+
+            property_id = self._validate_pid(
+                str(raw_entry.get('property_id') or raw_entry.get('propertyId') or ''),
+                f'custom_properties[{index}].property_id',
+            )
+            property_value = str(raw_entry.get('value') or '').strip()
+            if not property_value:
+                continue
+            datatype = str(raw_entry.get('datatype') or '').strip().lower()
+            if datatype and not re.fullmatch(r'[a-z0-9-]{2,64}', datatype):
+                raise serializers.ValidationError(f'custom_properties[{index}].datatype has an invalid format.')
+
+            unique_key = (property_id, property_value, datatype)
+            if unique_key in seen_entries:
+                continue
+            seen_entries.add(unique_key)
+            normalized_entries.append(
+                {
+                    'property_id': property_id,
+                    'value': property_value,
+                    'datatype': datatype,
+                }
+            )
+
+        return normalized_entries
 
     def validate_source_title_language(self, value: str) -> str:
         return self._validate_optional_language(value, 'source_title_language')

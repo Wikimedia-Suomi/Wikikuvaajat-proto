@@ -20,9 +20,72 @@
   const API_BASE_URL = configuredApiBaseUrl
   const SUPPORTED_LOCALES = ['en', 'sv', 'fi']
   const WIKIDATA_LANGUAGE_SEARCH_URL = 'https://commons.wikimedia.org/w/api.php'
+  const WIKIDATA_PROPERTY_SEARCH_URL = 'https://www.wikidata.org/w/api.php'
   const WIKIDATA_LANGUAGE_CODE_CANONICAL = {
     sme: 'se',
   }
+  const NEW_WIKIDATA_OPTIONAL_PROPERTY_DEFINITIONS = [
+    { key: 'location_p276', propertyId: 'P276', labelKey: 'locationP276' },
+    { key: 'part_of_p361', propertyId: 'P361', labelKey: 'partOfP361' },
+    { key: 'architectural_style_p149', propertyId: 'P149', labelKey: 'architecturalStyleP149' },
+    { key: 'architect_p84', propertyId: 'P84', labelKey: 'architectP84' },
+    { key: 'inception_p571', propertyId: 'P571', labelKey: 'inceptionP571' },
+    { key: 'heritage_designation_p1435', propertyId: 'P1435', labelKey: 'heritageDesignationP1435' },
+    { key: 'route_instruction_p2795', propertyId: 'P2795', labelKey: 'routeInstructionP2795' },
+    { key: 'official_closure_date_p3999', propertyId: 'P3999', labelKey: 'officialClosureDateP3999' },
+    { key: 'state_of_use_p5817', propertyId: 'P5817', labelKey: 'stateOfUseP5817' },
+    { key: 'yso_id_p2347', propertyId: 'P2347', labelKey: 'ysoIdP2347' },
+    { key: 'kanto_id_p8980', propertyId: 'P8980', labelKey: 'kantoIdP8980' },
+    {
+      key: 'protected_buildings_register_in_finland_id_p5310',
+      propertyId: 'P5310',
+      labelKey: 'protectedBuildingsRegisterInFinlandIdP5310',
+    },
+    {
+      key: 'rky_national_built_heritage_environment_id_p4009',
+      propertyId: 'P4009',
+      labelKey: 'rkyNationalBuiltHeritageEnvironmentIdP4009',
+    },
+    {
+      key: 'permanent_building_number_vtj_prt_p3824',
+      propertyId: 'P3824',
+      labelKey: 'permanentBuildingNumberVtjPrtP3824',
+    },
+    {
+      key: 'protected_buildings_register_in_finland_building_id_p5313',
+      propertyId: 'P5313',
+      labelKey: 'protectedBuildingsRegisterInFinlandBuildingIdP5313',
+    },
+    {
+      key: 'helsinki_persistent_building_id_ratu_p8355',
+      propertyId: 'P8355',
+      labelKey: 'helsinkiPersistentBuildingIdRatuP8355',
+    },
+    { key: 'commons_category_p373', propertyId: 'P373', labelKey: 'commonsCategory' },
+  ]
+  const NEW_WIKIDATA_DEDICATED_PROPERTY_KEYS = new Set([
+    'part_of_p361',
+    'architect_p84',
+    'inception_p571',
+    'heritage_designation_p1435',
+    'commons_category_p373',
+  ])
+  const NEW_WIKIDATA_IDENTIFIER_PROPERTY_KEYS = new Set([
+    'yso_id_p2347',
+    'kanto_id_p8980',
+    'protected_buildings_register_in_finland_id_p5310',
+    'rky_national_built_heritage_environment_id_p4009',
+    'permanent_building_number_vtj_prt_p3824',
+    'protected_buildings_register_in_finland_building_id_p5313',
+    'helsinki_persistent_building_id_ratu_p8355',
+  ])
+  const NEW_WIKIDATA_DYNAMIC_PROPERTY_KEY_PREFIX = 'property_'
+  const NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_KEY = new Map(
+    NEW_WIKIDATA_OPTIONAL_PROPERTY_DEFINITIONS.map((entry) => [entry.key, entry])
+  )
+  const NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_ID = new Map(
+    NEW_WIKIDATA_OPTIONAL_PROPERTY_DEFINITIONS.map((entry) => [entry.propertyId, entry])
+  )
   const AUTOCOMPLETE_RESULT_LIMIT = 20
   const LOCATION_SILENT_REFRESH_DELAY_MS = 5000
   const DETAIL_IMAGE_PLACEHOLDER_DATA_URI = (() => {
@@ -186,6 +249,203 @@
     }
 
     return options
+  }
+
+  function extractWikidataPropertyId(value) {
+    if (typeof value !== 'string') {
+      return ''
+    }
+    const match = value.trim().match(/(P\d+)/i)
+    return match ? match[1].toUpperCase() : ''
+  }
+
+  function extractWikidataPropertyIdFromDynamicKey(value) {
+    if (typeof value !== 'string') {
+      return ''
+    }
+    const match = value.trim().match(/^property_(p\d+)$/i)
+    return match ? match[1].toUpperCase() : ''
+  }
+
+  function dynamicWikidataPropertyKey(propertyId) {
+    const normalizedPropertyId = extractWikidataPropertyId(String(propertyId || ''))
+    if (!normalizedPropertyId) {
+      return ''
+    }
+    return `${NEW_WIKIDATA_DYNAMIC_PROPERTY_KEY_PREFIX}${normalizedPropertyId.toLowerCase()}`
+  }
+
+  function normalizeNewWikidataOptionalPropertyDefinition(optionOrKey) {
+    const directKey = typeof optionOrKey === 'string'
+      ? optionOrKey.trim()
+      : String(optionOrKey && optionOrKey.key ? optionOrKey.key : '').trim()
+    if (directKey && NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_KEY.has(directKey)) {
+      return NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_KEY.get(directKey)
+    }
+    const dynamicKeyPropertyId = extractWikidataPropertyIdFromDynamicKey(directKey)
+    if (dynamicKeyPropertyId) {
+      return {
+        key: dynamicWikidataPropertyKey(dynamicKeyPropertyId),
+        propertyId: dynamicKeyPropertyId,
+        labelKey: '',
+        label: '',
+        description: '',
+        datatype: '',
+      }
+    }
+
+    function normalizePropertyObject(propertyId, fallbackOption = null) {
+      const normalizedPropertyId = extractWikidataPropertyId(String(propertyId || ''))
+      if (!normalizedPropertyId) {
+        return null
+      }
+      if (NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_ID.has(normalizedPropertyId)) {
+        return NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_ID.get(normalizedPropertyId)
+      }
+      return {
+        key: dynamicWikidataPropertyKey(normalizedPropertyId),
+        propertyId: normalizedPropertyId,
+        labelKey: '',
+        label: String(fallbackOption && fallbackOption.label ? fallbackOption.label : '').trim(),
+        description: String(fallbackOption && fallbackOption.description ? fallbackOption.description : '').trim(),
+        datatype: String(fallbackOption && fallbackOption.datatype ? fallbackOption.datatype : '').trim().toLowerCase(),
+      }
+    }
+
+    if (typeof optionOrKey === 'string') {
+      const directPropertyId = extractWikidataPropertyId(optionOrKey)
+      const normalizedObject = normalizePropertyObject(directPropertyId)
+      if (normalizedObject) {
+        return normalizedObject
+      }
+    }
+
+    const propertyId = extractWikidataPropertyId(
+      String(
+        optionOrKey && typeof optionOrKey === 'object'
+          ? (
+            optionOrKey.propertyId ||
+            optionOrKey.id ||
+            optionOrKey.concepturi ||
+            ''
+          )
+          : ''
+      )
+    )
+    return normalizePropertyObject(propertyId, optionOrKey)
+  }
+
+  async function searchSupportedNewWikidataProperties(query, lang = null, limit = AUTOCOMPLETE_RESULT_LIMIT) {
+    const searchTerm = String(query || '').trim()
+    if (!searchTerm) {
+      return []
+    }
+
+    const requestLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || AUTOCOMPLETE_RESULT_LIMIT, 20))
+    const searchUrl = new URL(WIKIDATA_PROPERTY_SEARCH_URL)
+    searchUrl.searchParams.set('action', 'wbsearchentities')
+    searchUrl.searchParams.set('format', 'json')
+    searchUrl.searchParams.set('search', searchTerm)
+    searchUrl.searchParams.set('language', normalizeSupportedLocale(lang) || 'en')
+    searchUrl.searchParams.set('uselang', normalizeSupportedLocale(lang) || 'en')
+    searchUrl.searchParams.set('type', 'property')
+    searchUrl.searchParams.set('limit', String(requestLimit))
+    searchUrl.searchParams.set('origin', '*')
+
+    const response = await fetch(searchUrl.toString(), { method: 'GET' })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const items = payload && typeof payload === 'object' && Array.isArray(payload.search)
+      ? payload.search
+      : []
+
+    const seenKeys = new Set()
+    const options = []
+    for (const item of items) {
+      const definition = normalizeNewWikidataOptionalPropertyDefinition(item)
+      if (!definition || seenKeys.has(definition.key)) {
+        continue
+      }
+      seenKeys.add(definition.key)
+      options.push({
+        key: definition.key,
+        propertyId: definition.propertyId,
+        labelKey: definition.labelKey,
+        label: String(item && item.label ? item.label : '').trim(),
+        description: String(item && item.description ? item.description : '').trim(),
+      })
+    }
+
+    return options
+  }
+
+  async function fetchWikidataPropertyMetadata(propertyId, lang = null) {
+    const normalizedPropertyId = extractWikidataPropertyId(String(propertyId || ''))
+    if (!normalizedPropertyId) {
+      return null
+    }
+
+    const languages = []
+    const normalizedLocale = normalizeSupportedLocale(lang)
+    if (normalizedLocale) {
+      languages.push(normalizedLocale)
+    }
+    if (!languages.includes('en')) {
+      languages.push('en')
+    }
+
+    const requestUrl = new URL(WIKIDATA_PROPERTY_SEARCH_URL)
+    requestUrl.searchParams.set('action', 'wbgetentities')
+    requestUrl.searchParams.set('format', 'json')
+    requestUrl.searchParams.set('ids', normalizedPropertyId)
+    requestUrl.searchParams.set('props', 'labels|datatype')
+    requestUrl.searchParams.set('languages', languages.join('|'))
+    requestUrl.searchParams.set('languagefallback', '1')
+    requestUrl.searchParams.set('origin', '*')
+
+    const response = await fetch(requestUrl.toString(), { method: 'GET' })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const entities = payload && typeof payload === 'object' && payload.entities && typeof payload.entities === 'object'
+      ? payload.entities
+      : {}
+    const entity = entities && typeof entities === 'object' ? entities[normalizedPropertyId] : null
+    if (!entity || typeof entity !== 'object') {
+      return null
+    }
+
+    const labels = entity.labels && typeof entity.labels === 'object' ? entity.labels : {}
+    let resolvedLabel = ''
+    for (const langCode of languages) {
+      const labelEntry = labels[langCode]
+      if (labelEntry && typeof labelEntry === 'object' && typeof labelEntry.value === 'string') {
+        const candidate = labelEntry.value.trim()
+        if (candidate) {
+          resolvedLabel = candidate
+          break
+        }
+      }
+    }
+    if (!resolvedLabel) {
+      const firstEntry = Object.values(labels).find((entry) => (
+        entry && typeof entry === 'object' && typeof entry.value === 'string' && entry.value.trim()
+      ))
+      resolvedLabel = firstEntry && typeof firstEntry === 'object' && typeof firstEntry.value === 'string'
+        ? firstEntry.value.trim()
+        : ''
+    }
+
+    return {
+      propertyId: normalizedPropertyId,
+      label: resolvedLabel,
+      datatype: String(entity.datatype || '').trim().toLowerCase(),
+    }
   }
 
   const PREDEFINED_ENDPOINTS = configuredPredefinedEndpoints
@@ -894,6 +1154,12 @@
       saveImageSubcategorySuggestions: 'Subcategories from selected categories',
       addCategory: 'Add',
       removeCategory: 'Remove',
+      addProperty: 'Add property',
+      removeProperty: 'Remove property',
+      propertySearchPlaceholder: 'Search Wikidata property...',
+      propertyValuePlaceholder: 'Property value',
+      propertyQuickPicks: 'Quick picks',
+      noPropertiesAvailable: 'All suggested properties are already added.',
       saveImageOpenUploadWizard: 'Open Wikimedia Commons Upload Wizard',
       saveImageCoordinatesRequired: 'Select coordinates on map or enable EXIF coordinates.',
       saveImageUrlPreview: 'Upload Wizard URL preview',
@@ -1139,6 +1405,12 @@
       saveImageSubcategorySuggestions: 'Underkategorier från valda kategorier',
       addCategory: 'Lägg till',
       removeCategory: 'Ta bort',
+      addProperty: 'Lägg till egenskap',
+      removeProperty: 'Ta bort egenskap',
+      propertySearchPlaceholder: 'Sök Wikidata-egenskap...',
+      propertyValuePlaceholder: 'Egenskapsvärde',
+      propertyQuickPicks: 'Snabbval',
+      noPropertiesAvailable: 'Alla föreslagna egenskaper har redan lagts till.',
       saveImageOpenUploadWizard: 'Öppna Wikimedia Commons Upload Wizard',
       saveImageCoordinatesRequired: 'Välj koordinater på kartan eller aktivera EXIF-koordinater.',
       saveImageUrlPreview: 'Förhandsgranskning av Upload Wizard-URL',
@@ -1384,6 +1656,12 @@
       saveImageSubcategorySuggestions: 'Valittujen luokkien alaluokat',
       addCategory: 'Lisää',
       removeCategory: 'Poista',
+      addProperty: 'Lisää ominaisuus',
+      removeProperty: 'Poista ominaisuus',
+      propertySearchPlaceholder: 'Hae Wikidata-ominaisuutta...',
+      propertyValuePlaceholder: 'Ominaisuuden arvo',
+      propertyQuickPicks: 'Pikavalinnat',
+      noPropertiesAvailable: 'Kaikki ehdotetut ominaisuudet on jo lisätty.',
       saveImageOpenUploadWizard: 'Avaa Wikimedia Commonsin Upload Wizard',
       saveImageCoordinatesRequired: 'Valitse koordinaatit kartalta tai ota EXIF-koordinaatit käyttöön.',
       saveImageUrlPreview: 'Upload Wizard -URL esikatselu',
@@ -2674,14 +2952,16 @@ LIMIT {{limit}}`,
         return Boolean(
           location.value &&
           location.value.source === 'draft' &&
-          !Number.isNaN(draftId)
+          !Number.isNaN(draftId) &&
+          !authStatusLoading.value &&
+          authAuthenticated.value
         )
       })
       const canCreateSubLocation = computed(() => {
         if (!location.value || !location.value.uri) {
           return false
         }
-        return !authStatusLoading.value && (!authEnabled.value || authAuthenticated.value)
+        return !authStatusLoading.value && authAuthenticated.value
       })
       const canSaveImage = computed(() => Boolean(location.value && location.value.uri))
       const detailMapElement = ref(null)
@@ -5259,6 +5539,12 @@ LIMIT {{limit}}`,
       const newWikidataOfficialClosureDateSourceUrl = ref('')
       const newWikidataRouteInstructionP2795 = ref('')
       const newWikidataRouteInstructionLanguageP2795 = ref(defaultWikidataTextLanguage())
+      const newWikidataOptionalPropertyKeys = ref([])
+      const newWikidataCustomPropertyDefinitions = ref({})
+      const newWikidataCustomPropertyValues = ref({})
+      const newWikidataPropertySearch = ref('')
+      const newWikidataPropertySuggestions = ref([])
+      const newWikidataPropertyLoading = ref(false)
       const locationDialogMode = ref('create')
       const editingDraftId = ref(null)
       const draftLoading = ref(false)
@@ -5313,10 +5599,11 @@ LIMIT {{limit}}`,
       const isWizardNewBasicStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'basic')
       const isWizardNewLocationStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'location')
       const isWizardNewPropertiesStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'properties')
+      const isWizardNewIdentifiersStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'identifiers')
       const isWizardNewSourceStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'source')
       const showLocalDraftForm = computed(() => isEditMode.value || createWizardMode.value === 'local-draft')
       const canReturnToWizardChoice = computed(() => !isEditMode.value && !wizardChoiceLocked.value && createWizardStep.value === 'form')
-      const canCreateLocation = computed(() => !authStatusLoading.value && (!authEnabled.value || authAuthenticated.value))
+      const canCreateLocation = computed(() => !authStatusLoading.value && authAuthenticated.value)
       const showCradleGuideButton = computed(() => authEnabled.value && !authAuthenticated.value && !authStatusLoading.value)
       const isCreateActionBusy = computed(() => draftLoading.value || draftSaving.value || wizardSaving.value)
       const cradleUrl = 'https://cradle.toolforge.org/#/subject/building_(wikikuvaajat)'
@@ -5428,6 +5715,346 @@ LIMIT {{limit}}`,
       const showPostalInfo = computed(() => isWikidataLocked.value && showManualPostalDiff.value)
       const showMunicipalityInfo = computed(() => isWikidataLocked.value && showManualMunicipalityDiff.value)
       const showCommonsInfo = computed(() => isWikidataLocked.value && showManualCommonsDiff.value)
+      const newWikidataOptionalPropertySet = computed(() => new Set(newWikidataOptionalPropertyKeys.value))
+
+      function isNewWikidataIdentifierProperty(optionOrKey) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(optionOrKey)
+        if (!definition) {
+          return false
+        }
+        if (NEW_WIKIDATA_IDENTIFIER_PROPERTY_KEYS.has(definition.key)) {
+          return true
+        }
+        return String(definition.datatype || '').trim().toLowerCase() === 'external-id'
+      }
+
+      const newWikidataQuickPropertyOptions = computed(() => {
+        return NEW_WIKIDATA_OPTIONAL_PROPERTY_DEFINITIONS.filter(
+          (entry) => (
+            entry.key !== 'location_p276'
+            && !newWikidataOptionalPropertySet.value.has(entry.key)
+            && !isNewWikidataIdentifierProperty(entry)
+          )
+        )
+      })
+      const newWikidataQuickIdentifierPropertyOptions = computed(() => {
+        return NEW_WIKIDATA_OPTIONAL_PROPERTY_DEFINITIONS.filter(
+          (entry) => !newWikidataOptionalPropertySet.value.has(entry.key) && isNewWikidataIdentifierProperty(entry)
+        )
+      })
+
+      function resolveNewWikidataOptionalPropertyDefinition(optionOrKey) {
+        const normalizedDefinition = normalizeNewWikidataOptionalPropertyDefinition(optionOrKey)
+        if (!normalizedDefinition) {
+          return null
+        }
+        if (NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_KEY.has(normalizedDefinition.key)) {
+          return normalizedDefinition
+        }
+        const storedDefinition = newWikidataCustomPropertyDefinitions.value[normalizedDefinition.key]
+        if (!storedDefinition || typeof storedDefinition !== 'object') {
+          return normalizedDefinition
+        }
+        const storedPropertyId = extractWikidataPropertyId(String(storedDefinition.propertyId || ''))
+        return {
+          ...normalizedDefinition,
+          propertyId: storedPropertyId || normalizedDefinition.propertyId,
+          label: String(storedDefinition.label || normalizedDefinition.label || '').trim(),
+          description: String(storedDefinition.description || normalizedDefinition.description || '').trim(),
+          datatype: String(storedDefinition.datatype || normalizedDefinition.datatype || '').trim().toLowerCase(),
+        }
+      }
+
+      const newWikidataCustomPropertyOptions = computed(() => {
+        const options = []
+        for (const propertyKey of newWikidataOptionalPropertyKeys.value) {
+          if (NEW_WIKIDATA_DEDICATED_PROPERTY_KEYS.has(propertyKey)) {
+            continue
+          }
+          const definition = resolveNewWikidataOptionalPropertyDefinition(propertyKey)
+          if (!definition) {
+            continue
+          }
+          options.push(definition)
+        }
+        return options
+      })
+      const newWikidataNonIdentifierCustomPropertyOptions = computed(() => (
+        newWikidataCustomPropertyOptions.value.filter((entry) => !isNewWikidataIdentifierProperty(entry))
+      ))
+      const newWikidataIdentifierCustomPropertyOptions = computed(() => (
+        newWikidataCustomPropertyOptions.value.filter((entry) => isNewWikidataIdentifierProperty(entry))
+      ))
+      const newWikidataPropertySuggestionsForProperties = computed(() => (
+        newWikidataPropertySuggestions.value.filter((entry) => !isNewWikidataIdentifierProperty(entry))
+      ))
+
+      function formatWikidataPropertyDisplayLabel(label, propertyId = '') {
+        const normalizedPropertyId = extractWikidataPropertyId(String(propertyId || ''))
+        const rawLabel = String(label || '').trim()
+        const hasPropertyInLabel = normalizedPropertyId && rawLabel.toUpperCase().includes(`(${normalizedPropertyId})`)
+        const withPropertyId = normalizedPropertyId && rawLabel && !hasPropertyInLabel
+          ? `${rawLabel} (${normalizedPropertyId})`
+          : (rawLabel || normalizedPropertyId)
+        return withPropertyId.toLocaleUpperCase()
+      }
+
+      function newWikidataP31Label() {
+        return formatWikidataPropertyDisplayLabel(t('instanceOfP31'), 'P31')
+      }
+
+      function newWikidataOptionalPropertyLabel(optionOrKey) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(optionOrKey)
+        if (!definition) {
+          return ''
+        }
+        const propertyId = String(definition.propertyId || '').trim().toUpperCase()
+        if (definition.labelKey) {
+          return formatWikidataPropertyDisplayLabel(t(definition.labelKey), propertyId)
+        }
+        const rawLabel = String(definition.label || '').trim()
+        return formatWikidataPropertyDisplayLabel(rawLabel, propertyId)
+      }
+
+      function newWikidataPropertySuggestionLabel(option) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(option)
+        if (!definition) {
+          return ''
+        }
+        const propertyId = String(definition.propertyId || '').trim().toUpperCase()
+        const fallbackLabel = definition.labelKey ? t(definition.labelKey) : propertyId
+        const rawLabel = String(
+          option && option.label
+            ? option.label
+            : definition.label || ''
+        ).trim()
+        const hasPropertyInLabel = propertyId && rawLabel.toUpperCase().includes(`(${propertyId})`)
+        const baseLabel = rawLabel
+          ? (hasPropertyInLabel ? rawLabel : `${rawLabel} (${propertyId})`)
+          : fallbackLabel
+        return baseLabel
+      }
+
+      function isNewWikidataPropertyEnabled(propertyKey) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(propertyKey)
+        if (!definition) {
+          return false
+        }
+        return newWikidataOptionalPropertySet.value.has(definition.key)
+      }
+
+      function newWikidataCustomPropertyValue(propertyKey) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(propertyKey)
+        if (!definition) {
+          return ''
+        }
+        return String(newWikidataCustomPropertyValues.value[definition.key] || '')
+      }
+
+      function setNewWikidataCustomPropertyValue(propertyKey, value) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(propertyKey)
+        if (!definition) {
+          return
+        }
+        newWikidataCustomPropertyValues.value = {
+          ...newWikidataCustomPropertyValues.value,
+          [definition.key]: String(value || ''),
+        }
+      }
+
+      function hydrateNewWikidataCustomPropertyMetadata(propertyKey) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(propertyKey)
+        if (!definition || NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_KEY.has(definition.key)) {
+          return
+        }
+        const existingDefinition = newWikidataCustomPropertyDefinitions.value[definition.key]
+        if (!existingDefinition || typeof existingDefinition !== 'object') {
+          return
+        }
+        const hasLabel = String(existingDefinition.label || '').trim() !== ''
+        const hasDatatype = String(existingDefinition.datatype || '').trim() !== ''
+        if (hasLabel && hasDatatype) {
+          return
+        }
+
+        void (async () => {
+          try {
+            const metadata = await fetchWikidataPropertyMetadata(definition.propertyId, locale.value)
+            if (!metadata) {
+              return
+            }
+            const latestDefinition = newWikidataCustomPropertyDefinitions.value[definition.key]
+            if (!latestDefinition || typeof latestDefinition !== 'object') {
+              return
+            }
+            const nextLabel = String(latestDefinition.label || metadata.label || '').trim()
+            const nextDatatype = String(latestDefinition.datatype || metadata.datatype || '').trim().toLowerCase()
+            if (
+              nextLabel === String(latestDefinition.label || '').trim()
+              && nextDatatype === String(latestDefinition.datatype || '').trim().toLowerCase()
+            ) {
+              return
+            }
+            newWikidataCustomPropertyDefinitions.value = {
+              ...newWikidataCustomPropertyDefinitions.value,
+              [definition.key]: {
+                ...latestDefinition,
+                label: nextLabel,
+                datatype: nextDatatype,
+              },
+            }
+          } catch (error) {
+            void error
+          }
+        })()
+      }
+
+      function clearNewWikidataOptionalPropertyValue(propertyKey) {
+        switch (propertyKey) {
+          case 'part_of_p361':
+            newWikidataPartOfP361.value = ''
+            newWikidataPartOfP361Values.value = []
+            newWikidataPartOfSearch.value = ''
+            newWikidataPartOfSuggestions.value = []
+            return
+          case 'architect_p84':
+            newWikidataArchitectP84.value = ''
+            newWikidataArchitectP84Values.value = []
+            newWikidataArchitectSearch.value = ''
+            newWikidataArchitectSuggestions.value = []
+            return
+          case 'inception_p571':
+            newWikidataInceptionP571.value = ''
+            return
+          case 'heritage_designation_p1435':
+            newWikidataHeritageP1435.value = ''
+            newWikidataHeritageP1435Values.value = []
+            newWikidataHeritageSearch.value = ''
+            newWikidataHeritageSuggestions.value = []
+            return
+          case 'commons_category_p373':
+            newWikidataCommonsCategoryP373.value = ''
+            newWikidataCommonsSearch.value = ''
+            newWikidataCommonsSuggestions.value = []
+            return
+          default:
+            if (Object.prototype.hasOwnProperty.call(newWikidataCustomPropertyValues.value, propertyKey)) {
+              const nextValues = { ...newWikidataCustomPropertyValues.value }
+              delete nextValues[propertyKey]
+              newWikidataCustomPropertyValues.value = nextValues
+            }
+            return
+        }
+      }
+
+      function addNewWikidataOptionalProperty(optionOrKey) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(optionOrKey)
+        if (!definition) {
+          return
+        }
+        if (!NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_KEY.has(definition.key)) {
+          const existingDefinition = newWikidataCustomPropertyDefinitions.value[definition.key] || {}
+          newWikidataCustomPropertyDefinitions.value = {
+            ...newWikidataCustomPropertyDefinitions.value,
+            [definition.key]: {
+              key: definition.key,
+              propertyId: definition.propertyId,
+              label: String(definition.label || existingDefinition.label || '').trim(),
+              description: String(definition.description || existingDefinition.description || '').trim(),
+              datatype: String(definition.datatype || existingDefinition.datatype || '').trim().toLowerCase(),
+            },
+          }
+        }
+        if (
+          !NEW_WIKIDATA_DEDICATED_PROPERTY_KEYS.has(definition.key)
+          && !Object.prototype.hasOwnProperty.call(newWikidataCustomPropertyValues.value, definition.key)
+        ) {
+          newWikidataCustomPropertyValues.value = {
+            ...newWikidataCustomPropertyValues.value,
+            [definition.key]: '',
+          }
+        }
+        hydrateNewWikidataCustomPropertyMetadata(definition.key)
+        if (!newWikidataOptionalPropertySet.value.has(definition.key)) {
+          newWikidataOptionalPropertyKeys.value = [...newWikidataOptionalPropertyKeys.value, definition.key]
+        }
+        newWikidataPropertySearch.value = ''
+        newWikidataPropertySuggestions.value = []
+      }
+
+      function removeNewWikidataOptionalProperty(propertyKey) {
+        const definition = resolveNewWikidataOptionalPropertyDefinition(propertyKey)
+        if (!definition) {
+          return
+        }
+        newWikidataOptionalPropertyKeys.value = newWikidataOptionalPropertyKeys.value.filter(
+          (entry) => entry !== definition.key
+        )
+        if (!NEW_WIKIDATA_OPTIONAL_PROPERTY_BY_KEY.has(definition.key)) {
+          const nextDefinitions = { ...newWikidataCustomPropertyDefinitions.value }
+          delete nextDefinitions[definition.key]
+          newWikidataCustomPropertyDefinitions.value = nextDefinitions
+        }
+        clearNewWikidataOptionalPropertyValue(definition.key)
+      }
+
+      function onNewWikidataPropertyInput() {
+        const inputValue = String(newWikidataPropertySearch.value || '').trim()
+        if (!inputValue) {
+          newWikidataPropertySuggestions.value = []
+          return
+        }
+        searchNewWikidataPropertySuggestionsDebounced(inputValue)
+      }
+
+      function addNewWikidataPropertyFromInput(onlyNonIdentifier = false) {
+        const inputValue = String(newWikidataPropertySearch.value || '').trim()
+        if (!inputValue) {
+          return
+        }
+
+        const canAddDefinition = (definition) => {
+          if (!definition) {
+            return false
+          }
+          if (!onlyNonIdentifier) {
+            return true
+          }
+          return !isNewWikidataIdentifierProperty(definition)
+        }
+
+        const fromInput = normalizeNewWikidataOptionalPropertyDefinition(inputValue)
+        if (fromInput && canAddDefinition(fromInput)) {
+          addNewWikidataOptionalProperty(fromInput)
+          return
+        }
+
+        const normalizedInput = inputValue.toLowerCase()
+        const byLabel = NEW_WIKIDATA_OPTIONAL_PROPERTY_DEFINITIONS.find((entry) => {
+          const localizedLabel = String(t(entry.labelKey) || '').trim().toLowerCase()
+          return localizedLabel === normalizedInput
+        })
+        if (byLabel && canAddDefinition(byLabel)) {
+          addNewWikidataOptionalProperty(byLabel)
+          return
+        }
+
+        const suggestions = onlyNonIdentifier
+          ? newWikidataPropertySuggestionsForProperties.value
+          : newWikidataPropertySuggestions.value
+        if (suggestions.length === 1) {
+          addNewWikidataOptionalProperty(suggestions[0])
+        }
+      }
+
+      function selectNewWikidataPropertySuggestion(option) {
+        addNewWikidataOptionalProperty(option)
+      }
+
+      function hideNewWikidataPropertySuggestionsSoon() {
+        hideSuggestionsSoon(newWikidataPropertySuggestions)
+      }
+
       function coordinatePickerFields() {
         if (coordinatePickerTarget.value === 'new-wikidata') {
           return {
@@ -5509,6 +6136,25 @@ LIMIT {{limit}}`,
           draftCommonsSuggestions.value = []
         } finally {
           draftCommonsLoading.value = false
+        }
+      }, 250)
+
+      const searchNewWikidataPropertySuggestionsDebounced = debounce(async (searchTerm) => {
+        newWikidataPropertyLoading.value = true
+        try {
+          const items = await searchSupportedNewWikidataProperties(
+            searchTerm,
+            locale.value,
+            AUTOCOMPLETE_RESULT_LIMIT,
+          )
+          const filtered = Array.isArray(items)
+            ? items.filter((item) => !newWikidataOptionalPropertySet.value.has(item.key))
+            : []
+          newWikidataPropertySuggestions.value = filtered
+        } catch (error) {
+          newWikidataPropertySuggestions.value = []
+        } finally {
+          newWikidataPropertyLoading.value = false
         }
       }, 250)
 
@@ -6211,6 +6857,12 @@ LIMIT {{limit}}`,
         newWikidataOfficialClosureDateSourceUrl.value = ''
         newWikidataRouteInstructionP2795.value = ''
         newWikidataRouteInstructionLanguageP2795.value = defaultWikidataTextLanguage()
+        newWikidataOptionalPropertyKeys.value = []
+        newWikidataCustomPropertyDefinitions.value = {}
+        newWikidataCustomPropertyValues.value = {}
+        newWikidataPropertySearch.value = ''
+        newWikidataPropertySuggestions.value = []
+        newWikidataPropertyLoading.value = false
       }
 
       function chooseCreateWizardMode(mode) {
@@ -6640,6 +7292,10 @@ LIMIT {{limit}}`,
           if (!validateNewWikidataPropertiesStep()) {
             return
           }
+          newWikidataWizardStep.value = 'identifiers'
+          return
+        }
+        if (newWikidataWizardStep.value === 'identifiers') {
           newWikidataWizardStep.value = 'source'
         }
       }
@@ -6650,6 +7306,10 @@ LIMIT {{limit}}`,
         }
         wizardError.value = ''
         if (newWikidataWizardStep.value === 'source') {
+          newWikidataWizardStep.value = 'identifiers'
+          return
+        }
+        if (newWikidataWizardStep.value === 'identifiers') {
           newWikidataWizardStep.value = 'properties'
           return
         }
@@ -7406,7 +8066,7 @@ LIMIT {{limit}}`,
 
       async function submitExistingWikidataSelection() {
         wizardError.value = ''
-        if (authEnabled.value && !authAuthenticated.value) {
+        if (!authAuthenticated.value) {
           wizardError.value = t('authRequiredForWikidataWrites')
           return
         }
@@ -7478,7 +8138,7 @@ LIMIT {{limit}}`,
 
       async function submitNewWikidataItem() {
         wizardError.value = ''
-        if (authEnabled.value && !authAuthenticated.value) {
+        if (!authAuthenticated.value) {
           wizardError.value = t('authRequiredForWikidataWrites')
           return
         }
@@ -7495,11 +8155,19 @@ LIMIT {{limit}}`,
           || Object.keys(labels)[0]
           || defaultWikidataTextLanguage()
 
-        const partOfQids = collectWikidataSelectionQids(
-          newWikidataPartOfP361Values.value,
-          newWikidataPartOfP361.value,
-          newWikidataPartOfSearch.value,
-        )
+        const includePartOf = isNewWikidataPropertyEnabled('part_of_p361')
+        const includeArchitect = isNewWikidataPropertyEnabled('architect_p84')
+        const includeInception = isNewWikidataPropertyEnabled('inception_p571')
+        const includeHeritage = isNewWikidataPropertyEnabled('heritage_designation_p1435')
+        const includeCommonsCategory = isNewWikidataPropertyEnabled('commons_category_p373')
+
+        const partOfQids = includePartOf
+          ? collectWikidataSelectionQids(
+            newWikidataPartOfP361Values.value,
+            newWikidataPartOfP361.value,
+            newWikidataPartOfSearch.value,
+          )
+          : []
         const instanceQids = collectWikidataSelectionQids(
           newWikidataInstanceOfValues.value,
           newWikidataInstanceOf.value,
@@ -7508,17 +8176,26 @@ LIMIT {{limit}}`,
         const countryQid = resolveWizardQid(newWikidataCountryP17.value, newWikidataCountrySearch.value)
         const municipalityQid = resolveWizardQid(newWikidataMunicipalityP131.value, newWikidataMunicipalitySearch.value)
         const locationQid = resolveWizardQid(newWikidataLocationP276.value, newWikidataLocationSearch.value)
-        const architectQids = collectWikidataSelectionQids(
-          newWikidataArchitectP84Values.value,
-          newWikidataArchitectP84.value,
-          newWikidataArchitectSearch.value,
-        )
-        const inceptionValue = String(newWikidataInceptionP571.value || '').trim()
-        const heritageQids = collectWikidataSelectionQids(
-          newWikidataHeritageP1435Values.value,
-          newWikidataHeritageP1435.value,
-          newWikidataHeritageSearch.value,
-        )
+        const architectQids = includeArchitect
+          ? collectWikidataSelectionQids(
+            newWikidataArchitectP84Values.value,
+            newWikidataArchitectP84.value,
+            newWikidataArchitectSearch.value,
+          )
+          : []
+        const inceptionValue = includeInception
+          ? String(newWikidataInceptionP571.value || '').trim()
+          : ''
+        const heritageQids = includeHeritage
+          ? collectWikidataSelectionQids(
+            newWikidataHeritageP1435Values.value,
+            newWikidataHeritageP1435.value,
+            newWikidataHeritageSearch.value,
+          )
+          : []
+        const commonsCategoryValue = includeCommonsCategory
+          ? newWikidataCommonsCategoryP373.value.trim()
+          : ''
         const normalizedAddressLanguage = normalizeLanguageCode(newWikidataAddressTextLanguageP6375.value)
         const addressLanguage = wikidataLanguageCodePattern.test(normalizedAddressLanguage)
           ? normalizedAddressLanguage
@@ -7536,6 +8213,19 @@ LIMIT {{limit}}`,
           wizardExistingSourceLanguageOfWorkP407.value,
           wizardExistingSourceLanguageOfWorkSearch.value,
         )
+        const customProperties = newWikidataCustomPropertyOptions.value
+          .map((property) => {
+            const rawValue = String(newWikidataCustomPropertyValues.value[property.key] || '').trim()
+            if (!rawValue) {
+              return null
+            }
+            return {
+              property_id: property.propertyId,
+              value: rawValue,
+              datatype: String(property.datatype || '').trim().toLowerCase(),
+            }
+          })
+          .filter(Boolean)
 
         if (instanceQids.length === 0) {
           wizardError.value = t('locationTypeRequired')
@@ -7608,7 +8298,8 @@ LIMIT {{limit}}`,
           heritage_source_url: heritageQids.length > 0 ? sourceUrl : '',
           address_text_p6375: newWikidataAddressTextP6375.value.trim(),
           address_text_language_p6375: addressLanguage,
-          commons_category_p373: newWikidataCommonsCategoryP373.value.trim(),
+          commons_category_p373: commonsCategoryValue,
+          custom_properties: customProperties,
           source_url: sourceUrl,
           source_title: String(wizardExistingSourceTitle.value || '').trim(),
           source_title_language: String(wizardExistingSourceTitleLanguage.value || '').trim(),
@@ -7909,7 +8600,7 @@ LIMIT {{limit}}`,
         if (isWizardChoiceStep.value || isCreateActionBusy.value) {
           return
         }
-        if (!isEditMode.value && !canCreateLocation.value) {
+        if (!canCreateLocation.value) {
           const message = t('authRequiredForLocationWrites')
           if (isWizardExistingMode.value || isWizardNewMode.value) {
             wizardError.value = message
@@ -7934,7 +8625,7 @@ LIMIT {{limit}}`,
       }
 
       async function submitLocationDraft() {
-        if (!isEditMode.value && !canCreateLocation.value) {
+        if (!canCreateLocation.value) {
           draftError.value = t('authRequiredForLocationWrites')
           return
         }
@@ -8101,6 +8792,9 @@ LIMIT {{limit}}`,
           if (qid) {
             wikidataLookupDebounced(qid)
           }
+          for (const propertyKey of Object.keys(newWikidataCustomPropertyDefinitions.value)) {
+            hydrateNewWikidataCustomPropertyMetadata(propertyKey)
+          }
         }
       )
       watch(
@@ -8128,6 +8822,7 @@ LIMIT {{limit}}`,
         authEnabled,
         authAuthenticated,
         authUsername,
+        authLoginUrl,
         authStatusLoading,
         showCradleGuideDialog,
         showCradleGuideButton,
@@ -8148,6 +8843,7 @@ LIMIT {{limit}}`,
         isWizardNewBasicStep,
         isWizardNewLocationStep,
         isWizardNewPropertiesStep,
+        isWizardNewIdentifiersStep,
         isWizardNewSourceStep,
         showLocalDraftForm,
         canCreateLocation,
@@ -8250,6 +8946,15 @@ LIMIT {{limit}}`,
         newWikidataInstanceSearch,
         newWikidataInstanceSuggestions,
         newWikidataInstanceLoading,
+        newWikidataPropertySearch,
+        newWikidataPropertySuggestions,
+        newWikidataPropertyLoading,
+        newWikidataQuickPropertyOptions,
+        newWikidataQuickIdentifierPropertyOptions,
+        newWikidataCustomPropertyOptions,
+        newWikidataNonIdentifierCustomPropertyOptions,
+        newWikidataIdentifierCustomPropertyOptions,
+        newWikidataPropertySuggestionsForProperties,
         newWikidataCountrySearch,
         newWikidataCountrySuggestions,
         newWikidataCountryLoading,
@@ -8353,6 +9058,18 @@ LIMIT {{limit}}`,
         selectNewWikidataInstance,
         removeNewWikidataInstance,
         hideNewWikidataInstanceSuggestionsSoon,
+        newWikidataP31Label,
+        newWikidataOptionalPropertyLabel,
+        newWikidataPropertySuggestionLabel,
+        isNewWikidataPropertyEnabled,
+        newWikidataCustomPropertyValue,
+        setNewWikidataCustomPropertyValue,
+        onNewWikidataPropertyInput,
+        addNewWikidataPropertyFromInput,
+        selectNewWikidataPropertySuggestion,
+        hideNewWikidataPropertySuggestionsSoon,
+        addNewWikidataOptionalProperty,
+        removeNewWikidataOptionalProperty,
         onNewWikidataCountryInput,
         selectNewWikidataCountry,
         hideNewWikidataCountrySuggestionsSoon,
@@ -8435,7 +9152,7 @@ LIMIT {{limit}}`,
               {{ t('addLocationWithCradle') }}
             </button>
             <button
-              v-if="authEnabled && !authAuthenticated"
+              v-if="authEnabled && !authAuthenticated && authLoginUrl !== '#'"
               type="button"
               class="secondary-btn"
               :disabled="authStatusLoading"
@@ -8647,7 +9364,7 @@ LIMIT {{limit}}`,
 
               <template v-else-if="isWizardNewMode">
                 <div v-if="isWizardNewBasicStep" class="wizard-section">
-                  <h3>{{ t('basicInformation') }} (1/4)</h3>
+                  <h3>{{ t('basicInformation') }} (1/5)</h3>
                   <p class="dialog-help">{{ t('newWikidataPrimaryLanguageHelp') }}</p>
                   <div class="wizard-section">
                     <label class="form-field">
@@ -8738,7 +9455,7 @@ LIMIT {{limit}}`,
                   </div>
                 </div>
                 <div v-else-if="isWizardNewLocationStep" class="wizard-section">
-                  <h3>{{ t('locationAndCoordinates') }} (2/4)</h3>
+                  <h3>{{ t('locationAndCoordinates') }} (2/5)</h3>
                   <div class="form-row single-action">
                     <button type="button" class="secondary-btn" @click="openCoordinatePickerDialog('new-wikidata')">
                       {{ t('pickCoordinates') }}
@@ -8833,9 +9550,9 @@ LIMIT {{limit}}`,
                   </div>
                 </div>
                 <div v-else-if="isWizardNewPropertiesStep" class="wizard-section">
-                  <h3>{{ t('keyPropertiesWithSources') }} (3/4)</h3>
+                  <h3>{{ t('keyPropertiesWithSources') }} (3/5)</h3>
                   <label class="form-field">
-                    <span>{{ t('instanceOfP31') }}</span>
+                    <span>{{ newWikidataP31Label() }}</span>
                     <ul v-if="newWikidataInstanceOfValues.length > 0" class="category-chip-list">
                       <li v-for="(item, index) in newWikidataInstanceOfValues" :key="item.uid || ('instance-p31-' + item.id + '-' + index)" class="category-chip">
                         <span>{{ wikidataSelectionChipLabel(item) }}</span>
@@ -8882,8 +9599,8 @@ LIMIT {{limit}}`,
                     </ul>
                     <p v-if="newWikidataInstanceLoading" class="dialog-help">{{ t('searching') }}</p>
                   </label>
-                  <label class="form-field">
-                    <span>{{ t('partOfP361') }}</span>
+                  <label v-if="isNewWikidataPropertyEnabled('part_of_p361')" class="form-field">
+                    <span>{{ newWikidataOptionalPropertyLabel('part_of_p361') }}</span>
                     <ul v-if="newWikidataPartOfP361Values.length > 0" class="category-chip-list">
                       <li v-for="(item, index) in newWikidataPartOfP361Values" :key="item.uid || ('part-of-p361-' + item.id + '-' + index)" class="category-chip">
                         <span>{{ wikidataSelectionChipLabel(item) }}</span>
@@ -8930,8 +9647,8 @@ LIMIT {{limit}}`,
                     </ul>
                     <p v-if="newWikidataPartOfLoading" class="dialog-help">{{ t('searching') }}</p>
                   </label>
-                  <label class="form-field">
-                    <span>{{ t('architectP84') }}</span>
+                  <label v-if="isNewWikidataPropertyEnabled('architect_p84')" class="form-field">
+                    <span>{{ newWikidataOptionalPropertyLabel('architect_p84') }}</span>
                     <ul v-if="newWikidataArchitectP84Values.length > 0" class="category-chip-list">
                       <li v-for="(item, index) in newWikidataArchitectP84Values" :key="item.uid || ('architect-p84-' + item.id + '-' + index)" class="category-chip">
                         <span>{{ wikidataSelectionChipLabel(item) }}</span>
@@ -8978,8 +9695,8 @@ LIMIT {{limit}}`,
                     </ul>
                     <p v-if="newWikidataArchitectLoading" class="dialog-help">{{ t('searching') }}</p>
                   </label>
-                  <label class="form-field">
-                    <span>{{ t('inceptionP571') }}</span>
+                  <label v-if="isNewWikidataPropertyEnabled('inception_p571')" class="form-field">
+                    <span>{{ newWikidataOptionalPropertyLabel('inception_p571') }}</span>
                     <input
                       v-model="newWikidataInceptionP571"
                       type="text"
@@ -8987,8 +9704,8 @@ LIMIT {{limit}}`,
                       :placeholder="t('sourcePublicationDatePlaceholder')"
                     />
                   </label>
-                  <label class="form-field">
-                    <span>{{ t('heritageDesignationP1435') }}</span>
+                  <label v-if="isNewWikidataPropertyEnabled('heritage_designation_p1435')" class="form-field">
+                    <span>{{ newWikidataOptionalPropertyLabel('heritage_designation_p1435') }}</span>
                     <ul v-if="newWikidataHeritageP1435Values.length > 0" class="category-chip-list">
                       <li v-for="(item, index) in newWikidataHeritageP1435Values" :key="item.uid || ('heritage-p1435-' + item.id + '-' + index)" class="category-chip">
                         <span>{{ wikidataSelectionChipLabel(item) }}</span>
@@ -9035,8 +9752,8 @@ LIMIT {{limit}}`,
                     </ul>
                     <p v-if="newWikidataHeritageLoading" class="dialog-help">{{ t('searching') }}</p>
                   </label>
-                  <label class="form-field">
-                    <span>{{ t('commonsCategory') }}</span>
+                  <label v-if="isNewWikidataPropertyEnabled('commons_category_p373')" class="form-field">
+                    <span>{{ newWikidataOptionalPropertyLabel('commons_category_p373') }}</span>
                     <input
                       v-model="newWikidataCommonsSearch"
                       type="text"
@@ -9053,9 +9770,150 @@ LIMIT {{limit}}`,
                     </ul>
                     <p v-if="newWikidataCommonsLoading" class="dialog-help">{{ t('searching') }}</p>
                   </label>
+                  <label
+                    v-for="property in newWikidataNonIdentifierCustomPropertyOptions"
+                    :key="'new-wikidata-custom-property-' + property.key"
+                    class="form-field"
+                  >
+                    <span>{{ newWikidataOptionalPropertyLabel(property) }}</span>
+                    <input
+                      :value="newWikidataCustomPropertyValue(property.key)"
+                      type="text"
+                      :placeholder="t('propertyValuePlaceholder')"
+                      @input="setNewWikidataCustomPropertyValue(property.key, $event.target.value)"
+                    />
+                  </label>
+                  <section class="wizard-section">
+                    <div class="form-field">
+                      <span>{{ t('addProperty') }}</span>
+                      <div class="save-image-category-entry">
+                        <input
+                          v-model="newWikidataPropertySearch"
+                          type="text"
+                          :placeholder="t('propertySearchPlaceholder')"
+                          @input="onNewWikidataPropertyInput"
+                          @blur="hideNewWikidataPropertySuggestionsSoon"
+                          @keydown.enter.prevent="addNewWikidataPropertyFromInput(true)"
+                        />
+                        <button
+                          type="button"
+                          class="secondary-btn"
+                          :disabled="!newWikidataPropertySearch.trim()"
+                          @click.stop="addNewWikidataPropertyFromInput(true)"
+                        >
+                          {{ t('addCategory') }}
+                        </button>
+                      </div>
+                      <ul v-if="newWikidataPropertySuggestionsForProperties.length > 0" class="autocomplete-list">
+                        <li v-for="item in newWikidataPropertySuggestionsForProperties" :key="'new-property-' + item.key">
+                          <button
+                            type="button"
+                            class="autocomplete-option"
+                            @mousedown.prevent.stop="selectNewWikidataPropertySuggestion(item)"
+                            @click.prevent.stop
+                          >
+                            {{ newWikidataPropertySuggestionLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="newWikidataPropertyLoading" class="dialog-help">{{ t('searching') }}</p>
+                      <p
+                        v-else-if="newWikidataPropertySearch.trim() && !newWikidataPropertyLoading && newWikidataPropertySuggestionsForProperties.length === 0"
+                        class="autocomplete-empty"
+                      >
+                        {{ t('autocompleteNoMatches') }}
+                      </p>
+                    </div>
+                    <div v-if="newWikidataQuickPropertyOptions.length > 0" class="save-image-subcategory-suggestions">
+                      <p class="dialog-help">{{ t('propertyQuickPicks') }}</p>
+                      <ul class="category-chip-list">
+                        <li v-for="item in newWikidataQuickPropertyOptions" :key="'new-property-quick-' + item.key">
+                          <button
+                            type="button"
+                            class="subcategory-suggestion-btn"
+                            @click="addNewWikidataOptionalProperty(item)"
+                          >
+                            + {{ newWikidataOptionalPropertyLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                    </div>
+                  </section>
+                </div>
+                <div v-else-if="isWizardNewIdentifiersStep" class="wizard-section">
+                  <h3>{{ t('registerIds') }} (4/5)</h3>
+                  <label
+                    v-for="property in newWikidataIdentifierCustomPropertyOptions"
+                    :key="'new-wikidata-identifier-property-' + property.key"
+                    class="form-field"
+                  >
+                    <span>{{ newWikidataOptionalPropertyLabel(property) }}</span>
+                    <input
+                      :value="newWikidataCustomPropertyValue(property.key)"
+                      type="text"
+                      :placeholder="t('propertyValuePlaceholder')"
+                      @input="setNewWikidataCustomPropertyValue(property.key, $event.target.value)"
+                    />
+                  </label>
+                  <section class="wizard-section">
+                    <div class="form-field">
+                      <span>{{ t('addProperty') }}</span>
+                      <div class="save-image-category-entry">
+                        <input
+                          v-model="newWikidataPropertySearch"
+                          type="text"
+                          :placeholder="t('propertySearchPlaceholder')"
+                          @input="onNewWikidataPropertyInput"
+                          @blur="hideNewWikidataPropertySuggestionsSoon"
+                          @keydown.enter.prevent="addNewWikidataPropertyFromInput"
+                        />
+                        <button
+                          type="button"
+                          class="secondary-btn"
+                          :disabled="!newWikidataPropertySearch.trim()"
+                          @click.stop="addNewWikidataPropertyFromInput"
+                        >
+                          {{ t('addCategory') }}
+                        </button>
+                      </div>
+                      <ul v-if="newWikidataPropertySuggestions.length > 0" class="autocomplete-list">
+                        <li v-for="item in newWikidataPropertySuggestions" :key="'new-identifier-property-' + item.key">
+                          <button
+                            type="button"
+                            class="autocomplete-option"
+                            @mousedown.prevent.stop="selectNewWikidataPropertySuggestion(item)"
+                            @click.prevent.stop
+                          >
+                            {{ newWikidataPropertySuggestionLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-if="newWikidataPropertyLoading" class="dialog-help">{{ t('searching') }}</p>
+                      <p
+                        v-else-if="newWikidataPropertySearch.trim() && !newWikidataPropertyLoading && newWikidataPropertySuggestions.length === 0"
+                        class="autocomplete-empty"
+                      >
+                        {{ t('autocompleteNoMatches') }}
+                      </p>
+                    </div>
+                    <div v-if="newWikidataQuickIdentifierPropertyOptions.length > 0" class="save-image-subcategory-suggestions">
+                      <p class="dialog-help">{{ t('propertyQuickPicks') }}</p>
+                      <ul class="category-chip-list">
+                        <li v-for="item in newWikidataQuickIdentifierPropertyOptions" :key="'new-identifier-property-quick-' + item.key">
+                          <button
+                            type="button"
+                            class="subcategory-suggestion-btn"
+                            @click="addNewWikidataOptionalProperty(item)"
+                          >
+                            + {{ newWikidataOptionalPropertyLabel(item) }}
+                          </button>
+                        </li>
+                      </ul>
+                    </div>
+                  </section>
                 </div>
                 <div v-else-if="isWizardNewSourceStep" class="wizard-section">
-                  <h3>{{ t('sourcesSectionTitle') }} (4/4)</h3>
+                  <h3>{{ t('sourcesSectionTitle') }} (5/5)</h3>
                   <p class="dialog-help">{{ t('newWikidataSourceHelp') }}</p>
                   <label class="form-field">
                     <span>{{ t('sourceUrl') }}</span>
