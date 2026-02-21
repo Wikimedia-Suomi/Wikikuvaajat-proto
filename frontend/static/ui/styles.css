@@ -1099,18 +1099,84 @@ textarea:focus-visible {
   position: relative;
 }
 
+.save-image-map-shell {
+  position: relative;
+}
+
+.save-image-map-center-toggle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  z-index: 560;
+}
+
+.save-image-map-center-toggle:hover {
+  background: rgba(2, 132, 199, 0.1);
+}
+
+.save-image-map-center-toggle:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+}
+
+.save-image-map-mode-controls {
+  position: absolute;
+  top: 0.62rem;
+  right: 0.62rem;
+  z-index: 560;
+  display: flex;
+  gap: 0.32rem;
+  padding: 0.3rem;
+  border-radius: 999px;
+  background: rgba(248, 252, 255, 0.92);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+}
+
+.save-image-map-mode-btn {
+  border: 1px solid #9dc4da;
+  background: #ffffff;
+  color: #0f3f58;
+  border-radius: 999px;
+  padding: 0.28rem 0.58rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.save-image-map-mode-btn.active {
+  border-color: #0369a1;
+  background: linear-gradient(180deg, #eaf7ff 0%, #dff1fc 100%);
+  color: #082f49;
+  box-shadow: 0 0 0 2px rgba(3, 105, 161, 0.16);
+}
+
+.save-image-map-mode-btn:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 1px;
+}
+
 .picker-map-camera-center::before {
   content: '';
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 14px;
-  height: 14px;
+  width: 24px;
+  height: 24px;
   transform: translate(-50%, -50%);
   border-radius: 999px;
-  border: 2px solid #0f172a;
-  background: #ffffff;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.3);
+  border: 2px solid #0284c7;
+  background:
+    radial-gradient(circle at center, #0284c7 0 3px, #ffffff 3px 5px, transparent 5px),
+    rgba(2, 132, 199, 0.08);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.72), 0 2px 6px rgba(15, 23, 42, 0.22);
   pointer-events: none;
   z-index: 450;
 }
@@ -1120,13 +1186,13 @@ textarea:focus-visible {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 26px;
-  height: 26px;
-  background: #0f172a;
-  clip-path: polygon(50% 0%, 100% 100%, 50% 72%, 0% 100%);
-  transform: translate(-50%, -74%) rotate(var(--save-image-camera-heading, 0deg));
-  transform-origin: 50% 75%;
-  filter: drop-shadow(0 2px 5px rgba(15, 23, 42, 0.35));
+  width: 22.78125px;
+  height: 18.225px;
+  background: #0284c7;
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  transform: translate(-50%, -50%) rotate(var(--save-image-camera-heading, 0deg)) translateY(-18px);
+  transform-origin: 50% 50%;
+  filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.3));
   pointer-events: none;
   z-index: 451;
 }
@@ -1223,22 +1289,6 @@ textarea:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 0.55rem;
-}
-
-.save-image-coordinate-mode {
-  display: grid;
-  gap: 0.4rem;
-}
-
-.save-image-heading-entry {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.55rem;
-  align-items: center;
-}
-
-.save-image-heading-entry .secondary-btn {
-  white-space: nowrap;
 }
 
 .subcategory-suggestion-btn {
@@ -1375,10 +1425,6 @@ textarea:focus-visible {
   }
 
   .save-image-category-entry {
-    grid-template-columns: 1fr;
-  }
-
-  .save-image-heading-entry {
     grid-template-columns: 1fr;
   }
 

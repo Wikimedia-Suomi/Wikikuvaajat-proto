@@ -2333,6 +2333,9 @@ LIMIT ${queryResultLimit}
       saveImageCoordinateModeLabel: 'Coordinate picking mode',
       saveImageCoordinateModePhotographer: 'Photographer location + direction (recommended)',
       saveImageCoordinateModeImage: 'Image location only (raw location)',
+      saveImageMapModePhotographerShort: 'Photographer + direction',
+      saveImageMapModeImageShort: 'Point only',
+      saveImageMapToggleCoordinateMode: 'Toggle coordinate mode',
       saveImageMapPickHelpPhotographerStart: 'Move the map so the center camera icon is at photographer location, then click map to set direction.',
       saveImageMapPickHelpPhotographerTarget: 'Click map to update direction. Moving the map keeps heading unchanged.',
       saveImageMapPickHelpImage: 'Move the map so the center point is at image location.',
@@ -2634,6 +2637,9 @@ LIMIT ${queryResultLimit}
       saveImageCoordinateModeLabel: 'Läge för koordinatval',
       saveImageCoordinateModePhotographer: 'Fotografens plats + riktning (rekommenderat)',
       saveImageCoordinateModeImage: 'Endast bildens plats (rå position)',
+      saveImageMapModePhotographerShort: 'Fotograf + riktning',
+      saveImageMapModeImageShort: 'Endast bild',
+      saveImageMapToggleCoordinateMode: 'Växla koordinatläge',
       saveImageMapPickHelpPhotographerStart: 'Flytta kartan så att kameraikonen i mitten är vid fotografens plats, klicka sedan på kartan för att ange riktning.',
       saveImageMapPickHelpPhotographerTarget: 'Klicka på kartan för att uppdatera riktning. Att flytta kartan behåller samma riktning.',
       saveImageMapPickHelpImage: 'Flytta kartan så att mittpunkten är vid bildens plats.',
@@ -2935,6 +2941,9 @@ LIMIT ${queryResultLimit}
       saveImageCoordinateModeLabel: 'Koordinaattien poimintatapa',
       saveImageCoordinateModePhotographer: 'Kuvaajan sijainti + suunta (suositus)',
       saveImageCoordinateModeImage: 'Vain kuvan sijainti (raakatieto)',
+      saveImageMapModePhotographerShort: 'Kuvaaja + suunta',
+      saveImageMapModeImageShort: 'Vain kuva',
+      saveImageMapToggleCoordinateMode: 'Vaihda koordinaattitapaa',
       saveImageMapPickHelpPhotographerStart: 'Liikuta karttaa niin, että keskellä oleva kameraikoni on kuvaajan sijainnissa, ja klikkaa sitten karttaa suunnan asettamiseksi.',
       saveImageMapPickHelpPhotographerTarget: 'Klikkaa karttaa suunnan päivittämiseksi. Kartan liikuttaminen säilyttää suunnan samana.',
       saveImageMapPickHelpImage: 'Liikuta karttaa niin, että keskipiste on kuvan sijainnissa.',
@@ -4506,6 +4515,13 @@ LIMIT {{limit}}`,
         }
         return t('saveImageMapPickHelpPhotographerTarget')
       })
+      const saveImageHeadingDisplay = computed(() => {
+        const heading = normalizeHeadingDegrees(saveImageHeading.value)
+        if (heading === null) {
+          return t('noValue')
+        }
+        return `${heading.toFixed(1).replace(/\.0$/, '')}\u00b0`
+      })
 
       function isSaveImageBroaderCategoryConflict(categoryName) {
         const normalizedCategory = _normalizeUploadCategory(categoryName)
@@ -4931,7 +4947,7 @@ LIMIT {{limit}}`,
         return normalizeHeadingDegrees(saveImageHeading.value)
       }
 
-      function _headingLineTargetPointForCurrentMapView(latitude, longitude, headingDegrees) {
+      function _headingLinePointsForCurrentMapView(latitude, longitude, headingDegrees) {
         if (!saveImageMapInstance) {
           return null
         }
@@ -4956,6 +4972,16 @@ LIMIT {{limit}}`,
           return null
         }
 
+        const cameraCircleRadiusPx = 12
+        const lineStartContainerPoint = L.point(
+          centerContainerPoint.x + directionX * cameraCircleRadiusPx,
+          centerContainerPoint.y + directionY * cameraCircleRadiusPx,
+        )
+        const lineStartLatLng = saveImageMapInstance.containerPointToLatLng(lineStartContainerPoint)
+        if (!lineStartLatLng) {
+          return null
+        }
+
         const edgeDistances = []
         if (directionX > epsilon) {
           edgeDistances.push((mapSize.x - centerContainerPoint.x) / directionX)
@@ -4974,17 +5000,19 @@ LIMIT {{limit}}`,
         const distanceToEdgePx = Math.min(...positiveEdgeDistances)
         const extensionPx = Math.max(48, Math.min(mapSize.x, mapSize.y) * 0.12)
         const lineLengthPx = distanceToEdgePx + extensionPx
-        const targetContainerPoint = L.point(
+        const lineTargetContainerPoint = L.point(
           centerContainerPoint.x + directionX * lineLengthPx,
           centerContainerPoint.y + directionY * lineLengthPx,
         )
-        const targetLatLng = saveImageMapInstance.containerPointToLatLng(targetContainerPoint)
-        if (!targetLatLng) {
+        const lineTargetLatLng = saveImageMapInstance.containerPointToLatLng(lineTargetContainerPoint)
+        if (!lineTargetLatLng) {
           return null
         }
         return {
-          latitude: Number(targetLatLng.lat),
-          longitude: Number(targetLatLng.lng),
+          fromLatitude: Number(lineStartLatLng.lat),
+          fromLongitude: Number(lineStartLatLng.lng),
+          toLatitude: Number(lineTargetLatLng.lat),
+          toLongitude: Number(lineTargetLatLng.lng),
         }
       }
 
@@ -5004,18 +5032,18 @@ LIMIT {{limit}}`,
           return
         }
 
-        const fromPoint = [latitude, longitude]
         let heading = _currentSaveImageHeadingDegrees()
         if (heading === null) {
           _clearSaveImageHeadingMapVisuals()
           return
         }
-        const targetPoint = _headingLineTargetPointForCurrentMapView(latitude, longitude, heading)
-        if (!targetPoint) {
+        const headingLinePoints = _headingLinePointsForCurrentMapView(latitude, longitude, heading)
+        if (!headingLinePoints) {
           _clearSaveImageHeadingMapVisuals()
           return
         }
-        const toPoint = [targetPoint.latitude, targetPoint.longitude]
+        const fromPoint = [headingLinePoints.fromLatitude, headingLinePoints.fromLongitude]
+        const toPoint = [headingLinePoints.toLatitude, headingLinePoints.toLongitude]
         _setSaveImageCameraHeadingCssVariable(heading)
 
         if (!saveImageMapHeadingLine) {
@@ -5039,23 +5067,6 @@ LIMIT {{limit}}`,
         }
         _setSaveImageHeadingValue(normalizedHeading)
         _updateSaveImageHeadingMapVisuals()
-      }
-
-      function onSaveImageHeadingInput() {
-        if (!String(saveImageHeading.value || '').trim()) {
-          _clearSaveImageHeadingMapVisuals()
-          return
-        }
-        _updateSaveImageHeadingMapVisuals()
-      }
-
-      function onSaveImageHeadingBlur() {
-        _setSaveImageHeading(saveImageHeading.value)
-      }
-
-      function clearSaveImageHeading() {
-        saveImageHeading.value = ''
-        _clearSaveImageHeadingMapVisuals()
       }
 
       function _setSaveImageHeadingFromMapClick(latitude, longitude) {
@@ -5134,11 +5145,28 @@ LIMIT {{limit}}`,
         if (showSaveImageApiForm.value) {
           _syncSaveImageCoordinatesFromMapCenter()
         }
-        if (normalizedMode === 'image') {
-          clearSaveImageHeading()
-          return
+        if (normalizedMode === 'photographer') {
+          _updateSaveImageHeadingMapVisuals()
         }
-        _updateSaveImageHeadingMapVisuals()
+      }
+
+      function setSaveImageApiCoordinateMode(mode) {
+        const normalizedMode = mode === 'image' ? 'image' : 'photographer'
+        if (saveImageApiCoordinateMode.value !== normalizedMode) {
+          saveImageApiCoordinateMode.value = normalizedMode
+        }
+        onSaveImageApiCoordinateModeChange()
+      }
+
+      function onSaveImageMapCenterIconClick(event) {
+        if (event && typeof event.preventDefault === 'function') {
+          event.preventDefault()
+        }
+        if (event && typeof event.stopPropagation === 'function') {
+          event.stopPropagation()
+        }
+        const nextMode = saveImageApiUsesPhotographerCoordinates.value ? 'image' : 'photographer'
+        setSaveImageApiCoordinateMode(nextMode)
       }
 
       function resetSaveImageCoordinatesToExif() {
@@ -6289,9 +6317,13 @@ LIMIT {{limit}}`,
           const exifHeading = normalizeHeadingDegrees(exifMetadata.heading)
           if (exifHeading !== null) {
             saveImageExifHeading.value = exifHeading
-            if (saveImageApiUsesPhotographerCoordinates.value && !String(saveImageHeading.value || '').trim()) {
-              _setSaveImageHeading(exifHeading)
+            if (saveImageApiCoordinateMode.value !== 'photographer') {
+              saveImageApiCoordinateMode.value = 'photographer'
+              if (showSaveImageApiForm.value) {
+                _syncSaveImageCoordinatesFromMapCenter()
+              }
             }
+            _setSaveImageHeading(exifHeading)
           }
 
           const exifElevation = Number(exifMetadata.altitude)
@@ -7571,6 +7603,7 @@ LIMIT {{limit}}`,
         saveImageApiCoordinateMode,
         saveImageApiUsesPhotographerCoordinates,
         saveImageMapPickHelpText,
+        saveImageHeadingDisplay,
         saveImageCaption,
         saveImageFileInputElement,
         saveImageSelectedFileName,
@@ -7622,11 +7655,10 @@ LIMIT {{limit}}`,
         closeSaveImageApiForm,
         onSaveImageOwnPhotoChange,
         onSaveImageApiCoordinateModeChange,
+        setSaveImageApiCoordinateMode,
+        onSaveImageMapCenterIconClick,
         onSaveImageApiTargetFilenameInput,
         onSaveImageApiTargetFilenameBlur,
-        onSaveImageHeadingInput,
-        onSaveImageHeadingBlur,
-        clearSaveImageHeading,
         resetSaveImageCoordinatesToExif,
         resetSaveImageCoordinatesToWikidata,
         openCommonsUploadWizard,
@@ -8296,30 +8328,7 @@ LIMIT {{limit}}`,
 
                 <div class="wizard-section">
                   <h3>{{ t('saveImageWizardLocationStep') }}</h3>
-                  <div class="save-image-coordinate-mode">
-                    <p class="dialog-help"><strong>{{ t('saveImageCoordinateModeLabel') }}</strong></p>
-                    <div class="toggle-switch" role="radiogroup" :aria-label="t('saveImageCoordinateModeLabel')">
-                      <label class="toggle-option" :class="{ active: saveImageApiUsesPhotographerCoordinates }">
-                        <input
-                          v-model="saveImageApiCoordinateMode"
-                          type="radio"
-                          value="photographer"
-                          @change="onSaveImageApiCoordinateModeChange"
-                        />
-                        <span>{{ t('saveImageCoordinateModePhotographer') }}</span>
-                      </label>
-                      <label class="toggle-option" :class="{ active: !saveImageApiUsesPhotographerCoordinates }">
-                        <input
-                          v-model="saveImageApiCoordinateMode"
-                          type="radio"
-                          value="image"
-                          @change="onSaveImageApiCoordinateModeChange"
-                        />
-                        <span>{{ t('saveImageCoordinateModeImage') }}</span>
-                      </label>
-                    </div>
-                    <p class="dialog-help">{{ saveImageMapPickHelpText }}</p>
-                  </div>
+                  <p class="dialog-help">{{ saveImageMapPickHelpText }}</p>
                   <div
                     v-if="saveImageHasExifCoordinates || saveImageHasInitialWikidataCoordinates"
                     class="save-image-coordinate-reset-actions"
@@ -8345,42 +8354,52 @@ LIMIT {{limit}}`,
                       {{ t('saveImageResetToWikidataCoordinates') }}
                     </button>
                   </div>
-                  <div
-                    ref="saveImageMapElement"
-                    :class="[
-                      'map-canvas',
-                      'picker-map',
-                      saveImageApiUsesPhotographerCoordinates ? 'picker-map-camera-center' : 'picker-map-center-point',
-                    ]"
-                    aria-label="api upload coordinate picker map"
-                  ></div>
+                  <div class="save-image-map-shell">
+                    <div
+                      ref="saveImageMapElement"
+                      :class="[
+                        'map-canvas',
+                        'picker-map',
+                        saveImageApiUsesPhotographerCoordinates ? 'picker-map-camera-center' : 'picker-map-center-point',
+                      ]"
+                      aria-label="api upload coordinate picker map"
+                    ></div>
+                    <button
+                      type="button"
+                      class="save-image-map-center-toggle"
+                      :title="t('saveImageMapToggleCoordinateMode')"
+                      :aria-label="t('saveImageMapToggleCoordinateMode')"
+                      @click="onSaveImageMapCenterIconClick"
+                    ></button>
+                    <div class="save-image-map-mode-controls" role="group" :aria-label="t('saveImageCoordinateModeLabel')">
+                      <button
+                        type="button"
+                        class="save-image-map-mode-btn"
+                        :class="{ active: saveImageApiUsesPhotographerCoordinates }"
+                        :aria-pressed="saveImageApiUsesPhotographerCoordinates ? 'true' : 'false'"
+                        @click="setSaveImageApiCoordinateMode('photographer')"
+                      >
+                        {{ t('saveImageMapModePhotographerShort') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="save-image-map-mode-btn"
+                        :class="{ active: !saveImageApiUsesPhotographerCoordinates }"
+                        :aria-pressed="!saveImageApiUsesPhotographerCoordinates ? 'true' : 'false'"
+                        @click="setSaveImageApiCoordinateMode('image')"
+                      >
+                        {{ t('saveImageMapModeImageShort') }}
+                      </button>
+                    </div>
+                  </div>
                   <p class="dialog-help">
                     {{ t('coordinates') }}:
                     {{ displayValue(saveImageLatitude, t('noValue')) }},
                     {{ displayValue(saveImageLongitude, t('noValue')) }}
+                    <template v-if="saveImageApiUsesPhotographerCoordinates">
+                      | {{ t('saveImageHeading') }}: {{ saveImageHeadingDisplay }}
+                    </template>
                   </p>
-                  <p v-if="saveImageApiUsesPhotographerCoordinates" class="dialog-help"><strong>{{ t('saveImageHeading') }}</strong></p>
-                  <div v-if="saveImageApiUsesPhotographerCoordinates" class="save-image-heading-entry">
-                    <input
-                      v-model="saveImageHeading"
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="360"
-                      :placeholder="t('saveImageHeading')"
-                      @input="onSaveImageHeadingInput"
-                      @blur="onSaveImageHeadingBlur"
-                    />
-                    <button
-                      type="button"
-                      class="secondary-btn"
-                      :disabled="!saveImageHeading.trim()"
-                      @click="clearSaveImageHeading"
-                    >
-                      {{ t('saveImageHeadingClear') }}
-                    </button>
-                  </div>
-                  <p v-if="saveImageApiUsesPhotographerCoordinates" class="dialog-help">{{ t('saveImageHeadingHelp') }}</p>
                 </div>
 
                 <label class="form-field">
