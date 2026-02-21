@@ -322,6 +322,7 @@ textarea:focus-visible {
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
+  gap: 0.5rem;
   flex-shrink: 0;
 }
 
@@ -866,6 +867,12 @@ textarea:focus-visible {
   font-size: 0.84rem;
 }
 
+.category-chip.broader-category-conflict {
+  border-color: #f59e0b;
+  background: linear-gradient(180deg, #fff7e6 0%, #ffefcc 100%);
+  color: #7c2d12;
+}
+
 .category-chip-link {
   color: inherit;
   text-decoration: underline;
@@ -884,6 +891,12 @@ textarea:focus-visible {
 
 .category-chip-link.missing:hover {
   color: #991b1b;
+}
+
+.category-chip-link.broader-category-conflict-link,
+.category-chip-link.broader-category-conflict-link:visited {
+  color: inherit;
+  text-decoration-color: #b45309;
 }
 
 .chip-remove {
@@ -913,6 +926,14 @@ textarea:focus-visible {
   margin: 0;
   color: #475569;
   font-size: 0.9rem;
+}
+
+.dialog-help.warning {
+  color: #b45309;
+}
+
+.dialog-help.success {
+  color: #166534;
 }
 
 .value-compare {
@@ -1132,6 +1153,12 @@ textarea:focus-visible {
 .save-image-subcategory-suggestions {
   display: grid;
   gap: 0.35rem;
+}
+
+.save-image-coordinate-reset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
 .subcategory-suggestion-btn {

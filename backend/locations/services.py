@@ -3014,6 +3014,481 @@ def _wikidata_oauth_session(
     return session, csrf_token
 
 
+def _commons_csrf_token(session: requests.Session) -> str:
+    csrf_token_payload = _commons_api_get(
+        session,
+        {
+            'action': 'query',
+            'meta': 'tokens',
+            'type': 'csrf',
+            'format': 'json',
+        },
+    )
+    csrf_query = csrf_token_payload.get('query', {})
+    csrf_tokens = csrf_query.get('tokens', {}) if isinstance(csrf_query, dict) else {}
+    csrf_token = str(csrf_tokens.get('csrftoken') or '').strip()
+    if not csrf_token:
+        raise WikidataWriteError('Could not fetch Wikimedia Commons CSRF token.')
+    return csrf_token
+
+
+def _commons_api_get(session: requests.Session, params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        response = session.get(
+            _COMMONS_API_URL,
+            params=params,
+            timeout=_external_timeout_seconds(),
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise WikidataWriteError(f'Wikimedia Commons request failed: {exc}') from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        preview = response.text[:200].replace('\n', ' ').strip()
+        raise WikidataWriteError(f'Wikimedia Commons service did not return JSON. preview={preview!r}') from exc
+
+    if not isinstance(payload, dict):
+        raise WikidataWriteError('Wikimedia Commons service returned unexpected payload.')
+
+    error_payload = payload.get('error')
+    if isinstance(error_payload, dict):
+        code = str(error_payload.get('code') or '').strip() or 'unknown'
+        info = str(error_payload.get('info') or '').strip() or 'unknown error'
+        raise WikidataWriteError(f'Wikimedia Commons API error ({code}): {info}')
+
+    return payload
+
+
+def _commons_api_post(
+    session: requests.Session,
+    data: dict[str, Any],
+    files: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        response = session.post(
+            _COMMONS_API_URL,
+            data=data,
+            files=files,
+            timeout=_external_timeout_seconds(),
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise WikidataWriteError(f'Wikimedia Commons request failed: {exc}') from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        preview = response.text[:200].replace('\n', ' ').strip()
+        raise WikidataWriteError(f'Wikimedia Commons service did not return JSON. preview={preview!r}') from exc
+
+    if not isinstance(payload, dict):
+        raise WikidataWriteError('Wikimedia Commons service returned unexpected payload.')
+
+    error_payload = payload.get('error')
+    if isinstance(error_payload, dict):
+        code = str(error_payload.get('code') or '').strip() or 'unknown'
+        info = str(error_payload.get('info') or '').strip() or 'unknown error'
+        raise WikidataWriteError(f'Wikimedia Commons API error ({code}): {info}')
+
+    return payload
+
+
+def _commons_oauth_session(
+    oauth_token: str = '',
+    oauth_token_secret: str = '',
+) -> tuple[requests.Session, str]:
+    access_token = str(oauth_token or '').strip()
+    access_token_secret = str(oauth_token_secret or '').strip()
+    if not access_token and not access_token_secret and _local_dev_access_token_enabled():
+        access_token, access_token_secret = _wikidata_local_dev_access_token_credentials()
+    if not access_token or not access_token_secret:
+        raise WikidataWriteError(
+            'Wikimedia OAuth credentials are missing for this session. '
+            'Sign in with Wikimedia OAuth before uploading files, or configure '
+            'LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN and LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET in local development.'
+        )
+
+    if OAuth1 is None:
+        raise WikidataWriteError(
+            'Wikimedia OAuth1 support requires requests-oauthlib. '
+            'Install dependencies from backend/requirements.txt.'
+        )
+
+    consumer_key, consumer_secret, access_token, access_token_secret = _wikidata_oauth_credentials(
+        oauth_token=access_token,
+        oauth_token_secret=access_token_secret,
+    )
+    session = _wikidata_api_session()
+    session.auth = OAuth1(
+        client_key=consumer_key,
+        client_secret=consumer_secret,
+        resource_owner_key=access_token,
+        resource_owner_secret=access_token_secret,
+        signature_type='auth_header',
+    )
+
+    csrf_token = _commons_csrf_token(session)
+    return session, csrf_token
+
+
+def _normalize_commons_upload_categories(categories: list[str] | None) -> list[str]:
+    if not categories:
+        return []
+    normalized_categories: list[str] = []
+    seen: set[str] = set()
+    for raw_category in categories:
+        normalized_category = _normalize_commons_category(str(raw_category or ''))
+        if not normalized_category:
+            continue
+        dedupe_key = normalized_category.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized_categories.append(normalized_category)
+    return normalized_categories
+
+
+def _normalize_commons_upload_depicts(depicts: list[str] | None) -> list[str]:
+    if not depicts:
+        return []
+    normalized_depicts: list[str] = []
+    seen: set[str] = set()
+    for raw_depict in depicts:
+        normalized_depict = _extract_wikidata_qid(str(raw_depict or ''))
+        if not normalized_depict:
+            continue
+        dedupe_key = normalized_depict.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized_depicts.append(normalized_depict)
+    return normalized_depicts
+
+
+def _commons_upload_warning_message(warnings: Any) -> str:
+    if isinstance(warnings, str):
+        return warnings.strip()
+    if isinstance(warnings, list):
+        messages = [_commons_upload_warning_message(item) for item in warnings]
+        filtered = [message for message in messages if message]
+        return '; '.join(filtered)
+    if isinstance(warnings, dict):
+        messages: list[str] = []
+        for key, value in warnings.items():
+            if isinstance(value, dict):
+                text = str(
+                    value.get('message')
+                    or value.get('text')
+                    or value.get('*')
+                    or value.get('info')
+                    or ''
+                ).strip()
+                code = str(value.get('code') or key or '').strip()
+                if text and code and text.lower() != code.lower():
+                    messages.append(f'{code}: {text}')
+                elif text:
+                    messages.append(text)
+                elif code:
+                    messages.append(code)
+                continue
+            if isinstance(value, list):
+                nested = _commons_upload_warning_message(value)
+                if nested:
+                    messages.append(f'{key}: {nested}')
+                continue
+            text = str(value or '').strip()
+            if text:
+                if key and text.lower() != str(key).lower():
+                    messages.append(f'{key}: {text}')
+                else:
+                    messages.append(text)
+            elif key:
+                messages.append(str(key))
+        return '; '.join(message for message in messages if message)
+    return ''
+
+
+def _commons_mediainfo_entity_id_for_file(
+    session: requests.Session,
+    filename: str,
+) -> str:
+    normalized_filename = str(filename or '').strip()
+    if not normalized_filename:
+        return ''
+
+    payload = _commons_api_get(
+        session,
+        {
+            'action': 'query',
+            'titles': f'File:{normalized_filename}',
+            'prop': 'pageprops',
+            'ppprop': 'wikibase_item',
+            'format': 'json',
+            'formatversion': '2',
+        },
+    )
+    query = payload.get('query', {}) if isinstance(payload, dict) else {}
+    pages = query.get('pages', []) if isinstance(query, dict) else []
+    if not isinstance(pages, list):
+        return ''
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        pageprops = page.get('pageprops', {})
+        wikibase_item = str(pageprops.get('wikibase_item') if isinstance(pageprops, dict) else '').strip()
+        if re.fullmatch(r'M\d+', wikibase_item, flags=re.IGNORECASE):
+            return wikibase_item.upper()
+
+        page_id = page.get('pageid')
+        try:
+            numeric_page_id = int(page_id)
+        except (TypeError, ValueError):
+            numeric_page_id = 0
+        if numeric_page_id > 0:
+            return f'M{numeric_page_id}'
+    return ''
+
+
+def _commons_add_depicts_claims(
+    session: requests.Session,
+    csrf_token: str,
+    mediainfo_id: str,
+    depicts: list[str] | None,
+) -> list[str]:
+    normalized_mediainfo_id = str(mediainfo_id or '').strip().upper()
+    normalized_depicts = _normalize_commons_upload_depicts(depicts)
+    if not normalized_mediainfo_id or not normalized_depicts:
+        return normalized_depicts
+
+    if not re.fullmatch(r'M\d+', normalized_mediainfo_id):
+        raise WikidataWriteError(f'Invalid Commons MediaInfo id: {normalized_mediainfo_id!r}')
+
+    for depict_qid in normalized_depicts:
+        _commons_api_post(
+            session,
+            data={
+                'action': 'wbcreateclaim',
+                'entity': normalized_mediainfo_id,
+                'property': 'P180',
+                'snaktype': 'value',
+                'value': json.dumps(
+                    _wikidata_entity_datavalue(depict_qid),
+                    ensure_ascii=False,
+                    separators=(',', ':'),
+                ),
+                'token': csrf_token,
+                'format': 'json',
+            },
+        )
+
+    return normalized_depicts
+
+
+def _commons_upload_description_wikitext(
+    caption: str,
+    caption_language: str,
+    categories: list[str] | None,
+    wikidata_item: str,
+    author: str,
+    source_url: str,
+    date_created: str,
+    license_template: str,
+    latitude: float | None,
+    longitude: float | None,
+    use_exif_coordinates: bool,
+) -> str:
+    normalized_language = _wikidata_language_code(caption_language, fallback='en')
+    normalized_caption = str(caption or '').replace('\r', ' ').replace('\n', ' ').strip()
+    if not normalized_caption:
+        normalized_caption = 'Uploaded with Locations Explorer.'
+    normalized_wikidata_qid = _extract_wikidata_qid(str(wikidata_item or ''))
+    normalized_author = str(author or '').replace('\r', ' ').replace('\n', ' ').strip()
+    normalized_source_url = str(source_url or '').strip()
+    normalized_date_created = str(date_created or '').strip()
+    normalized_license_template = str(license_template or '').strip() or 'Cc-by-sa-4.0'
+
+    lines = [
+        '== {{int:filedesc}} ==',
+        '{{Information',
+        f'|description={{{{{normalized_language}|1={normalized_caption}}}}}',
+        (
+            f'|date={normalized_date_created}'
+            if normalized_date_created
+            else '|date={{subst:CURRENTYEAR}}-{{subst:CURRENTMONTH}}-{{subst:CURRENTDAY2}}'
+        ),
+        f'|source={normalized_source_url if normalized_source_url else "{{own}}"}',
+        f'|author={normalized_author if normalized_author else "{{subst:USERNAME}}"}',
+        '}}',
+    ]
+
+    if normalized_wikidata_qid:
+        lines.extend(
+            [
+                '',
+                f'{{{{On Wikidata|{normalized_wikidata_qid}}}}}',
+            ]
+        )
+
+    if not use_exif_coordinates and latitude is not None and longitude is not None:
+        lines.extend(
+            [
+                '',
+                f'{{{{Location|{latitude:.6f}|{longitude:.6f}}}}}',
+            ]
+        )
+
+    normalized_categories = _normalize_commons_upload_categories(categories)
+    if normalized_categories:
+        lines.append('')
+        for category in normalized_categories:
+            lines.append(f'[[Category:{category}]]')
+
+    lines.extend(
+        [
+            '',
+            '== {{int:license-header}} ==',
+            f'{{{{{normalized_license_template}}}}}',
+        ]
+    )
+
+    return '\n'.join(lines)
+
+
+def upload_image_to_commons(
+    *,
+    image_file: Any,
+    caption: str = '',
+    caption_language: str = 'en',
+    target_filename: str = '',
+    author: str = '',
+    source_url: str = '',
+    date_created: str = '',
+    license_template: str = 'Cc-by-sa-4.0',
+    categories: list[str] | None = None,
+    depicts: list[str] | None = None,
+    wikidata_item: str = '',
+    coordinate_source: str = 'map',
+    latitude: float | None = None,
+    longitude: float | None = None,
+    oauth_token: str = '',
+    oauth_token_secret: str = '',
+) -> dict[str, Any]:
+    if image_file is None:
+        raise WikidataWriteError('Image file is required.')
+
+    raw_filename = str(getattr(image_file, 'name', '') or '').strip()
+    original_filename = raw_filename.replace('\\', '/').split('/')[-1].strip()
+    if not original_filename:
+        raise WikidataWriteError('Uploaded file must have a valid filename.')
+    requested_filename = str(target_filename or '').replace('\\', '/').split('/')[-1].strip()
+    filename = requested_filename or original_filename
+    if ':' in filename:
+        raise WikidataWriteError('Filename cannot contain colon (:).')
+
+    normalized_coordinate_source = str(coordinate_source or 'map').strip().lower()
+    use_exif_coordinates = normalized_coordinate_source == 'exif'
+    if not use_exif_coordinates:
+        if latitude is None or longitude is None:
+            raise WikidataWriteError('Latitude and longitude are required when coordinate_source is map.')
+        if latitude < -90 or latitude > 90 or longitude < -180 or longitude > 180:
+            raise WikidataWriteError('Coordinate value is out of bounds.')
+    else:
+        latitude = None
+        longitude = None
+
+    session, csrf_token = _commons_oauth_session(
+        oauth_token=oauth_token,
+        oauth_token_secret=oauth_token_secret,
+    )
+
+    if hasattr(image_file, 'seek'):
+        image_file.seek(0)
+
+    normalized_categories = _normalize_commons_upload_categories(categories)
+    normalized_depicts = _normalize_commons_upload_depicts(depicts)
+    description_text = _commons_upload_description_wikitext(
+        caption=caption,
+        caption_language=caption_language,
+        categories=normalized_categories,
+        wikidata_item=wikidata_item,
+        author=author,
+        source_url=source_url,
+        date_created=date_created,
+        license_template=license_template,
+        latitude=latitude,
+        longitude=longitude,
+        use_exif_coordinates=use_exif_coordinates,
+    )
+    upload_comment = 'Uploaded with Locations Explorer'
+    normalized_qid = _extract_wikidata_qid(str(wikidata_item or ''))
+    if normalized_qid:
+        upload_comment = f'{upload_comment} ({normalized_qid})'
+
+    content_type = str(getattr(image_file, 'content_type', '') or 'application/octet-stream')
+    payload = _commons_api_post(
+        session,
+        data={
+            'action': 'upload',
+            'filename': filename,
+            'text': description_text,
+            'comment': upload_comment,
+            'token': csrf_token,
+            'format': 'json',
+            'formatversion': '2',
+            'assert': 'user',
+        },
+        files={
+            'file': (
+                filename,
+                image_file,
+                content_type,
+            )
+        },
+    )
+
+    upload_result = payload.get('upload', {})
+    if not isinstance(upload_result, dict):
+        raise WikidataWriteError('Wikimedia Commons API did not return upload details.')
+
+    result_state = str(upload_result.get('result') or '').strip().lower()
+    if result_state != 'success':
+        warning_message = _commons_upload_warning_message(upload_result.get('warnings'))
+        if warning_message:
+            raise WikidataWriteError(f'Wikimedia Commons upload warning: {warning_message}')
+        raise WikidataWriteError('Wikimedia Commons upload failed.')
+
+    uploaded_filename = str(upload_result.get('filename') or '').strip() or filename
+    if normalized_depicts:
+        mediainfo_id = _commons_mediainfo_entity_id_for_file(session, uploaded_filename)
+        if not mediainfo_id:
+            raise WikidataWriteError(
+                'Could not resolve Commons MediaInfo id for uploaded file while adding depicts (P180).'
+            )
+        _commons_add_depicts_claims(
+            session,
+            csrf_token,
+            mediainfo_id,
+            normalized_depicts,
+        )
+
+    encoded_page_name = quote(uploaded_filename.replace(' ', '_'), safe=':/')
+    file_page_url = f'https://commons.wikimedia.org/wiki/File:{encoded_page_name}'
+
+    return {
+        'filename': uploaded_filename,
+        'file_page_url': file_page_url,
+        'file_url': _commons_file_url(uploaded_filename),
+        'thumb_url': _commons_thumbnail_url(uploaded_filename),
+        'categories': normalized_categories,
+        'depicts': normalized_depicts,
+        'wikidata_item': normalized_qid,
+        'license_template': str(license_template or '').strip() or 'Cc-by-sa-4.0',
+    }
+
+
 def _log_wikidata_userinfo_failure(response_text: str, status_code: int | None = None, detail: str = '') -> None:
     status_part = f' status={status_code}' if status_code is not None else ''
     detail_part = f' detail={detail}' if detail else ''

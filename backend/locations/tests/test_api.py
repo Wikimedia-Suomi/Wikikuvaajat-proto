@@ -2,6 +2,7 @@ from unittest.mock import patch
 from urllib.parse import quote, unquote
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework.test import APITestCase
@@ -267,6 +268,121 @@ class LocationApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
         search_commons_categories_mock.assert_called_once_with(query='Hel', limit=8)
+
+    @patch('locations.views.upload_image_to_commons')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_commons_upload_endpoint(
+        self,
+        oauth_credentials_mock,
+        upload_image_to_commons_mock,
+    ):
+        self._authenticate()
+        upload_image_to_commons_mock.return_value = {
+            'filename': 'Example.jpg',
+            'file_page_url': 'https://commons.wikimedia.org/wiki/File:Example.jpg',
+            'file_url': 'https://commons.wikimedia.org/wiki/Special:FilePath/Example.jpg',
+            'thumb_url': 'https://commons.wikimedia.org/wiki/Special:FilePath/Example.jpg?width=320',
+            'categories': ['Helsinki', 'Finland'],
+            'depicts': ['Q811979', 'Q16970'],
+            'wikidata_item': 'Q1757',
+        }
+        image_file = SimpleUploadedFile('Example.jpg', b'test-image-bytes', content_type='image/jpeg')
+
+        response = self.client.post(
+            reverse('commons-upload'),
+            {
+                'file': image_file,
+                'caption': 'Test caption',
+                'caption_language': 'fi',
+                'target_filename': 'Example_renamed.jpg',
+                'author': 'Example Photographer',
+                'source_url': 'https://example.org/source-photo',
+                'date_created': '2026-02-20',
+                'license_template': 'Cc-by-sa-4.0',
+                'categories_json': '["Helsinki","Finland"]',
+                'depicts_json': '["Q811979","Q16970"]',
+                'coordinate_source': 'map',
+                'latitude': '60.1699',
+                'longitude': '24.9384',
+                'wikidata_item': 'Q1757',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['filename'], 'Example.jpg')
+        oauth_credentials_mock.assert_called_once()
+        upload_image_to_commons_mock.assert_called_once()
+        call_args = upload_image_to_commons_mock.call_args
+        self.assertEqual(call_args.kwargs['caption'], 'Test caption')
+        self.assertEqual(call_args.kwargs['caption_language'], 'fi')
+        self.assertEqual(call_args.kwargs['target_filename'], 'Example_renamed.jpg')
+        self.assertEqual(call_args.kwargs['author'], 'Example Photographer')
+        self.assertEqual(call_args.kwargs['source_url'], 'https://example.org/source-photo')
+        self.assertEqual(call_args.kwargs['date_created'], '2026-02-20')
+        self.assertEqual(call_args.kwargs['license_template'], 'Cc-by-sa-4.0')
+        self.assertEqual(call_args.kwargs['categories'], ['Helsinki', 'Finland'])
+        self.assertEqual(call_args.kwargs['depicts'], ['Q811979', 'Q16970'])
+        self.assertEqual(call_args.kwargs['coordinate_source'], 'map')
+        self.assertEqual(call_args.kwargs['latitude'], 60.1699)
+        self.assertEqual(call_args.kwargs['longitude'], 24.9384)
+        self.assertEqual(call_args.kwargs['wikidata_item'], 'Q1757')
+        self.assertEqual(call_args.kwargs['oauth_token'], 'token')
+        self.assertEqual(call_args.kwargs['oauth_token_secret'], 'secret')
+
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_commons_upload_endpoint_requires_file(
+        self,
+        oauth_credentials_mock,
+    ):
+        self._authenticate()
+
+        response = self.client.post(
+            reverse('commons-upload'),
+            {
+                'caption': 'No file',
+                'coordinate_source': 'exif',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('file', response.data)
+        oauth_credentials_mock.assert_called_once()
+
+    @patch('locations.views.upload_image_to_commons')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_commons_upload_endpoint_returns_502_for_upload_error(
+        self,
+        oauth_credentials_mock,
+        upload_image_to_commons_mock,
+    ):
+        self._authenticate()
+        upload_image_to_commons_mock.side_effect = WikidataWriteError('duplicate filename')
+        image_file = SimpleUploadedFile('Example.jpg', b'test-image-bytes', content_type='image/jpeg')
+
+        response = self.client.post(
+            reverse('commons-upload'),
+            {
+                'file': image_file,
+                'coordinate_source': 'exif',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('detail', response.data)
+        oauth_credentials_mock.assert_called_once()
+        upload_image_to_commons_mock.assert_called_once()
 
     @patch('locations.views.search_geocode_places')
     def test_geocode_search_endpoint(self, search_geocode_places_mock):
@@ -835,6 +951,7 @@ class LocationApiTests(APITestCase):
         oauth_credentials_mock.assert_called_once()
 
     def test_wikidata_write_endpoints_require_authentication(self):
+        image_file = SimpleUploadedFile('Example.jpg', b'test-image-bytes', content_type='image/jpeg')
         add_existing_response = self.client.post(
             reverse('wikidata-add-existing'),
             {'wikidata_item': 'Q1757', 'source_url': 'https://example.org/article'},
@@ -854,9 +971,18 @@ class LocationApiTests(APITestCase):
             },
             format='json',
         )
+        commons_upload_response = self.client.post(
+            reverse('commons-upload'),
+            {
+                'file': image_file,
+                'coordinate_source': 'exif',
+            },
+            format='multipart',
+        )
 
         self.assertEqual(add_existing_response.status_code, 401)
         self.assertEqual(create_item_response.status_code, 401)
+        self.assertEqual(commons_upload_response.status_code, 401)
 
     def test_create_draft_location(self):
         self._authenticate()

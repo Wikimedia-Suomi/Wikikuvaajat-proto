@@ -21,6 +21,12 @@
   const SUPPORTED_LOCALES = ['en', 'sv', 'fi']
   const WIKIDATA_LANGUAGE_SEARCH_URL = 'https://commons.wikimedia.org/w/api.php'
   const WIKIDATA_PROPERTY_SEARCH_URL = 'https://www.wikidata.org/w/api.php'
+  const WIKIDATA_SPARQL_ENDPOINT_URL = 'https://query.wikidata.org/sparql'
+  const OVERPASS_API_URL = 'https://overpass-api.de/api/interpreter'
+  const SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS = 150
+  const SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS = 100
+  const SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS = 10
+  const SAVE_IMAGE_SELECTED_CATEGORY_ANCESTOR_DEPTH = 3
   const WIKIDATA_LANGUAGE_CODE_CANONICAL = {
     sme: 'se',
   }
@@ -251,6 +257,635 @@
     return options
   }
 
+  async function fetchNearbyWikidataCommonsCategories(latitude, longitude, {
+    radiusMeters = SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS,
+    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+    lang = null,
+  } = {}) {
+    const latitudeValue = Number(latitude)
+    const longitudeValue = Number(longitude)
+    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) {
+      return []
+    }
+
+    const radiusKilometers = Math.max(0.001, Number(radiusMeters) / 1000)
+    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
+    const queryLanguage = normalizeSupportedLocale(lang) || 'en'
+    const queryResultLimit = Math.max(resultLimit, Math.min(resultLimit * 6, 200))
+    const sparql = `
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?item ?commonsCategory ?distance
+WHERE {
+  SERVICE wikibase:around {
+    ?item wdt:P625 ?itemLocation .
+    bd:serviceParam wikibase:center "Point(${longitudeValue.toFixed(7)} ${latitudeValue.toFixed(7)})"^^geo:wktLiteral .
+    bd:serviceParam wikibase:radius "${radiusKilometers.toFixed(3)}" .
+    bd:serviceParam wikibase:distance ?distance .
+  }
+  {
+    ?item wdt:P373 ?commonsCategoryRaw .
+  }
+  UNION
+  {
+    ?item wdt:P706 ?locationOfFeatureItem .
+    ?locationOfFeatureItem wdt:P373 ?commonsCategoryRaw .
+  }
+  UNION
+  {
+    ?item wdt:P276 ?locatedInItem .
+    ?locatedInItem wdt:P373 ?commonsCategoryRaw .
+  }
+  BIND(STR(?commonsCategoryRaw) AS ?commonsCategory)
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${queryLanguage},en". }
+}
+ORDER BY ASC(?distance)
+LIMIT ${queryResultLimit}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const nearbyItems = []
+    const seenCategoryKeys = new Set()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const categoryValue =
+        binding.commonsCategory &&
+        typeof binding.commonsCategory === 'object' &&
+        typeof binding.commonsCategory.value === 'string'
+          ? binding.commonsCategory.value.trim()
+          : ''
+      if (!categoryValue) {
+        continue
+      }
+      const dedupeKey = categoryValue.replace(/\s+/g, '_').toLowerCase()
+      if (seenCategoryKeys.has(dedupeKey)) {
+        continue
+      }
+      seenCategoryKeys.add(dedupeKey)
+      nearbyItems.push({
+        category: categoryValue,
+      })
+      if (nearbyItems.length >= resultLimit) {
+        break
+      }
+    }
+
+    return nearbyItems
+  }
+
+  async function fetchNearbyWikidataDepictItems(latitude, longitude, {
+    radiusMeters = SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS,
+    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+    lang = null,
+  } = {}) {
+    const latitudeValue = Number(latitude)
+    const longitudeValue = Number(longitude)
+    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) {
+      return []
+    }
+
+    const radiusKilometers = Math.max(0.001, Number(radiusMeters) / 1000)
+    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
+    const queryResultLimit = Math.max(resultLimit, Math.min(resultLimit * 10, 300))
+    const queryLanguage = normalizeSupportedLocale(lang) || 'en'
+    const sparql = `
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?item ?itemLabel ?itemDescription ?distance
+WHERE {
+  SERVICE wikibase:around {
+    ?item wdt:P625 ?itemLocation .
+    bd:serviceParam wikibase:center "Point(${longitudeValue.toFixed(7)} ${latitudeValue.toFixed(7)})"^^geo:wktLiteral .
+    bd:serviceParam wikibase:radius "${radiusKilometers.toFixed(3)}" .
+    bd:serviceParam wikibase:distance ?distance .
+  }
+  FILTER(STRSTARTS(STR(?item), "http://www.wikidata.org/entity/Q"))
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${queryLanguage},en". }
+}
+ORDER BY ASC(?distance)
+LIMIT ${queryResultLimit}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const items = []
+    const seenQids = new Set()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const depictQid = extractWikidataId(
+        binding.item &&
+        typeof binding.item === 'object' &&
+        typeof binding.item.value === 'string'
+          ? binding.item.value
+          : '',
+      )
+      if (!depictQid || seenQids.has(depictQid)) {
+        continue
+      }
+      seenQids.add(depictQid)
+      items.push({
+        id: depictQid,
+        label:
+          binding.itemLabel &&
+          typeof binding.itemLabel === 'object' &&
+          typeof binding.itemLabel.value === 'string'
+            ? binding.itemLabel.value.trim()
+            : '',
+        description:
+          binding.itemDescription &&
+          typeof binding.itemDescription === 'object' &&
+          typeof binding.itemDescription.value === 'string'
+            ? binding.itemDescription.value.trim()
+            : '',
+      })
+      if (items.length >= resultLimit) {
+        break
+      }
+    }
+
+    return items
+  }
+
+  async function fetchNearbyOverpassWikidataItems(latitude, longitude, {
+    radiusMeters = SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS,
+    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+  } = {}) {
+    const latitudeValue = Number(latitude)
+    const longitudeValue = Number(longitude)
+    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) {
+      return []
+    }
+
+    const searchRadiusMeters = Math.max(1, Math.min(Number.parseInt(String(radiusMeters), 10) || SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS, 5000))
+    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
+    const overpassQuery = `
+[out:json][timeout:25];
+(
+  node(around:${searchRadiusMeters},${latitudeValue.toFixed(7)},${longitudeValue.toFixed(7)})["wikidata"~"^Q[0-9]+$"];
+  way(around:${searchRadiusMeters},${latitudeValue.toFixed(7)},${longitudeValue.toFixed(7)})["wikidata"~"^Q[0-9]+$"];
+  relation(around:${searchRadiusMeters},${latitudeValue.toFixed(7)},${longitudeValue.toFixed(7)})["wikidata"~"^Q[0-9]+$"];
+);
+out body center qt;
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('data', overpassQuery)
+    const response = await fetch(OVERPASS_API_URL, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const elements =
+      payload &&
+      typeof payload === 'object' &&
+      Array.isArray(payload.elements)
+        ? payload.elements
+        : []
+
+    const readCoordinate = (candidate) => {
+      const parsed = Number(candidate)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+
+    const nearestItemByQid = new Map()
+    for (const element of elements) {
+      if (!element || typeof element !== 'object') {
+        continue
+      }
+      const elementTags =
+        element.tags && typeof element.tags === 'object'
+          ? element.tags
+          : {}
+      const qid = extractWikidataId(String(elementTags.wikidata || ''))
+      if (!qid) {
+        continue
+      }
+
+      const directLatitude = readCoordinate(element.lat)
+      const directLongitude = readCoordinate(element.lon)
+      const centerLatitude = (
+        element.center && typeof element.center === 'object'
+          ? readCoordinate(element.center.lat)
+          : null
+      )
+      const centerLongitude = (
+        element.center && typeof element.center === 'object'
+          ? readCoordinate(element.center.lon)
+          : null
+      )
+      const itemLatitude = directLatitude !== null ? directLatitude : centerLatitude
+      const itemLongitude = directLongitude !== null ? directLongitude : centerLongitude
+      const distanceKm = haversineDistanceKilometers(
+        latitudeValue,
+        longitudeValue,
+        itemLatitude,
+        itemLongitude,
+      )
+      const distanceSortValue = Number.isFinite(distanceKm) ? distanceKm : Number.POSITIVE_INFINITY
+      const existing = nearestItemByQid.get(qid)
+      if (!existing || distanceSortValue < existing.distanceSortValue) {
+        nearestItemByQid.set(qid, {
+          qid,
+          distanceSortValue,
+        })
+      }
+    }
+
+    return Array.from(nearestItemByQid.values())
+      .sort((left, right) => left.distanceSortValue - right.distanceSortValue)
+      .slice(0, resultLimit)
+  }
+
+  async function fetchCommonsCategoriesForWikidataQids(qids, {
+    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+  } = {}) {
+    const normalizedQids = []
+    const seenQids = new Set()
+    for (const rawQid of Array.isArray(qids) ? qids : []) {
+      const normalizedQid = extractWikidataId(String(rawQid || ''))
+      if (!normalizedQid || seenQids.has(normalizedQid)) {
+        continue
+      }
+      seenQids.add(normalizedQid)
+      normalizedQids.push(normalizedQid)
+    }
+    if (normalizedQids.length === 0) {
+      return []
+    }
+
+    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
+    const limitedQids = normalizedQids.slice(0, 50)
+    const valuesClause = limitedQids.map((qid) => `wd:${qid}`).join(' ')
+    const queryResultLimit = Math.max(resultLimit, Math.min(resultLimit * 10, 500))
+    const sparql = `
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?item ?commonsCategory
+WHERE {
+  VALUES ?item { ${valuesClause} }
+  {
+    ?item wdt:P373 ?commonsCategoryRaw .
+  }
+  UNION
+  {
+    ?item wdt:P706 ?locationOfFeatureItem .
+    ?locationOfFeatureItem wdt:P373 ?commonsCategoryRaw .
+  }
+  UNION
+  {
+    ?item wdt:P276 ?locatedInItem .
+    ?locatedInItem wdt:P373 ?commonsCategoryRaw .
+  }
+  BIND(STR(?commonsCategoryRaw) AS ?commonsCategory)
+}
+LIMIT ${queryResultLimit}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const categoriesByQid = new Map()
+    const categoryKeysByQid = new Map()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const qid = extractWikidataId(
+        binding.item &&
+        typeof binding.item === 'object' &&
+        typeof binding.item.value === 'string'
+          ? binding.item.value
+          : '',
+      )
+      if (!qid) {
+        continue
+      }
+      const categoryValue =
+        binding.commonsCategory &&
+        typeof binding.commonsCategory === 'object' &&
+        typeof binding.commonsCategory.value === 'string'
+          ? binding.commonsCategory.value.trim()
+          : ''
+      if (!categoryValue) {
+        continue
+      }
+      const categoryKey = categoryValue.replace(/\s+/g, '_').toLowerCase()
+      if (!categoryKeysByQid.has(qid)) {
+        categoryKeysByQid.set(qid, new Set())
+      }
+      if (!categoriesByQid.has(qid)) {
+        categoriesByQid.set(qid, [])
+      }
+      const qidCategoryKeys = categoryKeysByQid.get(qid)
+      if (qidCategoryKeys.has(categoryKey)) {
+        continue
+      }
+      qidCategoryKeys.add(categoryKey)
+      categoriesByQid.get(qid).push(categoryValue)
+    }
+
+    const categories = []
+    const seenCategoryKeys = new Set()
+    outerLoop:
+    for (const qid of limitedQids) {
+      const qidCategories = categoriesByQid.get(qid)
+      if (!Array.isArray(qidCategories) || qidCategories.length === 0) {
+        continue
+      }
+      for (const category of qidCategories) {
+        const categoryKey = String(category || '').replace(/\s+/g, '_').toLowerCase()
+        if (!categoryKey || seenCategoryKeys.has(categoryKey)) {
+          continue
+        }
+        seenCategoryKeys.add(categoryKey)
+        categories.push({ qid, category })
+        if (categories.length >= resultLimit) {
+          break outerLoop
+        }
+      }
+    }
+    return categories
+  }
+
+  async function fetchWikidataDepictItemsForQids(qids, {
+    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+    lang = null,
+  } = {}) {
+    const normalizedQids = []
+    const seenQids = new Set()
+    for (const rawQid of Array.isArray(qids) ? qids : []) {
+      const normalizedQid = extractWikidataId(String(rawQid || ''))
+      if (!normalizedQid || seenQids.has(normalizedQid)) {
+        continue
+      }
+      seenQids.add(normalizedQid)
+      normalizedQids.push(normalizedQid)
+    }
+    if (normalizedQids.length === 0) {
+      return []
+    }
+
+    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
+    const limitedQids = normalizedQids.slice(0, 50)
+    const valuesClause = limitedQids.map((qid) => `wd:${qid}`).join(' ')
+    const queryResultLimit = Math.max(resultLimit, Math.min(resultLimit * 15, 600))
+    const queryLanguage = normalizeSupportedLocale(lang) || 'en'
+    const sparql = `
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+
+SELECT ?seed ?depictItem ?depictItemLabel ?depictItemDescription
+WHERE {
+  VALUES ?seed { ${valuesClause} }
+  {
+    BIND(?seed AS ?depictItem)
+  }
+  UNION
+  {
+    ?seed wdt:P706 ?depictItem .
+  }
+  UNION
+  {
+    ?seed wdt:P276 ?depictItem .
+  }
+  FILTER(STRSTARTS(STR(?depictItem), "http://www.wikidata.org/entity/Q"))
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${queryLanguage},en". }
+}
+LIMIT ${queryResultLimit}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const depictItemsBySeed = new Map()
+    const depictItemKeysBySeed = new Map()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const seedQid = extractWikidataId(
+        binding.seed &&
+        typeof binding.seed === 'object' &&
+        typeof binding.seed.value === 'string'
+          ? binding.seed.value
+          : '',
+      )
+      if (!seedQid) {
+        continue
+      }
+      const depictQid = extractWikidataId(
+        binding.depictItem &&
+        typeof binding.depictItem === 'object' &&
+        typeof binding.depictItem.value === 'string'
+          ? binding.depictItem.value
+          : '',
+      )
+      if (!depictQid) {
+        continue
+      }
+      if (!depictItemsBySeed.has(seedQid)) {
+        depictItemsBySeed.set(seedQid, [])
+      }
+      if (!depictItemKeysBySeed.has(seedQid)) {
+        depictItemKeysBySeed.set(seedQid, new Set())
+      }
+      const dedupeKeys = depictItemKeysBySeed.get(seedQid)
+      const depictKey = depictQid.toLowerCase()
+      if (dedupeKeys.has(depictKey)) {
+        continue
+      }
+      dedupeKeys.add(depictKey)
+      depictItemsBySeed.get(seedQid).push({
+        id: depictQid,
+        label:
+          binding.depictItemLabel &&
+          typeof binding.depictItemLabel === 'object' &&
+          typeof binding.depictItemLabel.value === 'string'
+            ? binding.depictItemLabel.value.trim()
+            : '',
+        description:
+          binding.depictItemDescription &&
+          typeof binding.depictItemDescription === 'object' &&
+          typeof binding.depictItemDescription.value === 'string'
+            ? binding.depictItemDescription.value.trim()
+            : '',
+      })
+    }
+
+    const items = []
+    const seenDepictQids = new Set()
+    outerLoop:
+    for (const seedQid of limitedQids) {
+      const seedItems = depictItemsBySeed.get(seedQid)
+      if (!Array.isArray(seedItems) || seedItems.length === 0) {
+        continue
+      }
+      for (const item of seedItems) {
+        const qid = extractWikidataId(String(item && item.id ? item.id : ''))
+        if (!qid || seenDepictQids.has(qid)) {
+          continue
+        }
+        seenDepictQids.add(qid)
+        items.push(item)
+        if (items.length >= resultLimit) {
+          break outerLoop
+        }
+      }
+    }
+
+    return items
+  }
+
+  async function fetchNearbyOsmCommonsCategories(latitude, longitude, {
+    radiusMeters = SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS,
+    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+  } = {}) {
+    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
+    const nearbyItems = await fetchNearbyOverpassWikidataItems(latitude, longitude, {
+      radiusMeters,
+      limit: resultLimit,
+    })
+    const qids = nearbyItems.map((item) => item.qid)
+    const categories = await fetchCommonsCategoriesForWikidataQids(qids, { limit: resultLimit })
+    return categories.map((item) => ({
+      category: item.category,
+    }))
+  }
+
+  async function fetchNearbyOsmDepictItems(latitude, longitude, {
+    radiusMeters = SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS,
+    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+    lang = null,
+  } = {}) {
+    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
+    const nearbyItems = await fetchNearbyOverpassWikidataItems(latitude, longitude, {
+      radiusMeters,
+      limit: resultLimit,
+    })
+    const qids = nearbyItems.map((item) => item.qid)
+    return fetchWikidataDepictItemsForQids(qids, {
+      limit: resultLimit,
+      lang,
+    })
+  }
+
   function extractWikidataPropertyId(value) {
     if (typeof value !== 'string') {
       return ''
@@ -469,6 +1104,7 @@
       lang = null,
       method = 'GET',
       body = null,
+      formData = null,
       queryParams = null,
       returnResponseMeta = false
     } = options
@@ -486,7 +1122,9 @@
     }
 
     const requestOptions = { method }
-    if (body !== null) {
+    if (formData !== null) {
+      requestOptions.body = formData
+    } else if (body !== null) {
       requestOptions.headers = { 'Content-Type': 'application/json' }
       requestOptions.body = JSON.stringify(body)
     }
@@ -591,6 +1229,14 @@
     })
   }
 
+  function uploadCommonsImage(formData, lang = null) {
+    return request('/commons/upload/', {
+      method: 'POST',
+      lang,
+      formData,
+    })
+  }
+
   function fetchAuthStatus() {
     return request('/auth/status/')
   }
@@ -691,6 +1337,197 @@
       })
     }
     return categories
+  }
+
+  async function fetchCommonsCategoryParents(categoryName, limit = AUTOCOMPLETE_RESULT_LIMIT) {
+    const rawCategory = typeof categoryName === 'string' ? categoryName.trim() : ''
+    const normalizedCategory = rawCategory.replace(/^category:/i, '').trim().replace(/\s+/g, '_')
+    if (!normalizedCategory) {
+      return []
+    }
+
+    const parsedLimit = Number(limit)
+    const requestedLimit = Number.isFinite(parsedLimit)
+      ? Math.max(1, Math.min(Math.trunc(parsedLimit), 50))
+      : AUTOCOMPLETE_RESULT_LIMIT
+
+    const url = new URL('https://commons.wikimedia.org/w/api.php')
+    url.searchParams.set('action', 'query')
+    url.searchParams.set('prop', 'categories')
+    url.searchParams.set('titles', `Category:${normalizedCategory}`)
+    url.searchParams.set('clshow', '!hidden')
+    url.searchParams.set('cllimit', String(requestedLimit))
+    url.searchParams.set('format', 'json')
+    url.searchParams.set('formatversion', '2')
+    url.searchParams.set('origin', '*')
+
+    const response = await fetch(url.toString(), { method: 'GET' })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    if (payload && typeof payload === 'object' && payload.error && payload.error.info) {
+      throw new Error(String(payload.error.info))
+    }
+
+    const pages =
+      payload &&
+      typeof payload === 'object' &&
+      payload.query &&
+      typeof payload.query === 'object' &&
+      Array.isArray(payload.query.pages)
+        ? payload.query.pages
+        : []
+    const page =
+      pages.length > 0 && pages[0] && typeof pages[0] === 'object'
+        ? pages[0]
+        : null
+    const categoryList =
+      page &&
+      typeof page === 'object' &&
+      Array.isArray(page.categories)
+        ? page.categories
+        : []
+
+    const seen = new Set()
+    const categories = []
+    for (const category of categoryList) {
+      if (!category || typeof category !== 'object') {
+        continue
+      }
+      const title = typeof category.title === 'string' ? category.title : ''
+      const normalizedTitle = title.replace(/^category:/i, '').trim().replace(/\s+/g, '_')
+      if (!normalizedTitle) {
+        continue
+      }
+      const dedupeKey = normalizedTitle.toLowerCase()
+      if (seen.has(dedupeKey)) {
+        continue
+      }
+      seen.add(dedupeKey)
+      categories.push({
+        name: normalizedTitle,
+        title: `Category:${normalizedTitle}`,
+        commons_category: normalizedTitle,
+      })
+    }
+    return categories
+  }
+
+  function normalizeCommonsFilenameCandidate(value) {
+    const normalized = String(value || '')
+      .trim()
+      .replace(/^file:/i, '')
+      .trim()
+      .replace(/\s+/g, ' ')
+    return normalized
+  }
+
+  function normalizeCommonsFilenameExtension(value) {
+    const rawValue = String(value || '').trim()
+    if (!rawValue) {
+      return ''
+    }
+    const extension = rawValue.startsWith('.') ? rawValue : `.${rawValue}`
+    if (!/^\.[A-Za-z0-9]{1,10}$/.test(extension)) {
+      return ''
+    }
+    return extension
+  }
+
+  function splitCommonsFilenameBaseAndExtension(value) {
+    const normalizedFilename = normalizeCommonsFilenameCandidate(value)
+    if (!normalizedFilename) {
+      return { base: '', extension: '' }
+    }
+    const extensionMatch = normalizedFilename.match(/^(.*?)(\.[A-Za-z0-9]{1,10})$/)
+    if (!extensionMatch) {
+      return { base: normalizedFilename, extension: '' }
+    }
+
+    const base = String(extensionMatch[1] || '').trim()
+    const extension = String(extensionMatch[2] || '')
+    if (!base) {
+      return { base: normalizedFilename, extension: '' }
+    }
+    return { base, extension }
+  }
+
+  function buildCommonsFilenameAvailabilityCandidates(filename, fallbackExtension = '') {
+    const normalizedFilename = normalizeCommonsFilenameCandidate(filename)
+    if (!normalizedFilename) {
+      return []
+    }
+
+    const { base, extension } = splitCommonsFilenameBaseAndExtension(normalizedFilename)
+    const normalizedFallbackExtension = normalizeCommonsFilenameExtension(fallbackExtension)
+    const candidates = []
+    const seen = new Set()
+    const addCandidate = (candidateValue) => {
+      const normalizedCandidate = normalizeCommonsFilenameCandidate(candidateValue)
+      if (!normalizedCandidate) {
+        return
+      }
+      const dedupeKey = normalizedCandidate.toLowerCase()
+      if (seen.has(dedupeKey)) {
+        return
+      }
+      seen.add(dedupeKey)
+      candidates.push(normalizedCandidate)
+    }
+
+    addCandidate(normalizedFilename)
+    if (extension) {
+      addCandidate(base)
+    } else if (normalizedFallbackExtension) {
+      addCandidate(`${normalizedFilename}${normalizedFallbackExtension}`)
+    }
+
+    return candidates
+  }
+
+  async function checkCommonsFilenameAvailability(filename, { fallbackExtension = '' } = {}) {
+    const filenameCandidates = buildCommonsFilenameAvailabilityCandidates(filename, fallbackExtension)
+    if (filenameCandidates.length === 0) {
+      return null
+    }
+
+    const url = new URL('https://commons.wikimedia.org/w/api.php')
+    url.searchParams.set('action', 'query')
+    url.searchParams.set('titles', filenameCandidates.map((candidate) => `File:${candidate}`).join('|'))
+    url.searchParams.set('format', 'json')
+    url.searchParams.set('formatversion', '2')
+    url.searchParams.set('origin', '*')
+
+    const response = await fetch(url.toString(), { method: 'GET' })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    if (payload && typeof payload === 'object' && payload.error && payload.error.info) {
+      throw new Error(String(payload.error.info))
+    }
+
+    const pages =
+      payload &&
+      typeof payload === 'object' &&
+      payload.query &&
+      typeof payload.query === 'object' &&
+      Array.isArray(payload.query.pages)
+        ? payload.query.pages
+        : []
+
+    if (pages.length === 0) {
+      return null
+    }
+    const exists = pages.some((page) => (
+      page &&
+      typeof page === 'object' &&
+      !Object.prototype.hasOwnProperty.call(page, 'missing')
+    ))
+    return !exists
   }
 
   function searchGeocodePlaces(query, limit = AUTOCOMPLETE_RESULT_LIMIT) {
@@ -1095,6 +1932,295 @@
     return earthRadiusKm * c
   }
 
+  const EXIF_TYPE_BYTE_SIZES = {
+    1: 1, // BYTE
+    2: 1, // ASCII
+    3: 2, // SHORT
+    4: 4, // LONG
+    5: 8, // RATIONAL
+    7: 1, // UNDEFINED
+    9: 4, // SLONG
+    10: 8, // SRATIONAL
+  }
+
+  function _asciiFromDataView(view, offset, length) {
+    if (!(view instanceof DataView) || !Number.isInteger(offset) || !Number.isInteger(length)) {
+      return ''
+    }
+    if (offset < 0 || length < 0 || offset + length > view.byteLength) {
+      return ''
+    }
+    let value = ''
+    for (let index = 0; index < length; index += 1) {
+      const byte = view.getUint8(offset + index)
+      if (byte === 0) {
+        break
+      }
+      value += String.fromCharCode(byte)
+    }
+    return value
+  }
+
+  function _readExifEntryValue(view, entryOffset, tiffStart, littleEndian) {
+    if (!(view instanceof DataView)) {
+      return null
+    }
+    if (entryOffset < 0 || entryOffset + 12 > view.byteLength) {
+      return null
+    }
+
+    const valueType = view.getUint16(entryOffset + 2, littleEndian)
+    const count = view.getUint32(entryOffset + 4, littleEndian)
+    const typeSize = EXIF_TYPE_BYTE_SIZES[valueType]
+    if (!typeSize || !Number.isFinite(count) || count < 1) {
+      return null
+    }
+    const totalByteLength = count * typeSize
+    if (!Number.isFinite(totalByteLength) || totalByteLength < 1) {
+      return null
+    }
+
+    const inlineValueOffset = entryOffset + 8
+    const pointerValueOffset = tiffStart + view.getUint32(entryOffset + 8, littleEndian)
+    const valueOffset = totalByteLength <= 4 ? inlineValueOffset : pointerValueOffset
+    if (!Number.isInteger(valueOffset) || valueOffset < 0 || valueOffset + totalByteLength > view.byteLength) {
+      return null
+    }
+
+    const readValues = (reader, step) => {
+      const values = []
+      for (let index = 0; index < count; index += 1) {
+        values.push(reader(valueOffset + index * step))
+      }
+      return count === 1 ? values[0] : values
+    }
+
+    switch (valueType) {
+      case 1:
+      case 7:
+        return readValues((position) => view.getUint8(position), 1)
+      case 2:
+        return _asciiFromDataView(view, valueOffset, totalByteLength).trim()
+      case 3:
+        return readValues((position) => view.getUint16(position, littleEndian), 2)
+      case 4:
+        return readValues((position) => view.getUint32(position, littleEndian), 4)
+      case 5:
+        return readValues((position) => {
+          const numerator = view.getUint32(position, littleEndian)
+          const denominator = view.getUint32(position + 4, littleEndian)
+          if (!denominator) {
+            return null
+          }
+          return numerator / denominator
+        }, 8)
+      case 9:
+        return readValues((position) => view.getInt32(position, littleEndian), 4)
+      case 10:
+        return readValues((position) => {
+          const numerator = view.getInt32(position, littleEndian)
+          const denominator = view.getInt32(position + 4, littleEndian)
+          if (!denominator) {
+            return null
+          }
+          return numerator / denominator
+        }, 8)
+      default:
+        return null
+    }
+  }
+
+  function _readExifIfdTags(view, ifdOffset, tiffStart, littleEndian) {
+    const tags = new Map()
+    if (!(view instanceof DataView) || !Number.isFinite(ifdOffset)) {
+      return tags
+    }
+    const absoluteIfdOffset = tiffStart + Number(ifdOffset)
+    if (!Number.isInteger(absoluteIfdOffset) || absoluteIfdOffset < 0 || absoluteIfdOffset + 2 > view.byteLength) {
+      return tags
+    }
+
+    const entryCount = view.getUint16(absoluteIfdOffset, littleEndian)
+    for (let index = 0; index < entryCount; index += 1) {
+      const entryOffset = absoluteIfdOffset + 2 + index * 12
+      if (entryOffset + 12 > view.byteLength) {
+        break
+      }
+      const tagId = view.getUint16(entryOffset, littleEndian)
+      const tagValue = _readExifEntryValue(view, entryOffset, tiffStart, littleEndian)
+      tags.set(tagId, tagValue)
+    }
+
+    return tags
+  }
+
+  function _normalizeExifDateParts(rawValue) {
+    const text = String(rawValue || '').trim()
+    if (!text) {
+      return { date: '', display: '' }
+    }
+
+    const match = text.match(/^(\d{4}):(\d{2}):(\d{2})(?:\s+(\d{2}):(\d{2}):(\d{2}))?$/)
+    if (!match) {
+      return { date: '', display: '' }
+    }
+
+    const dateValue = `${match[1]}-${match[2]}-${match[3]}`
+    const timeValue = match[4] ? `${match[4]}:${match[5]}:${match[6]}` : ''
+    return {
+      date: dateValue,
+      display: timeValue ? `${dateValue} ${timeValue}` : dateValue,
+    }
+  }
+
+  function _gpsDmsToDecimal(value, reference) {
+    if (!Array.isArray(value) || value.length < 3) {
+      return null
+    }
+    const degrees = Number(value[0])
+    const minutes = Number(value[1])
+    const seconds = Number(value[2])
+    if (!Number.isFinite(degrees) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) {
+      return null
+    }
+    let decimal = degrees + (minutes / 60) + (seconds / 3600)
+    const normalizedRef = String(reference || '').trim().toUpperCase()
+    if (normalizedRef === 'S' || normalizedRef === 'W') {
+      decimal *= -1
+    }
+    return decimal
+  }
+
+  function extractExifMetadataFromJpegArrayBuffer(arrayBuffer) {
+    const emptyResult = {
+      dateTaken: '',
+      dateTakenDate: '',
+      latitude: null,
+      longitude: null,
+    }
+    if (!(arrayBuffer instanceof ArrayBuffer)) {
+      return emptyResult
+    }
+
+    const view = new DataView(arrayBuffer)
+    if (view.byteLength < 4 || view.getUint16(0, false) !== 0xFFD8) {
+      return emptyResult
+    }
+
+    let offset = 2
+    while (offset + 4 <= view.byteLength) {
+      if (view.getUint8(offset) !== 0xFF) {
+        offset += 1
+        continue
+      }
+
+      const marker = view.getUint8(offset + 1)
+      offset += 2
+      if (marker === 0xD9 || marker === 0xDA) {
+        break
+      }
+
+      if (offset + 2 > view.byteLength) {
+        break
+      }
+      const segmentLength = view.getUint16(offset, false)
+      if (segmentLength < 2 || offset + segmentLength > view.byteLength) {
+        break
+      }
+
+      if (marker === 0xE1 && segmentLength >= 8) {
+        const exifHeader = _asciiFromDataView(view, offset + 2, 6)
+        if (exifHeader === 'Exif') {
+          const tiffStart = offset + 2 + 6
+          if (tiffStart + 8 > view.byteLength) {
+            return emptyResult
+          }
+
+          const byteOrder = _asciiFromDataView(view, tiffStart, 2)
+          const littleEndian = byteOrder === 'II'
+          if (!littleEndian && byteOrder !== 'MM') {
+            return emptyResult
+          }
+          const tiffMagic = view.getUint16(tiffStart + 2, littleEndian)
+          if (tiffMagic !== 42) {
+            return emptyResult
+          }
+
+          const firstIfdOffset = view.getUint32(tiffStart + 4, littleEndian)
+          const ifd0 = _readExifIfdTags(view, firstIfdOffset, tiffStart, littleEndian)
+          const exifIfdPointer = Number(ifd0.get(0x8769))
+          const gpsIfdPointer = Number(ifd0.get(0x8825))
+          const exifIfd = Number.isFinite(exifIfdPointer)
+            ? _readExifIfdTags(view, exifIfdPointer, tiffStart, littleEndian)
+            : new Map()
+          const gpsIfd = Number.isFinite(gpsIfdPointer)
+            ? _readExifIfdTags(view, gpsIfdPointer, tiffStart, littleEndian)
+            : new Map()
+
+          const rawDateValue = (
+            exifIfd.get(0x9003) || // DateTimeOriginal
+            exifIfd.get(0x9004) || // DateTimeDigitized
+            ifd0.get(0x0132) || // DateTime
+            ''
+          )
+          const normalizedDate = _normalizeExifDateParts(rawDateValue)
+
+          const latitude = _gpsDmsToDecimal(gpsIfd.get(0x0002), gpsIfd.get(0x0001))
+          const longitude = _gpsDmsToDecimal(gpsIfd.get(0x0004), gpsIfd.get(0x0003))
+
+          return {
+            dateTaken: normalizedDate.display,
+            dateTakenDate: normalizedDate.date,
+            latitude: Number.isFinite(latitude) ? latitude : null,
+            longitude: Number.isFinite(longitude) ? longitude : null,
+          }
+        }
+      }
+
+      offset += segmentLength
+    }
+
+    return emptyResult
+  }
+
+  function readImageExifMetadata(file) {
+    return new Promise((resolve) => {
+      if (!file) {
+        resolve({
+          dateTaken: '',
+          dateTakenDate: '',
+          latitude: null,
+          longitude: null,
+        })
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        try {
+          const result = extractExifMetadataFromJpegArrayBuffer(reader.result)
+          resolve(result)
+        } catch (error) {
+          void error
+          resolve({
+            dateTaken: '',
+            dateTakenDate: '',
+            latitude: null,
+            longitude: null,
+          })
+        }
+      }
+      reader.onerror = () => {
+        resolve({
+          dateTaken: '',
+          dateTakenDate: '',
+          latitude: null,
+          longitude: null,
+        })
+      }
+      reader.readAsArrayBuffer(file)
+    })
+  }
+
   const messages = {
     en: {
       appTitle: 'Locations Explorer',
@@ -1140,18 +2266,50 @@
       newLocation: 'Create location',
       createSubLocation: 'Create sub-location',
       saveImage: 'Save image',
+      saveImageOpenApiForm: 'Open API upload form',
       saveImageWizardTitle: 'Save image with Upload Wizard',
       saveImageWizardLocationStep: 'Step 1: Choose image location',
-      saveImageWizardLocationHelp: 'Pick coordinates from the map. Initial coordinates come from this location.',
+      saveImageApiFormTitle: 'Save image with Wikimedia API',
+      saveImageApiFormHelp: 'Use this separate form to upload a file and provide metadata before saving.',
       saveImageCoordinateSource: 'Coordinate source',
       saveImageCoordinateSourceMap: 'Map coordinates',
       saveImageCoordinateSourceExif: 'Image EXIF coordinates',
       saveImageExifCoordinatesHint: 'Map selection is hidden. Upload Wizard uses coordinates from image EXIF metadata.',
+      saveImageResetToExifCoordinates: 'Reset to EXIF coordinates',
+      saveImageResetToWikidataCoordinates: 'Reset to Wikidata item coordinates',
       saveImageCaption: 'Caption text',
+      saveImageFile: 'Image file',
+      saveImageExifReading: 'Reading EXIF metadata from image...',
+      saveImageExifDateTaken: 'Date taken (from EXIF)',
+      saveImageExifCoordinates: 'Coordinates (from EXIF)',
+      saveImageExifMetadataMissing: 'No EXIF date or coordinates found in this file.',
+      saveImageFileRequired: 'Select an image file first.',
+      saveImageApiTargetFilename: 'Target filename on Commons',
+      saveImageFilenameFallbackBase: 'Image',
+      saveImageFilenameChecking: 'Checking filename availability...',
+      saveImageFilenameAvailable: 'Filename is available on Commons.',
+      saveImageFilenameTakenWarning: 'Filename is already in use on Commons.',
+      saveImageFilenameCheckFailed: 'Could not verify filename availability right now.',
+      saveImageOwnPhotoQuestion: 'Is this photo taken by you?',
+      saveImageOwnPhotoYes: 'Yes, own photo',
+      saveImageOwnPhotoNo: 'No, not own photo',
+      saveImageApiAuthor: 'Author',
+      saveImageApiSourceUrl: 'Source URL',
+      saveImageApiDateCreated: 'Date created',
+      saveImageApiLicenseTemplate: 'License template',
+      saveImageApiLicenseCcBySa40: 'CC BY-SA 4.0',
+      saveImageApiLicenseCcBy40: 'CC BY 4.0',
+      saveImageApiLicenseCcZero: 'CC0',
       saveImageCategories: 'Categories',
       saveImageCategoriesHelp: 'Search categories and add them to the list.',
       saveImageCategorySuggestionsEmpty: 'No category suggestions.',
-      saveImageSubcategorySuggestions: 'Subcategories from selected categories',
+      saveImageNearbyCategorySuggestions: 'Suggested categories from nearby Wikidata and OpenStreetMap items',
+      saveImageSubcategorySuggestions: 'Suggested subcategories from selected categories',
+      saveImageDepicts: 'Depicts (Wikidata P180)',
+      saveImageDepictsHelp: 'Search depicts values and add them to the list.',
+      saveImageDepictSuggestionsEmpty: 'No depicts suggestions.',
+      saveImageNearbyDepictSuggestions: 'Suggested depicts from nearby Wikidata and OpenStreetMap items',
+      saveImageCategoryHierarchyWarning: 'Both broader and more specific categories are selected. Remove broader categories to keep categorization precise.',
       addCategory: 'Add',
       removeCategory: 'Remove',
       addProperty: 'Add property',
@@ -1161,6 +2319,9 @@
       propertyQuickPicks: 'Quick picks',
       noPropertiesAvailable: 'All suggested properties are already added.',
       saveImageOpenUploadWizard: 'Open Wikimedia Commons Upload Wizard',
+      saveImageUploadWithApi: 'Save image with MediaWiki API',
+      saveImageUploadSuccess: 'Image uploaded: {filename}',
+      saveImageOpenUploadedFile: 'Open uploaded file page',
       saveImageCoordinatesRequired: 'Select coordinates on map or enable EXIF coordinates.',
       saveImageUrlPreview: 'Upload Wizard URL preview',
       createProjectTitle: 'Create Project',
@@ -1391,18 +2552,50 @@
       newLocation: 'Skapa plats',
       createSubLocation: 'Skapa underplats',
       saveImage: 'Spara bild',
+      saveImageOpenApiForm: 'Öppna API-uppladdningsformulär',
       saveImageWizardTitle: 'Spara bild med Upload Wizard',
       saveImageWizardLocationStep: 'Steg 1: Välj bildens plats',
-      saveImageWizardLocationHelp: 'Välj koordinater på kartan. Platsens koordinater används som startvärden.',
+      saveImageApiFormTitle: 'Spara bild med Wikimedia API',
+      saveImageApiFormHelp: 'Använd detta separata formulär för att ladda upp fil och ange metadata före sparning.',
       saveImageCoordinateSource: 'Koordinatkälla',
       saveImageCoordinateSourceMap: 'Kartkoordinater',
       saveImageCoordinateSourceExif: 'Bildens EXIF-koordinater',
       saveImageExifCoordinatesHint: 'Kartval är dolt. Upload Wizard använder koordinater från bildens EXIF-metadata.',
+      saveImageResetToExifCoordinates: 'Återställ till EXIF-koordinater',
+      saveImageResetToWikidataCoordinates: 'Återställ till Wikidata-objektets koordinater',
       saveImageCaption: 'Bildtext',
+      saveImageFile: 'Bildfil',
+      saveImageExifReading: 'Läser EXIF-metadata från bilden...',
+      saveImageExifDateTaken: 'Fotodatum (från EXIF)',
+      saveImageExifCoordinates: 'Koordinater (från EXIF)',
+      saveImageExifMetadataMissing: 'Ingen EXIF-datum eller koordinater hittades i filen.',
+      saveImageFileRequired: 'Välj en bildfil först.',
+      saveImageApiTargetFilename: 'Målfilnamn på Commons',
+      saveImageFilenameFallbackBase: 'Bild',
+      saveImageFilenameChecking: 'Kontrollerar om filnamnet är ledigt...',
+      saveImageFilenameAvailable: 'Filnamnet är ledigt på Commons.',
+      saveImageFilenameTakenWarning: 'Filnamnet används redan på Commons.',
+      saveImageFilenameCheckFailed: 'Det gick inte att kontrollera filnamnets tillgänglighet just nu.',
+      saveImageOwnPhotoQuestion: 'Är bilden tagen av dig?',
+      saveImageOwnPhotoYes: 'Ja, egen bild',
+      saveImageOwnPhotoNo: 'Nej, inte egen bild',
+      saveImageApiAuthor: 'Upphovsperson',
+      saveImageApiSourceUrl: 'Käll-URL',
+      saveImageApiDateCreated: 'Skapandedatum',
+      saveImageApiLicenseTemplate: 'Licensmall',
+      saveImageApiLicenseCcBySa40: 'CC BY-SA 4.0',
+      saveImageApiLicenseCcBy40: 'CC BY 4.0',
+      saveImageApiLicenseCcZero: 'CC0',
       saveImageCategories: 'Kategorier',
       saveImageCategoriesHelp: 'Sök kategorier och lägg till dem i listan.',
       saveImageCategorySuggestionsEmpty: 'Inga kategoriförslag.',
-      saveImageSubcategorySuggestions: 'Underkategorier från valda kategorier',
+      saveImageNearbyCategorySuggestions: 'Föreslagna kategorier från närliggande Wikidata- och OpenStreetMap-objekt',
+      saveImageSubcategorySuggestions: 'Föreslagna underkategorier från valda kategorier',
+      saveImageDepicts: 'Avbildar (Wikidata P180)',
+      saveImageDepictsHelp: 'Sök avbildar-värden och lägg till dem i listan.',
+      saveImageDepictSuggestionsEmpty: 'Inga avbildar-förslag.',
+      saveImageNearbyDepictSuggestions: 'Föreslagna avbildar-värden från närliggande Wikidata- och OpenStreetMap-objekt',
+      saveImageCategoryHierarchyWarning: 'Både över- och underkategorier är valda. Ta bort bredare kategorier för mer exakt kategorisering.',
       addCategory: 'Lägg till',
       removeCategory: 'Ta bort',
       addProperty: 'Lägg till egenskap',
@@ -1412,6 +2605,9 @@
       propertyQuickPicks: 'Snabbval',
       noPropertiesAvailable: 'Alla föreslagna egenskaper har redan lagts till.',
       saveImageOpenUploadWizard: 'Öppna Wikimedia Commons Upload Wizard',
+      saveImageUploadWithApi: 'Spara bild med MediaWiki API',
+      saveImageUploadSuccess: 'Bild uppladdad: {filename}',
+      saveImageOpenUploadedFile: 'Öppna den uppladdade filsidan',
       saveImageCoordinatesRequired: 'Välj koordinater på kartan eller aktivera EXIF-koordinater.',
       saveImageUrlPreview: 'Förhandsgranskning av Upload Wizard-URL',
       createProjectTitle: 'Skapa projekt',
@@ -1642,18 +2838,50 @@
       newLocation: 'Luo kohde',
       createSubLocation: 'Luo alakohde',
       saveImage: 'Tallenna kuva',
+      saveImageOpenApiForm: 'Avaa API-latauslomake',
       saveImageWizardTitle: 'Tallenna kuva Upload Wizardilla',
       saveImageWizardLocationStep: 'Vaihe 1: Valitse kuvan sijainti',
-      saveImageWizardLocationHelp: 'Valitse koordinaatit kartalta. Kohteen koordinaatteja käytetään alkuarvoina.',
+      saveImageApiFormTitle: 'Tallenna kuva Wikimedia API:lla',
+      saveImageApiFormHelp: 'Käytä tätä erillistä lomaketta tiedoston lataamiseen ja metatietojen antamiseen ennen tallennusta.',
       saveImageCoordinateSource: 'Koordinaattien lähde',
       saveImageCoordinateSourceMap: 'Karttakoordinaatit',
       saveImageCoordinateSourceExif: 'Kuvan EXIF-koordinaatit',
       saveImageExifCoordinatesHint: 'Karttavalinta on piilotettu. Upload Wizard käyttää kuvan EXIF-metatietojen koordinaatteja.',
+      saveImageResetToExifCoordinates: 'Palauta EXIF-koordinaatteihin',
+      saveImageResetToWikidataCoordinates: 'Palauta Wikidata-kohteen koordinaatteihin',
       saveImageCaption: 'Kuvateksti',
+      saveImageFile: 'Kuvatiedosto',
+      saveImageExifReading: 'Luetaan kuvan EXIF-metatietoja...',
+      saveImageExifDateTaken: 'Kuvauspäivä (EXIF)',
+      saveImageExifCoordinates: 'Koordinaatit (EXIF)',
+      saveImageExifMetadataMissing: 'Tiedostosta ei löytynyt EXIF-päivämäärää tai koordinaatteja.',
+      saveImageFileRequired: 'Valitse ensin kuvatiedosto.',
+      saveImageApiTargetFilename: 'Commonsin kohdetiedoston nimi',
+      saveImageFilenameFallbackBase: 'Kuva',
+      saveImageFilenameChecking: 'Tarkistetaan tiedostonimen saatavuutta...',
+      saveImageFilenameAvailable: 'Tiedostonimi on vapaana Commonsissa.',
+      saveImageFilenameTakenWarning: 'Tiedostonimi on jo käytössä Commonsissa.',
+      saveImageFilenameCheckFailed: 'Tiedostonimen saatavuuden tarkistus epäonnistui juuri nyt.',
+      saveImageOwnPhotoQuestion: 'Onko kuva itse ottamasi?',
+      saveImageOwnPhotoYes: 'Kyllä, oma kuva',
+      saveImageOwnPhotoNo: 'Ei, ei oma kuva',
+      saveImageApiAuthor: 'Tekijä',
+      saveImageApiSourceUrl: 'Lähde-URL',
+      saveImageApiDateCreated: 'Luontipäivä',
+      saveImageApiLicenseTemplate: 'Lisenssipohja',
+      saveImageApiLicenseCcBySa40: 'CC BY-SA 4.0',
+      saveImageApiLicenseCcBy40: 'CC BY 4.0',
+      saveImageApiLicenseCcZero: 'CC0',
       saveImageCategories: 'Luokat',
       saveImageCategoriesHelp: 'Hae luokkia ja lisää ne listaan.',
       saveImageCategorySuggestionsEmpty: 'Ei luokkaehdotuksia.',
-      saveImageSubcategorySuggestions: 'Valittujen luokkien alaluokat',
+      saveImageNearbyCategorySuggestions: 'Lähialueen Wikidata- ja OpenStreetMap-kohteiden ehdotetut luokat',
+      saveImageSubcategorySuggestions: 'Ehdotetut alaluokat nykyisten luokkien perusteella',
+      saveImageDepicts: 'Kuvassa (Wikidata P180)',
+      saveImageDepictsHelp: 'Hae P180-arvoja ja lisää ne listaan.',
+      saveImageDepictSuggestionsEmpty: 'Ei P180-ehdotuksia.',
+      saveImageNearbyDepictSuggestions: 'Lähialueen Wikidata- ja OpenStreetMap-kohteiden ehdotetut P180-arvot',
+      saveImageCategoryHierarchyWarning: 'Valittuna on sekä ylä- että alaluokkia. Poista epätarkemmat yläluokat, jotta luokitus pysyy tarkkana.',
       addCategory: 'Lisää',
       removeCategory: 'Poista',
       addProperty: 'Lisää ominaisuus',
@@ -1663,6 +2891,9 @@
       propertyQuickPicks: 'Pikavalinnat',
       noPropertiesAvailable: 'Kaikki ehdotetut ominaisuudet on jo lisätty.',
       saveImageOpenUploadWizard: 'Avaa Wikimedia Commonsin Upload Wizard',
+      saveImageUploadWithApi: 'Tallenna kuva MediaWiki API:lla',
+      saveImageUploadSuccess: 'Kuva ladattu: {filename}',
+      saveImageOpenUploadedFile: 'Avaa ladatun tiedoston sivu',
       saveImageCoordinatesRequired: 'Valitse koordinaatit kartalta tai ota EXIF-koordinaatit käyttöön.',
       saveImageUrlPreview: 'Upload Wizard -URL esikatselu',
       createProjectTitle: 'Luo projekti',
@@ -2935,7 +4166,7 @@ LIMIT {{limit}}`,
         getLocationDetailCached,
         getLocationChildrenCached,
       } = projectStore
-      const { authEnabled, authAuthenticated, authStatusLoading } = authStore
+      const { authEnabled, authAuthenticated, authStatusLoading, authUsername } = authStore
       const location = ref(null)
       const loading = ref(false)
       const error = ref('')
@@ -2968,27 +4199,366 @@ LIMIT {{limit}}`,
       let detailMapInstance = null
       let detailMapMarker = null
       const showSaveImageWizard = ref(false)
+      const showSaveImageApiForm = ref(false)
       const saveImageMapElement = ref(null)
-      const saveImageCoordinateMode = ref('map')
       const saveImageLatitude = ref('')
       const saveImageLongitude = ref('')
       const saveImageCaption = ref('')
       const saveImageCategorySearch = ref('')
       const saveImageCategorySuggestions = ref([])
       const saveImageCategoryLoading = ref(false)
+      const saveImageNearbyCategorySuggestions = ref([])
+      const saveImageNearbyCategoryLoading = ref(false)
+      const saveImageDepictSearch = ref('')
+      const saveImageDepictSuggestions = ref([])
+      const saveImageDepictLoading = ref(false)
+      const saveImageNearbyDepictSuggestions = ref([])
+      const saveImageNearbyDepictLoading = ref(false)
+      const saveImageSelectedDepicts = ref([])
+      const saveImageSelectedCategoryAncestorDedupeKeys = ref([])
+      const saveImageSelectedBroadCategoryConflictDedupeKeys = ref([])
       const saveImageSubcategorySuggestions = ref([])
       const saveImageSubcategoryLoading = ref(false)
       const saveImageSelectedCategories = ref([])
       const saveImageCategoryExistence = ref({})
       const saveImageError = ref('')
+      const saveImageFileInputElement = ref(null)
+      const saveImageSelectedFile = ref(null)
+      const saveImageExifMetadataLoading = ref(false)
+      const saveImageExifDateTaken = ref('')
+      const saveImageExifLatitude = ref(null)
+      const saveImageExifLongitude = ref(null)
+      const saveImageInitialWikidataLatitude = ref(null)
+      const saveImageInitialWikidataLongitude = ref(null)
+      const saveImageApiUploading = ref(false)
+      const saveImageUploadResult = ref(null)
+      const saveImageApiTargetFilename = ref('')
+      const saveImageApiTargetFilenameTouched = ref(false)
+      const saveImageApiTargetFilenameChecking = ref(false)
+      const saveImageApiTargetFilenameAvailable = ref(null)
+      const saveImageApiTargetFilenameCheckError = ref('')
+      const saveImageIsOwnPhoto = ref(true)
+      const saveImageApiAuthor = ref('')
+      const saveImageApiSourceUrl = ref('')
+      const saveImageApiDateCreated = ref('')
+      const saveImageApiLicenseTemplate = ref('Cc-by-sa-4.0')
       let saveImageMapInstance = null
       let saveImageMapMarker = null
       const saveImageFallbackEntityCache = new Map()
       const saveImageSubcategoryCache = new Map()
+      const saveImageParentCategoryCache = new Map()
       const saveImageCategoryExistenceRequestCache = new Map()
       let saveImageFallbackToken = 0
+      let saveImageNearbyCategoryToken = 0
+      let saveImageNearbyDepictToken = 0
+      let saveImageSelectedCategoryAncestorToken = 0
       let saveImageSubcategoryToken = 0
-      const saveImageUsesExifCoordinates = computed(() => saveImageCoordinateMode.value === 'exif')
+      let saveImageExifReadToken = 0
+      let saveImageTargetFilenameCheckToken = 0
+      const isSaveImageDialogOpen = computed(() => showSaveImageWizard.value || showSaveImageApiForm.value)
+      const saveImageSelectedFileName = computed(() => {
+        if (!saveImageSelectedFile.value || typeof saveImageSelectedFile.value !== 'object') {
+          return ''
+        }
+        const fileName = typeof saveImageSelectedFile.value.name === 'string' ? saveImageSelectedFile.value.name : ''
+        return fileName.trim()
+      })
+      const saveImageHasExifCoordinates = computed(() => (
+        Number.isFinite(saveImageExifLatitude.value) &&
+        Number.isFinite(saveImageExifLongitude.value)
+      ))
+      const saveImageHasInitialWikidataCoordinates = computed(() => (
+        Number.isFinite(saveImageInitialWikidataLatitude.value) &&
+        Number.isFinite(saveImageInitialWikidataLongitude.value)
+      ))
+      const saveImageExifCoordinatesDisplay = computed(() => {
+        if (!saveImageHasExifCoordinates.value) {
+          return ''
+        }
+        return formatCoordinatePair(
+          saveImageExifLatitude.value,
+          saveImageExifLongitude.value,
+          locale.value,
+          ''
+        )
+      })
+      const saveImageWikidataCoordinatesDisplay = computed(() => {
+        if (!saveImageHasInitialWikidataCoordinates.value) {
+          return ''
+        }
+        return formatCoordinatePair(
+          saveImageInitialWikidataLatitude.value,
+          saveImageInitialWikidataLongitude.value,
+          locale.value,
+          ''
+        )
+      })
+      const saveImageHasExifMetadata = computed(() => (
+        Boolean(saveImageExifDateTaken.value) || saveImageHasExifCoordinates.value
+      ))
+      const saveImageVisibleNearbyCategorySuggestions = computed(() => {
+        const selectedDedupeKeys = new Set(
+          saveImageSelectedCategories.value
+            .map((categoryName) => _normalizeUploadCategory(categoryName).toLowerCase())
+            .filter(Boolean),
+        )
+        const ancestorDedupeKeys = new Set(
+          Array.isArray(saveImageSelectedCategoryAncestorDedupeKeys.value)
+            ? saveImageSelectedCategoryAncestorDedupeKeys.value
+            : [],
+        )
+        const visibleSuggestions = []
+        const seenDedupeKeys = new Set()
+        for (const categoryName of saveImageNearbyCategorySuggestions.value) {
+          const normalized = _normalizeUploadCategory(categoryName)
+          if (!normalized) {
+            continue
+          }
+          const dedupeKey = normalized.toLowerCase()
+          if (
+            selectedDedupeKeys.has(dedupeKey) ||
+            ancestorDedupeKeys.has(dedupeKey) ||
+            seenDedupeKeys.has(dedupeKey)
+          ) {
+            continue
+          }
+          seenDedupeKeys.add(dedupeKey)
+          visibleSuggestions.push(normalized)
+        }
+        return visibleSuggestions
+      })
+      const saveImageVisibleNearbyDepictSuggestions = computed(() => {
+        const visibleSuggestions = []
+        const seenQids = new Set()
+        for (const suggestion of saveImageNearbyDepictSuggestions.value) {
+          if (!suggestion || typeof suggestion !== 'object') {
+            continue
+          }
+          const qid = extractWikidataId(String(suggestion.id || ''))
+          if (!qid || seenQids.has(qid)) {
+            continue
+          }
+          seenQids.add(qid)
+          visibleSuggestions.push({
+            id: qid,
+            label: typeof suggestion.label === 'string' ? suggestion.label.trim() : '',
+            description: typeof suggestion.description === 'string' ? suggestion.description.trim() : '',
+          })
+          if (visibleSuggestions.length >= SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS) {
+            break
+          }
+        }
+        return visibleSuggestions
+      })
+      const saveImageSelectedBroadCategoryConflicts = computed(() => {
+        const selectedCategoryByDedupeKey = new Map()
+        for (const categoryName of saveImageSelectedCategories.value) {
+          const normalizedCategory = _normalizeUploadCategory(categoryName)
+          if (!normalizedCategory) {
+            continue
+          }
+          const dedupeKey = normalizedCategory.toLowerCase()
+          if (selectedCategoryByDedupeKey.has(dedupeKey)) {
+            continue
+          }
+          selectedCategoryByDedupeKey.set(dedupeKey, normalizedCategory)
+        }
+
+        const conflicts = []
+        const seen = new Set()
+        const conflictDedupeKeys = Array.isArray(saveImageSelectedBroadCategoryConflictDedupeKeys.value)
+          ? saveImageSelectedBroadCategoryConflictDedupeKeys.value
+          : []
+        for (const dedupeKeyRaw of conflictDedupeKeys) {
+          const dedupeKey = String(dedupeKeyRaw || '').toLowerCase()
+          if (!dedupeKey || seen.has(dedupeKey)) {
+            continue
+          }
+          const selectedCategory = selectedCategoryByDedupeKey.get(dedupeKey)
+          if (!selectedCategory) {
+            continue
+          }
+          seen.add(dedupeKey)
+          conflicts.push(selectedCategory)
+        }
+        return conflicts
+      })
+      const saveImageShowSourceUrl = computed(() => !saveImageIsOwnPhoto.value)
+
+      function isSaveImageBroaderCategoryConflict(categoryName) {
+        const normalizedCategory = _normalizeUploadCategory(categoryName)
+        if (!normalizedCategory) {
+          return false
+        }
+        const dedupeKey = normalizedCategory.toLowerCase()
+        return saveImageSelectedBroadCategoryConflictDedupeKeys.value.some(
+          (existingKey) => String(existingKey || '').toLowerCase() === dedupeKey,
+        )
+      }
+
+      function _normalizedAuthUsername() {
+        return typeof authUsername.value === 'string' ? authUsername.value.trim() : ''
+      }
+
+      function _syncSaveImageAuthorFromOwnershipSelection() {
+        if (saveImageIsOwnPhoto.value) {
+          saveImageApiAuthor.value = _normalizedAuthUsername()
+          return
+        }
+        saveImageApiAuthor.value = ''
+      }
+
+      function _saveImageCurrentIsoDate() {
+        const now = new Date()
+        const year = String(now.getFullYear()).padStart(4, '0')
+        const month = String(now.getMonth() + 1).padStart(2, '0')
+        const day = String(now.getDate()).padStart(2, '0')
+        return `${year}-${month}-${day}`
+      }
+
+      function _saveImageFilenameDatePart() {
+        const rawDateCreated = typeof saveImageApiDateCreated.value === 'string' ? saveImageApiDateCreated.value.trim() : ''
+        const dateMatch = rawDateCreated.match(/^(\d{4}(?:-\d{2}(?:-\d{2})?)?)/)
+        if (dateMatch && dateMatch[1]) {
+          return dateMatch[1]
+        }
+        return _saveImageCurrentIsoDate()
+      }
+
+      function _saveImageSelectedFileExtension() {
+        const fileName = saveImageSelectedFileName.value
+        const extensionMatch = fileName.match(/(\.[A-Za-z0-9]{1,10})$/)
+        return extensionMatch && extensionMatch[1] ? extensionMatch[1] : ''
+      }
+
+      function _normalizeSaveImageFilenameBase(value) {
+        return String(value || '')
+          .normalize('NFKD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[\\/:*?"<>|#\[\]{}]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      }
+
+      function _buildSaveImageSuggestedTargetFilename() {
+        const locationName = (
+          location.value &&
+          typeof location.value === 'object' &&
+          typeof location.value.name === 'string'
+        )
+          ? location.value.name.trim()
+          : ''
+        const normalizedBase = _normalizeSaveImageFilenameBase(locationName)
+        const base = normalizedBase || t('saveImageFilenameFallbackBase')
+        const datePart = _saveImageFilenameDatePart()
+        const extension = _saveImageSelectedFileExtension()
+        return `${base} ${datePart}${extension}`.trim()
+      }
+
+      function _resetSaveImageApiTargetFilenameAvailability() {
+        saveImageTargetFilenameCheckToken += 1
+        saveImageApiTargetFilenameChecking.value = false
+        saveImageApiTargetFilenameAvailable.value = null
+        saveImageApiTargetFilenameCheckError.value = ''
+      }
+
+      async function _checkSaveImageApiTargetFilenameAvailability() {
+        const normalizedFilename = normalizeCommonsFilenameCandidate(saveImageApiTargetFilename.value)
+        if (!normalizedFilename) {
+          _resetSaveImageApiTargetFilenameAvailability()
+          return
+        }
+        const selectedFileExtension = _saveImageSelectedFileExtension()
+
+        const currentToken = ++saveImageTargetFilenameCheckToken
+        saveImageApiTargetFilenameChecking.value = true
+        saveImageApiTargetFilenameAvailable.value = null
+        saveImageApiTargetFilenameCheckError.value = ''
+        try {
+          const isAvailable = await checkCommonsFilenameAvailability(normalizedFilename, {
+            fallbackExtension: selectedFileExtension,
+          })
+          if (currentToken !== saveImageTargetFilenameCheckToken) {
+            return
+          }
+          saveImageApiTargetFilenameAvailable.value = typeof isAvailable === 'boolean' ? isAvailable : null
+        } catch (error) {
+          if (currentToken !== saveImageTargetFilenameCheckToken) {
+            return
+          }
+          saveImageApiTargetFilenameAvailable.value = null
+          saveImageApiTargetFilenameCheckError.value = t('saveImageFilenameCheckFailed')
+        } finally {
+          if (currentToken === saveImageTargetFilenameCheckToken) {
+            saveImageApiTargetFilenameChecking.value = false
+          }
+        }
+      }
+
+      const checkSaveImageApiTargetFilenameAvailabilityDebounced = debounce(() => {
+        void _checkSaveImageApiTargetFilenameAvailability()
+      }, 350)
+
+      function _applySuggestedSaveImageTargetFilenameIfAllowed({ force = false } = {}) {
+        if (!force && saveImageApiTargetFilenameTouched.value) {
+          return
+        }
+        const suggestedFilename = _buildSaveImageSuggestedTargetFilename()
+        if (!suggestedFilename) {
+          return
+        }
+        saveImageApiTargetFilename.value = suggestedFilename
+        saveImageApiTargetFilenameTouched.value = false
+        checkSaveImageApiTargetFilenameAvailabilityDebounced()
+      }
+
+      function onSaveImageApiTargetFilenameInput() {
+        saveImageApiTargetFilenameTouched.value = true
+        saveImageTargetFilenameCheckToken += 1
+        saveImageApiTargetFilenameChecking.value = false
+        saveImageApiTargetFilenameAvailable.value = null
+        saveImageApiTargetFilenameCheckError.value = ''
+        checkSaveImageApiTargetFilenameAvailabilityDebounced()
+      }
+
+      function onSaveImageApiTargetFilenameBlur() {
+        const normalizedFilename = normalizeCommonsFilenameCandidate(saveImageApiTargetFilename.value)
+        if (normalizedFilename !== saveImageApiTargetFilename.value) {
+          saveImageApiTargetFilename.value = normalizedFilename
+        }
+        if (!normalizedFilename) {
+          _resetSaveImageApiTargetFilenameAvailability()
+          return
+        }
+        void _checkSaveImageApiTargetFilenameAvailability()
+      }
+
+      function _saveImageCoordinatesMatchCurrent(latitude, longitude) {
+        const targetLatitude = Number(latitude)
+        const targetLongitude = Number(longitude)
+        if (!Number.isFinite(targetLatitude) || !Number.isFinite(targetLongitude)) {
+          return false
+        }
+        const currentLatitude = parseCoordinate(saveImageLatitude.value)
+        const currentLongitude = parseCoordinate(saveImageLongitude.value)
+        if (currentLatitude === null || currentLongitude === null) {
+          return false
+        }
+        return (
+          Math.abs(currentLatitude - targetLatitude) < 0.000001 &&
+          Math.abs(currentLongitude - targetLongitude) < 0.000001
+        )
+      }
+
+      const saveImageCanResetToExifCoordinates = computed(() => (
+        saveImageHasExifCoordinates.value &&
+        !_saveImageCoordinatesMatchCurrent(saveImageExifLatitude.value, saveImageExifLongitude.value)
+      ))
+
+      const saveImageCanResetToWikidataCoordinates = computed(() => (
+        saveImageHasInitialWikidataCoordinates.value &&
+        !_saveImageCoordinatesMatchCurrent(saveImageInitialWikidataLatitude.value, saveImageInitialWikidataLongitude.value)
+      ))
 
       function currentDetailCoordinates() {
         if (!location.value) {
@@ -3064,6 +4634,42 @@ LIMIT {{limit}}`,
           .trim()
           .replace(/\s+/g, '_')
         return normalized
+      }
+
+      function _normalizeSaveImageDepictItem(item) {
+        if (!item || typeof item !== 'object') {
+          return null
+        }
+        const qid = extractWikidataId(String(item.id || item.qid || item.value || ''))
+        if (!qid) {
+          return null
+        }
+        const label = typeof item.label === 'string' ? item.label.trim() : ''
+        const description = typeof item.description === 'string' ? item.description.trim() : ''
+        return {
+          id: qid,
+          label,
+          description,
+        }
+      }
+
+      function saveImageDepictDisplayLabel(item) {
+        const normalizedItem = _normalizeSaveImageDepictItem(item)
+        if (!normalizedItem) {
+          return ''
+        }
+        if (normalizedItem.label && normalizedItem.label.toLowerCase() !== normalizedItem.id.toLowerCase()) {
+          return `${normalizedItem.label} (${normalizedItem.id})`
+        }
+        return normalizedItem.id
+      }
+
+      function saveImageDepictHref(item) {
+        const normalizedItem = _normalizeSaveImageDepictItem(item)
+        if (!normalizedItem) {
+          return ''
+        }
+        return `https://www.wikidata.org/wiki/${encodeURIComponent(normalizedItem.id)}`
       }
 
       function _coordinatesFromLocation() {
@@ -3195,8 +4801,26 @@ LIMIT {{limit}}`,
         }
       }
 
+      function resetSaveImageCoordinatesToExif() {
+        if (!saveImageHasExifCoordinates.value) {
+          return
+        }
+        _setSaveImageCoordinates(saveImageExifLatitude.value, saveImageExifLongitude.value)
+      }
+
+      function resetSaveImageCoordinatesToWikidata() {
+        if (!saveImageHasInitialWikidataCoordinates.value) {
+          return
+        }
+        _setSaveImageCoordinates(saveImageInitialWikidataLatitude.value, saveImageInitialWikidataLongitude.value)
+      }
+
+      function onSaveImageOwnPhotoChange() {
+        _syncSaveImageAuthorFromOwnershipSelection()
+      }
+
       function ensureSaveImageWizardMap() {
-        if (!showSaveImageWizard.value || !saveImageMapElement.value) {
+        if (!isSaveImageDialogOpen.value || !saveImageMapElement.value) {
           destroySaveImageWizardMap()
           return
         }
@@ -3241,24 +4865,74 @@ LIMIT {{limit}}`,
       function _initializeSaveImageWizard() {
         const currentFallbackToken = ++saveImageFallbackToken
         saveImageError.value = ''
-        saveImageCoordinateMode.value = 'map'
+        saveImageUploadResult.value = null
+        saveImageApiUploading.value = false
         saveImageCategorySearch.value = ''
         saveImageCategorySuggestions.value = []
         saveImageCategoryLoading.value = false
+        saveImageNearbyCategorySuggestions.value = []
+        saveImageNearbyCategoryLoading.value = false
+        saveImageNearbyCategoryToken += 1
+        saveImageDepictSearch.value = ''
+        saveImageDepictSuggestions.value = []
+        saveImageDepictLoading.value = false
+        saveImageNearbyDepictSuggestions.value = []
+        saveImageNearbyDepictLoading.value = false
+        saveImageNearbyDepictToken += 1
         saveImageSubcategorySuggestions.value = []
         saveImageSubcategoryLoading.value = false
         saveImageSubcategoryToken += 1
+        _clearSaveImageSelectedCategoryAncestors()
         saveImageSelectedCategories.value = []
+        saveImageSelectedDepicts.value = []
+        const primaryWikidataQid = _locationWikidataQid()
+        if (primaryWikidataQid) {
+          const primaryLabel =
+            location.value && typeof location.value === 'object' && typeof location.value.name === 'string'
+              ? location.value.name.trim()
+              : ''
+          saveImageSelectedDepicts.value = [
+            {
+              id: primaryWikidataQid,
+              label: primaryLabel,
+              description: '',
+            },
+          ]
+        }
         saveImageCategoryExistence.value = {}
         saveImageCategoryExistenceRequestCache.clear()
+        saveImageSelectedFile.value = null
+        saveImageExifReadToken += 1
+        saveImageExifMetadataLoading.value = false
+        saveImageExifDateTaken.value = ''
+        saveImageExifLatitude.value = null
+        saveImageExifLongitude.value = null
+        saveImageInitialWikidataLatitude.value = null
+        saveImageInitialWikidataLongitude.value = null
+        saveImageApiTargetFilename.value = ''
+        saveImageApiTargetFilenameTouched.value = false
+        _resetSaveImageApiTargetFilenameAvailability()
+        saveImageIsOwnPhoto.value = true
+        saveImageApiAuthor.value = ''
+        saveImageApiSourceUrl.value = ''
+        saveImageApiDateCreated.value = ''
+        saveImageApiLicenseTemplate.value = 'Cc-by-sa-4.0'
+        _syncSaveImageAuthorFromOwnershipSelection()
+        if (saveImageFileInputElement.value) {
+          saveImageFileInputElement.value.value = ''
+        }
 
         const locationCoordinates = _coordinatesFromLocation()
         if (locationCoordinates) {
           saveImageLatitude.value = locationCoordinates.latitude.toFixed(6)
           saveImageLongitude.value = locationCoordinates.longitude.toFixed(6)
+          saveImageInitialWikidataLatitude.value = locationCoordinates.latitude
+          saveImageInitialWikidataLongitude.value = locationCoordinates.longitude
         } else {
           saveImageLatitude.value = ''
           saveImageLongitude.value = ''
+          saveImageInitialWikidataLatitude.value = null
+          saveImageInitialWikidataLongitude.value = null
         }
 
         saveImageCaption.value = location.value ? locationDisplayName(location.value) : ''
@@ -3279,6 +4953,8 @@ LIMIT {{limit}}`,
         if (!hasOwnCategory) {
           void _loadSaveImageFallbackCategories(currentFallbackToken)
         }
+
+        _applySuggestedSaveImageTargetFilenameIfAllowed({ force: true })
       }
 
       function displayUploadCategory(categoryName) {
@@ -3598,6 +5274,178 @@ LIMIT {{limit}}`,
         }
       }
 
+      function _clearSaveImageNearbyCategorySuggestions() {
+        saveImageNearbyCategoryToken += 1
+        saveImageNearbyCategoryLoading.value = false
+        saveImageNearbyCategorySuggestions.value = []
+      }
+
+      function _clearSaveImageNearbyDepictSuggestions() {
+        saveImageNearbyDepictToken += 1
+        saveImageNearbyDepictLoading.value = false
+        saveImageNearbyDepictSuggestions.value = []
+      }
+
+      async function _loadSaveImageNearbyCategorySuggestions(latitude, longitude) {
+        const parsedLatitude = Number(latitude)
+        const parsedLongitude = Number(longitude)
+        if (!Number.isFinite(parsedLatitude) || !Number.isFinite(parsedLongitude) || !isSaveImageDialogOpen.value) {
+          _clearSaveImageNearbyCategorySuggestions()
+          _clearSaveImageNearbyDepictSuggestions()
+          return
+        }
+
+        const currentToken = ++saveImageNearbyCategoryToken
+        const currentDepictToken = ++saveImageNearbyDepictToken
+        saveImageNearbyCategoryLoading.value = true
+        saveImageNearbyDepictLoading.value = true
+        try {
+          const [
+            wikidataNearbyCategoryResult,
+            osmNearbyCategoryResult,
+            wikidataNearbyDepictResult,
+            osmNearbyDepictResult,
+          ] = await Promise.allSettled([
+            fetchNearbyWikidataCommonsCategories(parsedLatitude, parsedLongitude, {
+              radiusMeters: SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS,
+              limit: SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+              lang: locale.value,
+            }),
+            fetchNearbyOsmCommonsCategories(parsedLatitude, parsedLongitude, {
+              radiusMeters: SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS,
+              limit: SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+            }),
+            fetchNearbyWikidataDepictItems(parsedLatitude, parsedLongitude, {
+              radiusMeters: SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS,
+              limit: SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+              lang: locale.value,
+            }),
+            fetchNearbyOsmDepictItems(parsedLatitude, parsedLongitude, {
+              radiusMeters: SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS,
+              limit: SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
+              lang: locale.value,
+            }),
+          ])
+          if (
+            currentToken !== saveImageNearbyCategoryToken
+            || currentDepictToken !== saveImageNearbyDepictToken
+            || !isSaveImageDialogOpen.value
+          ) {
+            return
+          }
+
+          const wikidataNearbyCategoryItems = (
+            wikidataNearbyCategoryResult.status === 'fulfilled' && Array.isArray(wikidataNearbyCategoryResult.value)
+              ? wikidataNearbyCategoryResult.value
+              : []
+          )
+          const osmNearbyCategoryItems = (
+            osmNearbyCategoryResult.status === 'fulfilled' && Array.isArray(osmNearbyCategoryResult.value)
+              ? osmNearbyCategoryResult.value
+              : []
+          )
+          const wikidataNearbyDepictItems = (
+            wikidataNearbyDepictResult.status === 'fulfilled' && Array.isArray(wikidataNearbyDepictResult.value)
+              ? wikidataNearbyDepictResult.value
+              : []
+          )
+          const osmNearbyDepictItems = (
+            osmNearbyDepictResult.status === 'fulfilled' && Array.isArray(osmNearbyDepictResult.value)
+              ? osmNearbyDepictResult.value
+              : []
+          )
+
+          const combinedNearbyCategoryItems = []
+          const categorySourceItems = [wikidataNearbyCategoryItems, osmNearbyCategoryItems]
+          let sourceIndex = 0
+          while (combinedNearbyCategoryItems.length < SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS) {
+            let addedAtLeastOne = false
+            for (const items of categorySourceItems) {
+              if (sourceIndex >= items.length) {
+                continue
+              }
+              combinedNearbyCategoryItems.push(items[sourceIndex])
+              addedAtLeastOne = true
+              if (combinedNearbyCategoryItems.length >= SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS) {
+                break
+              }
+            }
+            if (!addedAtLeastOne) {
+              break
+            }
+            sourceIndex += 1
+          }
+
+          const normalizedSuggestions = []
+          const seenDedupeKeys = new Set()
+          for (const nearbyItem of combinedNearbyCategoryItems) {
+            if (!nearbyItem || typeof nearbyItem !== 'object') {
+              continue
+            }
+            const normalizedCategory = _normalizeUploadCategory(nearbyItem.category)
+            if (!normalizedCategory) {
+              continue
+            }
+            const dedupeKey = normalizedCategory.toLowerCase()
+            if (seenDedupeKeys.has(dedupeKey)) {
+              continue
+            }
+            seenDedupeKeys.add(dedupeKey)
+            normalizedSuggestions.push(normalizedCategory)
+            if (normalizedSuggestions.length >= SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS) {
+              break
+            }
+          }
+          saveImageNearbyCategorySuggestions.value = normalizedSuggestions
+
+          const nearbyDepictSuggestions = []
+          const seenDepictQids = new Set()
+          for (const sourceItems of [wikidataNearbyDepictItems, osmNearbyDepictItems]) {
+            for (const nearbyItem of sourceItems) {
+              const normalizedItem = _normalizeSaveImageDepictItem(nearbyItem)
+              if (!normalizedItem) {
+                continue
+              }
+              const dedupeKey = normalizedItem.id.toLowerCase()
+              if (seenDepictQids.has(dedupeKey)) {
+                continue
+              }
+              seenDepictQids.add(dedupeKey)
+              nearbyDepictSuggestions.push(normalizedItem)
+              if (nearbyDepictSuggestions.length >= SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS) {
+                break
+              }
+            }
+            if (nearbyDepictSuggestions.length >= SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS) {
+              break
+            }
+          }
+          saveImageNearbyDepictSuggestions.value = nearbyDepictSuggestions
+        } catch (error) {
+          if (
+            currentToken !== saveImageNearbyCategoryToken
+            || currentDepictToken !== saveImageNearbyDepictToken
+          ) {
+            return
+          }
+          saveImageNearbyCategorySuggestions.value = []
+          saveImageNearbyDepictSuggestions.value = []
+        } finally {
+          if (currentToken === saveImageNearbyCategoryToken) {
+            saveImageNearbyCategoryLoading.value = false
+          }
+          if (currentDepictToken === saveImageNearbyDepictToken) {
+            saveImageNearbyDepictLoading.value = false
+          }
+        }
+      }
+
+      const refreshSaveImageNearbyCategorySuggestionsDebounced = debounce(() => {
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        void _loadSaveImageNearbyCategorySuggestions(latitude, longitude)
+      }, 300)
+
       function _categoryFromCommonsSuggestion(item) {
         if (!item || typeof item !== 'object') {
           return ''
@@ -3615,6 +5463,110 @@ LIMIT {{limit}}`,
         const name = typeof item.name === 'string' ? item.name : ''
         const title = typeof item.title === 'string' ? item.title : ''
         return _normalizeUploadCategory(commonsCategory || name || title)
+      }
+
+      function _clearSaveImageSelectedCategoryAncestors() {
+        saveImageSelectedCategoryAncestorToken += 1
+        saveImageSelectedCategoryAncestorDedupeKeys.value = []
+        saveImageSelectedBroadCategoryConflictDedupeKeys.value = []
+      }
+
+      async function _fetchSaveImageParentCategoriesForCategory(categoryName) {
+        const normalizedCategory = _normalizeUploadCategory(categoryName)
+        if (!normalizedCategory) {
+          return []
+        }
+        const cacheKey = normalizedCategory.toLowerCase()
+        if (saveImageParentCategoryCache.has(cacheKey)) {
+          return saveImageParentCategoryCache.get(cacheKey)
+        }
+
+        const requestPromise = (async () => {
+          try {
+            const payload = await fetchCommonsCategoryParents(normalizedCategory, AUTOCOMPLETE_RESULT_LIMIT)
+            return Array.isArray(payload) ? payload : []
+          } catch (error) {
+            return []
+          }
+        })()
+        saveImageParentCategoryCache.set(cacheKey, requestPromise)
+        return requestPromise
+      }
+
+      async function refreshSaveImageSelectedCategoryAncestorDedupeKeys() {
+        const currentToken = ++saveImageSelectedCategoryAncestorToken
+        const selectedCategories = Array.isArray(saveImageSelectedCategories.value)
+          ? saveImageSelectedCategories.value
+          : []
+
+        const normalizedSelectedCategories = []
+        const selectedDedupeKeys = new Set()
+        for (const categoryName of selectedCategories) {
+          const normalizedCategory = _normalizeUploadCategory(categoryName)
+          if (!normalizedCategory) {
+            continue
+          }
+          const dedupeKey = normalizedCategory.toLowerCase()
+          if (selectedDedupeKeys.has(dedupeKey)) {
+            continue
+          }
+          selectedDedupeKeys.add(dedupeKey)
+          normalizedSelectedCategories.push(normalizedCategory)
+        }
+
+        if (!isSaveImageDialogOpen.value || normalizedSelectedCategories.length === 0) {
+          saveImageSelectedCategoryAncestorDedupeKeys.value = []
+          saveImageSelectedBroadCategoryConflictDedupeKeys.value = []
+          return
+        }
+
+        saveImageSelectedCategoryAncestorDedupeKeys.value = []
+        saveImageSelectedBroadCategoryConflictDedupeKeys.value = []
+        const ancestorDedupeKeys = new Set()
+        const broadCategoryConflictDedupeKeys = new Set()
+        const visitedDedupeKeys = new Set(selectedDedupeKeys)
+        let currentLevelCategories = [...normalizedSelectedCategories]
+
+        for (let level = 1; level <= SAVE_IMAGE_SELECTED_CATEGORY_ANCESTOR_DEPTH; level += 1) {
+          if (currentLevelCategories.length === 0) {
+            break
+          }
+
+          const parentGroups = await Promise.all(
+            currentLevelCategories.map((categoryName) => _fetchSaveImageParentCategoriesForCategory(categoryName)),
+          )
+          if (currentToken !== saveImageSelectedCategoryAncestorToken || !isSaveImageDialogOpen.value) {
+            return
+          }
+
+          const nextLevelCategories = []
+          for (const parents of parentGroups) {
+            for (const parent of parents) {
+              const normalizedParent = _categoryFromCommonsSubcategory(parent)
+              if (!normalizedParent) {
+                continue
+              }
+              const dedupeKey = normalizedParent.toLowerCase()
+              if (selectedDedupeKeys.has(dedupeKey)) {
+                broadCategoryConflictDedupeKeys.add(dedupeKey)
+                continue
+              }
+              ancestorDedupeKeys.add(dedupeKey)
+              if (visitedDedupeKeys.has(dedupeKey)) {
+                continue
+              }
+              visitedDedupeKeys.add(dedupeKey)
+              nextLevelCategories.push(normalizedParent)
+            }
+          }
+          currentLevelCategories = nextLevelCategories
+        }
+
+        if (currentToken !== saveImageSelectedCategoryAncestorToken || !isSaveImageDialogOpen.value) {
+          return
+        }
+        saveImageSelectedCategoryAncestorDedupeKeys.value = Array.from(ancestorDedupeKeys)
+        saveImageSelectedBroadCategoryConflictDedupeKeys.value = Array.from(broadCategoryConflictDedupeKeys)
       }
 
       async function _fetchSaveImageSubcategoriesForCategory(categoryName) {
@@ -3641,7 +5593,7 @@ LIMIT {{limit}}`,
 
       async function loadSaveImageSubcategorySuggestions() {
         const currentToken = ++saveImageSubcategoryToken
-        if (!showSaveImageWizard.value) {
+        if (!isSaveImageDialogOpen.value) {
           return
         }
 
@@ -3659,7 +5611,7 @@ LIMIT {{limit}}`,
           selectedCategories.map((categoryName) => _fetchSaveImageSubcategoriesForCategory(categoryName)),
         )
 
-        if (currentToken !== saveImageSubcategoryToken || !showSaveImageWizard.value) {
+        if (currentToken !== saveImageSubcategoryToken || !isSaveImageDialogOpen.value) {
           return
         }
 
@@ -3771,7 +5723,202 @@ LIMIT {{limit}}`,
         addSaveImageCategoriesFromInput()
       }
 
+      function _saveImageDepictFromWikidataSuggestion(item) {
+        if (!item || typeof item !== 'object') {
+          return null
+        }
+        const qid = extractWikidataId(String(item.id || item.value || ''))
+        if (!qid) {
+          return null
+        }
+        return {
+          id: qid,
+          label: typeof item.label === 'string' ? item.label.trim() : '',
+          description: typeof item.description === 'string' ? item.description.trim() : '',
+        }
+      }
+
+      function _isSaveImageDepictSelected(qidValue) {
+        const qid = extractWikidataId(String(qidValue || ''))
+        if (!qid) {
+          return false
+        }
+        return saveImageSelectedDepicts.value.some(
+          (item) => extractWikidataId(String(item && item.id ? item.id : '')) === qid,
+        )
+      }
+
+      function _addSaveImageDepict(item) {
+        const normalizedItem = _normalizeSaveImageDepictItem(item)
+        if (!normalizedItem) {
+          return false
+        }
+        if (_isSaveImageDepictSelected(normalizedItem.id)) {
+          return false
+        }
+        saveImageSelectedDepicts.value = [
+          ...saveImageSelectedDepicts.value,
+          normalizedItem,
+        ]
+        return true
+      }
+
+      function removeSaveImageDepict(item) {
+        const qid = extractWikidataId(String(item && item.id ? item.id : item || ''))
+        if (!qid) {
+          return
+        }
+        saveImageSelectedDepicts.value = saveImageSelectedDepicts.value.filter(
+          (entry) => extractWikidataId(String(entry && entry.id ? entry.id : '')) !== qid,
+        )
+      }
+
+      const searchSaveImageDepictsDebounced = debounce(async (searchTerm) => {
+        saveImageDepictLoading.value = true
+        try {
+          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
+          const suggestions = Array.isArray(items) ? items : []
+          const uniqueSuggestions = []
+          const seen = new Set()
+          for (const suggestion of suggestions) {
+            const normalizedSuggestion = _saveImageDepictFromWikidataSuggestion(suggestion)
+            if (!normalizedSuggestion) {
+              continue
+            }
+            const dedupeKey = normalizedSuggestion.id.toLowerCase()
+            if (_isSaveImageDepictSelected(normalizedSuggestion.id) || seen.has(dedupeKey)) {
+              continue
+            }
+            seen.add(dedupeKey)
+            uniqueSuggestions.push(normalizedSuggestion)
+          }
+          saveImageDepictSuggestions.value = uniqueSuggestions
+        } catch (error) {
+          saveImageDepictSuggestions.value = []
+        } finally {
+          saveImageDepictLoading.value = false
+        }
+      }, 250)
+
+      function onSaveImageDepictInput() {
+        const query = saveImageDepictSearch.value.trim()
+        if (!query) {
+          saveImageDepictSuggestions.value = []
+          saveImageDepictLoading.value = false
+          return
+        }
+        searchSaveImageDepictsDebounced(query)
+      }
+
+      function onSaveImageDepictFocus() {
+        if (saveImageDepictSearch.value.trim()) {
+          onSaveImageDepictInput()
+        }
+      }
+
+      function hideSaveImageDepictSuggestionsSoon() {
+        window.setTimeout(() => {
+          saveImageDepictSuggestions.value = []
+        }, 140)
+      }
+
+      function selectSaveImageDepictSuggestion(item) {
+        const wasAdded = _addSaveImageDepict(item)
+        if (wasAdded) {
+          saveImageDepictSearch.value = ''
+        }
+        saveImageDepictSuggestions.value = []
+        saveImageDepictLoading.value = false
+      }
+
+      function addSaveImageDepictsFromInput() {
+        const query = saveImageDepictSearch.value.trim()
+        if (!query) {
+          return
+        }
+        const qid = extractWikidataId(query)
+        if (!qid) {
+          return
+        }
+        const wasAdded = _addSaveImageDepict({ id: qid, label: '', description: '' })
+        if (wasAdded) {
+          saveImageDepictSearch.value = ''
+        }
+        saveImageDepictSuggestions.value = []
+        saveImageDepictLoading.value = false
+      }
+
+      function onSaveImageDepictKeydown(event) {
+        if (!event || event.key !== 'Enter') {
+          return
+        }
+        event.preventDefault()
+        addSaveImageDepictsFromInput()
+      }
+
+      function selectSaveImageNearbyDepictSuggestion(item) {
+        _addSaveImageDepict(item)
+      }
+
+      async function onSaveImageFileInputChange(event) {
+        const fileList = event && event.target && event.target.files ? event.target.files : null
+        const nextFile = fileList && fileList.length > 0 ? fileList[0] : null
+        saveImageSelectedFile.value = nextFile
+        saveImageError.value = ''
+        saveImageUploadResult.value = null
+        saveImageExifReadToken += 1
+        const currentExifReadToken = saveImageExifReadToken
+        saveImageExifMetadataLoading.value = false
+        saveImageExifDateTaken.value = ''
+        saveImageExifLatitude.value = null
+        saveImageExifLongitude.value = null
+
+        if (!nextFile) {
+          return
+        }
+
+        saveImageExifMetadataLoading.value = true
+        try {
+          const exifMetadata = await readImageExifMetadata(nextFile)
+          if (currentExifReadToken !== saveImageExifReadToken) {
+            return
+          }
+          if (!exifMetadata || typeof exifMetadata !== 'object') {
+            return
+          }
+
+          const exifDateTaken = typeof exifMetadata.dateTaken === 'string' ? exifMetadata.dateTaken.trim() : ''
+          const exifDateTakenDate =
+            typeof exifMetadata.dateTakenDate === 'string' ? exifMetadata.dateTakenDate.trim() : ''
+          saveImageExifDateTaken.value = exifDateTaken || exifDateTakenDate
+
+          const exifLatitude = Number(exifMetadata.latitude)
+          const exifLongitude = Number(exifMetadata.longitude)
+          if (Number.isFinite(exifLatitude) && Number.isFinite(exifLongitude)) {
+            saveImageExifLatitude.value = exifLatitude
+            saveImageExifLongitude.value = exifLongitude
+            _setSaveImageCoordinates(exifLatitude, exifLongitude)
+          }
+
+          if (!saveImageApiDateCreated.value.trim() && exifDateTakenDate) {
+            saveImageApiDateCreated.value = exifDateTakenDate
+          }
+
+          _applySuggestedSaveImageTargetFilenameIfAllowed()
+        } catch (error) {
+          void error
+        } finally {
+          if (currentExifReadToken === saveImageExifReadToken) {
+            saveImageExifMetadataLoading.value = false
+          }
+        }
+      }
+
       function selectSaveImageSubcategorySuggestion(categoryName) {
+        _addSaveImageCategory(categoryName)
+      }
+
+      function selectSaveImageNearbyCategorySuggestion(categoryName) {
         _addSaveImageCategory(categoryName)
       }
 
@@ -3795,6 +5942,24 @@ LIMIT {{limit}}`,
         return uniqueCategories
       }
 
+      function _selectedSaveImageDepictQids() {
+        const uniqueQids = []
+        const seen = new Set()
+        for (const item of saveImageSelectedDepicts.value) {
+          const qid = extractWikidataId(String(item && item.id ? item.id : ''))
+          if (!qid) {
+            continue
+          }
+          const dedupeKey = qid.toLowerCase()
+          if (seen.has(dedupeKey)) {
+            continue
+          }
+          seen.add(dedupeKey)
+          uniqueQids.push(qid)
+        }
+        return uniqueQids
+      }
+
       function buildUploadWizardUrl() {
         const uploadUrl = new URL('https://commons.wikimedia.org/w/index.php')
         uploadUrl.searchParams.set('title', 'Special:UploadWizard')
@@ -3805,13 +5970,11 @@ LIMIT {{limit}}`,
           uploadUrl.searchParams.set('caption', caption)
         }
 
-        if (!saveImageUsesExifCoordinates.value) {
-          const latitude = parseCoordinate(saveImageLatitude.value)
-          const longitude = parseCoordinate(saveImageLongitude.value)
-          if (latitude !== null && longitude !== null) {
-            uploadUrl.searchParams.set('lat', String(latitude))
-            uploadUrl.searchParams.set('lon', String(longitude))
-          }
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        if (latitude !== null && longitude !== null) {
+          uploadUrl.searchParams.set('lat', String(latitude))
+          uploadUrl.searchParams.set('lon', String(longitude))
         }
 
         const categories = _uploadWizardCategories()
@@ -3829,33 +5992,176 @@ LIMIT {{limit}}`,
           return
         }
         _initializeSaveImageWizard()
+        showSaveImageApiForm.value = false
         showSaveImageWizard.value = true
       }
 
-      function closeSaveImageWizard() {
+      function openSaveImageApiForm() {
+        if (!canSaveImage.value) {
+          return
+        }
+        _initializeSaveImageWizard()
+        showSaveImageWizard.value = false
+        showSaveImageApiForm.value = true
+      }
+
+      function _closeSaveImageDialogs() {
         saveImageFallbackToken += 1
         saveImageSubcategoryToken += 1
         showSaveImageWizard.value = false
+        showSaveImageApiForm.value = false
         saveImageError.value = ''
+        saveImageApiUploading.value = false
+        saveImageUploadResult.value = null
+        saveImageSelectedFile.value = null
+        saveImageExifReadToken += 1
+        saveImageExifMetadataLoading.value = false
+        saveImageExifDateTaken.value = ''
+        saveImageExifLatitude.value = null
+        saveImageExifLongitude.value = null
+        saveImageInitialWikidataLatitude.value = null
+        saveImageInitialWikidataLongitude.value = null
+        saveImageApiTargetFilename.value = ''
+        saveImageApiTargetFilenameTouched.value = false
+        _resetSaveImageApiTargetFilenameAvailability()
+        saveImageIsOwnPhoto.value = true
+        saveImageApiAuthor.value = ''
+        saveImageApiSourceUrl.value = ''
+        saveImageApiDateCreated.value = ''
+        saveImageApiLicenseTemplate.value = 'Cc-by-sa-4.0'
+        if (saveImageFileInputElement.value) {
+          saveImageFileInputElement.value.value = ''
+        }
         saveImageCategorySuggestions.value = []
         saveImageCategoryLoading.value = false
+        saveImageNearbyCategorySuggestions.value = []
+        saveImageNearbyCategoryLoading.value = false
+        saveImageNearbyCategoryToken += 1
+        saveImageDepictSearch.value = ''
+        saveImageDepictSuggestions.value = []
+        saveImageDepictLoading.value = false
+        saveImageNearbyDepictSuggestions.value = []
+        saveImageNearbyDepictLoading.value = false
+        saveImageNearbyDepictToken += 1
+        saveImageSelectedDepicts.value = []
+        _clearSaveImageSelectedCategoryAncestors()
         saveImageSubcategorySuggestions.value = []
         saveImageSubcategoryLoading.value = false
         destroySaveImageWizardMap()
       }
 
+      function closeSaveImageWizard() {
+        _closeSaveImageDialogs()
+      }
+
+      function closeSaveImageApiForm() {
+        _closeSaveImageDialogs()
+      }
+
       function openCommonsUploadWizard() {
         saveImageError.value = ''
-        if (!saveImageUsesExifCoordinates.value) {
-          const latitude = parseCoordinate(saveImageLatitude.value)
-          const longitude = parseCoordinate(saveImageLongitude.value)
-          if (latitude === null || longitude === null) {
-            saveImageError.value = t('saveImageCoordinatesRequired')
-            return
-          }
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        if (latitude === null || longitude === null) {
+          saveImageError.value = t('saveImageCoordinatesRequired')
+          return
         }
         window.open(buildUploadWizardUrl(), '_blank', 'noopener,noreferrer')
-        closeSaveImageWizard()
+        _closeSaveImageDialogs()
+      }
+
+      async function saveImageViaMediaWikiApi() {
+        saveImageError.value = ''
+        saveImageUploadResult.value = null
+
+        if (!saveImageSelectedFile.value) {
+          saveImageError.value = t('saveImageFileRequired')
+          return
+        }
+        if (!authStatusLoading.value && !authAuthenticated.value) {
+          saveImageError.value = t('authRequiredForWikidataWrites')
+          return
+        }
+
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        if (latitude === null || longitude === null) {
+          saveImageError.value = t('saveImageCoordinatesRequired')
+          return
+        }
+
+        const uploadFormData = new FormData()
+        uploadFormData.append('file', saveImageSelectedFile.value)
+        uploadFormData.append('coordinate_source', 'map')
+        uploadFormData.append('caption_language', normalizeSupportedLocale(locale.value) || 'en')
+        uploadFormData.append('license_template', String(saveImageApiLicenseTemplate.value || 'Cc-by-sa-4.0'))
+
+        const caption = typeof saveImageCaption.value === 'string' ? saveImageCaption.value.trim() : ''
+        if (caption) {
+          uploadFormData.append('caption', caption)
+        }
+
+        const targetFilename = normalizeCommonsFilenameCandidate(saveImageApiTargetFilename.value)
+        if (targetFilename) {
+          uploadFormData.append('target_filename', targetFilename)
+        }
+
+        const author = typeof saveImageApiAuthor.value === 'string' ? saveImageApiAuthor.value.trim() : ''
+        if (author) {
+          uploadFormData.append('author', author)
+        }
+
+        const sourceUrl = typeof saveImageApiSourceUrl.value === 'string' ? saveImageApiSourceUrl.value.trim() : ''
+        if (!saveImageIsOwnPhoto.value && sourceUrl) {
+          uploadFormData.append('source_url', sourceUrl)
+        }
+
+        const dateCreated = typeof saveImageApiDateCreated.value === 'string'
+          ? saveImageApiDateCreated.value.trim()
+          : ''
+        if (dateCreated) {
+          uploadFormData.append('date_created', dateCreated)
+        }
+
+        uploadFormData.append('latitude', String(latitude))
+        uploadFormData.append('longitude', String(longitude))
+
+        const categories = _uploadWizardCategories()
+        if (categories.length > 0) {
+          uploadFormData.append('categories_json', JSON.stringify(categories))
+        }
+        const depicts = _selectedSaveImageDepictQids()
+        if (depicts.length > 0) {
+          uploadFormData.append('depicts_json', JSON.stringify(depicts))
+        }
+
+        const wikidataItemQid = _locationWikidataQid()
+        if (wikidataItemQid) {
+          uploadFormData.append('wikidata_item', wikidataItemQid)
+        }
+
+        saveImageApiUploading.value = true
+        try {
+          const payload = await uploadCommonsImage(uploadFormData, locale.value)
+          if (payload && typeof payload === 'object') {
+            saveImageUploadResult.value = payload
+          } else {
+            saveImageUploadResult.value = {}
+          }
+          if (saveImageFileInputElement.value) {
+            saveImageFileInputElement.value.value = ''
+          }
+          saveImageSelectedFile.value = null
+          saveImageExifReadToken += 1
+          saveImageExifMetadataLoading.value = false
+          saveImageExifDateTaken.value = ''
+          saveImageExifLatitude.value = null
+          saveImageExifLongitude.value = null
+        } catch (err) {
+          saveImageError.value = err instanceof Error ? err.message : t('loadError')
+        } finally {
+          saveImageApiUploading.value = false
+        }
       }
 
       async function loadChildren() {
@@ -4760,30 +7066,32 @@ LIMIT {{limit}}`,
       watch(
         () => props.id,
         () => {
-          if (showSaveImageWizard.value) {
-            closeSaveImageWizard()
+          if (showSaveImageWizard.value || showSaveImageApiForm.value) {
+            _closeSaveImageDialogs()
           }
         }
       )
       watch(
         [
-          () => showSaveImageWizard.value,
-          () => saveImageCoordinateMode.value,
+          () => isSaveImageDialogOpen.value,
           () => saveImageLatitude.value,
           () => saveImageLongitude.value,
         ],
-        async ([isOpen, coordinateMode]) => {
-          if (!isOpen || coordinateMode === 'exif') {
+        async ([isOpen]) => {
+          if (!isOpen) {
             destroySaveImageWizardMap()
+            _clearSaveImageNearbyCategorySuggestions()
+            _clearSaveImageNearbyDepictSuggestions()
             return
           }
+          refreshSaveImageNearbyCategorySuggestionsDebounced()
           await nextTick()
           ensureSaveImageWizardMap()
         }
       )
       watch(
         [
-          () => showSaveImageWizard.value,
+          () => isSaveImageDialogOpen.value,
           () => saveImageSelectedCategories.value.map((categoryName) => String(categoryName || '').toLowerCase()).join('|'),
         ],
         ([isOpen]) => {
@@ -4791,10 +7099,24 @@ LIMIT {{limit}}`,
             saveImageSubcategoryToken += 1
             saveImageSubcategorySuggestions.value = []
             saveImageSubcategoryLoading.value = false
+            _clearSaveImageSelectedCategoryAncestors()
             return
           }
           _refreshSaveImageCategoryExistenceState()
+          void refreshSaveImageSelectedCategoryAncestorDedupeKeys()
           void loadSaveImageSubcategorySuggestions()
+        }
+      )
+      watch(
+        [() => saveImageIsOwnPhoto.value, () => authUsername.value],
+        () => {
+          _syncSaveImageAuthorFromOwnershipSelection()
+        }
+      )
+      watch(
+        () => saveImageApiDateCreated.value,
+        () => {
+          _applySuggestedSaveImageTargetFilenameIfAllowed()
         }
       )
       onBeforeUnmount(() => {
@@ -4818,34 +7140,86 @@ LIMIT {{limit}}`,
         openDraftEditor,
         openSubLocationCreator,
         showSaveImageWizard,
+        showSaveImageApiForm,
         saveImageMapElement,
-        saveImageCoordinateMode,
-        saveImageUsesExifCoordinates,
         saveImageLatitude,
         saveImageLongitude,
         saveImageCaption,
+        saveImageFileInputElement,
+        saveImageSelectedFileName,
+        saveImageExifMetadataLoading,
+        saveImageExifDateTaken,
+        saveImageHasExifCoordinates,
+        saveImageExifCoordinatesDisplay,
+        saveImageCanResetToExifCoordinates,
+        saveImageHasInitialWikidataCoordinates,
+        saveImageWikidataCoordinatesDisplay,
+        saveImageCanResetToWikidataCoordinates,
+        saveImageHasExifMetadata,
+        saveImageApiUploading,
+        saveImageUploadResult,
+        saveImageApiTargetFilename,
+        saveImageApiTargetFilenameChecking,
+        saveImageApiTargetFilenameAvailable,
+        saveImageApiTargetFilenameCheckError,
+        saveImageIsOwnPhoto,
+        saveImageShowSourceUrl,
+        saveImageApiAuthor,
+        saveImageApiSourceUrl,
+        saveImageApiDateCreated,
+        saveImageApiLicenseTemplate,
         saveImageCategorySearch,
         saveImageCategorySuggestions,
         saveImageCategoryLoading,
+        saveImageVisibleNearbyCategorySuggestions,
+        saveImageSelectedBroadCategoryConflicts,
+        saveImageNearbyCategoryLoading,
+        saveImageDepictSearch,
+        saveImageDepictSuggestions,
+        saveImageDepictLoading,
+        saveImageVisibleNearbyDepictSuggestions,
+        saveImageNearbyDepictLoading,
         saveImageSubcategorySuggestions,
         saveImageSubcategoryLoading,
         saveImageSelectedCategories,
+        saveImageSelectedDepicts,
         saveImageCategoryExists,
         saveImageError,
         uploadWizardUrl,
         openSaveImageWizard,
+        openSaveImageApiForm,
         closeSaveImageWizard,
+        closeSaveImageApiForm,
+        onSaveImageOwnPhotoChange,
+        onSaveImageApiTargetFilenameInput,
+        onSaveImageApiTargetFilenameBlur,
+        resetSaveImageCoordinatesToExif,
+        resetSaveImageCoordinatesToWikidata,
         openCommonsUploadWizard,
+        saveImageViaMediaWikiApi,
+        onSaveImageFileInputChange,
         onSaveImageCategoryInput,
         onSaveImageCategoryFocus,
         onSaveImageCategoryKeydown,
         addSaveImageCategoriesFromInput,
         hideSaveImageCategorySuggestionsSoon,
         selectSaveImageCategory,
+        selectSaveImageNearbyCategorySuggestion,
         selectSaveImageSubcategorySuggestion,
         removeSaveImageCategory,
+        onSaveImageDepictInput,
+        onSaveImageDepictFocus,
+        onSaveImageDepictKeydown,
+        addSaveImageDepictsFromInput,
+        hideSaveImageDepictSuggestionsSoon,
+        selectSaveImageDepictSuggestion,
+        selectSaveImageNearbyDepictSuggestion,
+        removeSaveImageDepict,
+        isSaveImageBroaderCategoryConflict,
         displayUploadCategory,
         saveImageCategoryHref,
+        saveImageDepictDisplayLabel,
+        saveImageDepictHref,
         resolveLocationId,
         isInternalChildLocation,
         parentLocationId,
@@ -4914,6 +7288,9 @@ LIMIT {{limit}}`,
                   <span class="btn-icon" aria-hidden="true">&#128247;</span>
                   <span>{{ t('saveImage') }}</span>
                 </span>
+              </button>
+              <button type="button" class="primary-btn" @click="openSaveImageApiForm">
+                {{ t('saveImageOpenApiForm') }}
               </button>
             </div>
           </header>
@@ -5263,29 +7640,37 @@ LIMIT {{limit}}`,
               <fieldset class="dialog-fieldset">
                 <div class="wizard-section">
                   <h3>{{ t('saveImageWizardLocationStep') }}</h3>
-                  <p class="dialog-help">{{ t('saveImageWizardLocationHelp') }}</p>
-                  <div class="form-field">
-                    <span>{{ t('saveImageCoordinateSource') }}</span>
-                    <div class="toggle-switch" role="radiogroup" :aria-label="t('saveImageCoordinateSource')">
-                      <label class="toggle-option" :class="{ active: saveImageCoordinateMode === 'map' }">
-                        <input v-model="saveImageCoordinateMode" type="radio" value="map" />
-                        <span>{{ t('saveImageCoordinateSourceMap') }}</span>
-                      </label>
-                      <label class="toggle-option" :class="{ active: saveImageCoordinateMode === 'exif' }">
-                        <input v-model="saveImageCoordinateMode" type="radio" value="exif" />
-                        <span>{{ t('saveImageCoordinateSourceExif') }}</span>
-                      </label>
-                    </div>
+                  <div
+                    v-if="saveImageHasExifCoordinates || saveImageHasInitialWikidataCoordinates"
+                    class="save-image-coordinate-reset-actions"
+                  >
+                    <button
+                      v-if="saveImageHasExifCoordinates"
+                      type="button"
+                      class="secondary-btn"
+                      :title="saveImageExifCoordinatesDisplay"
+                      :disabled="!saveImageCanResetToExifCoordinates"
+                      @click="resetSaveImageCoordinatesToExif"
+                    >
+                      {{ t('saveImageResetToExifCoordinates') }}
+                    </button>
+                    <button
+                      v-if="saveImageHasInitialWikidataCoordinates"
+                      type="button"
+                      class="secondary-btn"
+                      :title="saveImageWikidataCoordinatesDisplay"
+                      :disabled="!saveImageCanResetToWikidataCoordinates"
+                      @click="resetSaveImageCoordinatesToWikidata"
+                    >
+                      {{ t('saveImageResetToWikidataCoordinates') }}
+                    </button>
                   </div>
-                  <template v-if="!saveImageUsesExifCoordinates">
-                    <div ref="saveImageMapElement" class="map-canvas picker-map" aria-label="upload wizard coordinate picker map"></div>
-                    <p class="dialog-help">
-                      {{ t('coordinates') }}:
-                      {{ displayValue(saveImageLatitude, t('noValue')) }},
-                      {{ displayValue(saveImageLongitude, t('noValue')) }}
-                    </p>
-                  </template>
-                  <p v-else class="dialog-help">{{ t('saveImageExifCoordinatesHint') }}</p>
+                  <div ref="saveImageMapElement" class="map-canvas picker-map" aria-label="upload wizard coordinate picker map"></div>
+                  <p class="dialog-help">
+                    {{ t('coordinates') }}:
+                    {{ displayValue(saveImageLatitude, t('noValue')) }},
+                    {{ displayValue(saveImageLongitude, t('noValue')) }}
+                  </p>
                 </div>
 
                 <label class="form-field">
@@ -5296,13 +7681,21 @@ LIMIT {{limit}}`,
                 <div class="form-field">
                   <span>{{ t('saveImageCategories') }}</span>
                   <ul v-if="saveImageSelectedCategories.length > 0" class="category-chip-list">
-                    <li v-for="category in saveImageSelectedCategories" :key="category" class="category-chip">
+                    <li
+                      v-for="category in saveImageSelectedCategories"
+                      :key="category"
+                      class="category-chip"
+                      :class="{ 'broader-category-conflict': isSaveImageBroaderCategoryConflict(category) }"
+                    >
                       <a
                         :href="saveImageCategoryHref(category)"
                         target="_blank"
                         rel="noreferrer"
                         class="category-chip-link"
-                        :class="{ missing: saveImageCategoryExists(category) === false }"
+                        :class="{
+                          missing: saveImageCategoryExists(category) === false,
+                          'broader-category-conflict-link': isSaveImageBroaderCategoryConflict(category),
+                        }"
                       >
                         {{ displayUploadCategory(category) }}
                       </a>
@@ -5316,6 +7709,14 @@ LIMIT {{limit}}`,
                       </button>
                     </li>
                   </ul>
+                  <div
+                    v-if="saveImageSelectedBroadCategoryConflicts.length > 0"
+                    class="save-image-subcategory-suggestions"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <p class="dialog-help warning">{{ t('saveImageCategoryHierarchyWarning') }}</p>
+                  </div>
                   <div class="save-image-category-entry">
                     <input
                       v-model="saveImageCategorySearch"
@@ -5365,6 +7766,22 @@ LIMIT {{limit}}`,
                   >
                     {{ t('searching') }}
                   </p>
+                  <div v-if="saveImageVisibleNearbyCategorySuggestions.length > 0" class="save-image-subcategory-suggestions">
+                    <p class="dialog-help">{{ t('saveImageNearbyCategorySuggestions') }}</p>
+                    <ul class="category-chip-list">
+                      <li v-for="category in saveImageVisibleNearbyCategorySuggestions" :key="'nearby-' + category">
+                        <button type="button" class="subcategory-suggestion-btn" @click="selectSaveImageNearbyCategorySuggestion(category)">
+                          + {{ displayUploadCategory(category) }}
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                  <p
+                    v-else-if="saveImageNearbyCategoryLoading"
+                    class="dialog-help"
+                  >
+                    {{ t('searching') }}
+                  </p>
                   <p class="dialog-help">{{ t('saveImageCategoriesHelp') }}</p>
                 </div>
 
@@ -5381,6 +7798,368 @@ LIMIT {{limit}}`,
                 </button>
                 <button type="button" class="primary-btn" @click="openCommonsUploadWizard">
                   {{ t('saveImageOpenUploadWizard') }}
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <div v-if="showSaveImageApiForm" class="dialog-backdrop" @click.self="closeSaveImageApiForm">
+            <section class="dialog-card dialog-card-wide" role="dialog" aria-modal="true">
+              <h2>{{ t('saveImageApiFormTitle') }}</h2>
+              <fieldset class="dialog-fieldset">
+                <p class="dialog-help">{{ t('saveImageApiFormHelp') }}</p>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageFile') }}</span>
+                  <input
+                    ref="saveImageFileInputElement"
+                    type="file"
+                    accept="image/*"
+                    @change="onSaveImageFileInputChange"
+                  />
+                  <p v-if="saveImageSelectedFileName" class="dialog-help">{{ saveImageSelectedFileName }}</p>
+                  <p
+                    v-if="saveImageExifMetadataLoading"
+                    class="dialog-help"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {{ t('saveImageExifReading') }}
+                  </p>
+                  <p v-if="saveImageExifDateTaken" class="dialog-help">
+                    {{ t('saveImageExifDateTaken') }}: {{ saveImageExifDateTaken }}
+                  </p>
+                  <p v-if="saveImageHasExifCoordinates" class="dialog-help">
+                    {{ t('saveImageExifCoordinates') }}: {{ saveImageExifCoordinatesDisplay }}
+                  </p>
+                  <p
+                    v-if="saveImageSelectedFileName && !saveImageExifMetadataLoading && !saveImageHasExifMetadata"
+                    class="dialog-help"
+                  >
+                    {{ t('saveImageExifMetadataMissing') }}
+                  </p>
+                </label>
+
+                <div class="form-field">
+                  <span>{{ t('saveImageOwnPhotoQuestion') }}</span>
+                  <div class="toggle-switch" role="radiogroup" :aria-label="t('saveImageOwnPhotoQuestion')">
+                    <label class="toggle-option" :class="{ active: saveImageIsOwnPhoto }">
+                      <input v-model="saveImageIsOwnPhoto" type="radio" :value="true" @change="onSaveImageOwnPhotoChange" />
+                      <span>{{ t('saveImageOwnPhotoYes') }}</span>
+                    </label>
+                    <label class="toggle-option" :class="{ active: !saveImageIsOwnPhoto }">
+                      <input v-model="saveImageIsOwnPhoto" type="radio" :value="false" @change="onSaveImageOwnPhotoChange" />
+                      <span>{{ t('saveImageOwnPhotoNo') }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="wizard-section">
+                  <h3>{{ t('saveImageWizardLocationStep') }}</h3>
+                  <div
+                    v-if="saveImageHasExifCoordinates || saveImageHasInitialWikidataCoordinates"
+                    class="save-image-coordinate-reset-actions"
+                  >
+                    <button
+                      v-if="saveImageHasExifCoordinates"
+                      type="button"
+                      class="secondary-btn"
+                      :title="saveImageExifCoordinatesDisplay"
+                      :disabled="!saveImageCanResetToExifCoordinates"
+                      @click="resetSaveImageCoordinatesToExif"
+                    >
+                      {{ t('saveImageResetToExifCoordinates') }}
+                    </button>
+                    <button
+                      v-if="saveImageHasInitialWikidataCoordinates"
+                      type="button"
+                      class="secondary-btn"
+                      :title="saveImageWikidataCoordinatesDisplay"
+                      :disabled="!saveImageCanResetToWikidataCoordinates"
+                      @click="resetSaveImageCoordinatesToWikidata"
+                    >
+                      {{ t('saveImageResetToWikidataCoordinates') }}
+                    </button>
+                  </div>
+                  <div ref="saveImageMapElement" class="map-canvas picker-map" aria-label="api upload coordinate picker map"></div>
+                  <p class="dialog-help">
+                    {{ t('coordinates') }}:
+                    {{ displayValue(saveImageLatitude, t('noValue')) }},
+                    {{ displayValue(saveImageLongitude, t('noValue')) }}
+                  </p>
+                </div>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageApiTargetFilename') }}</span>
+                  <input
+                    v-model="saveImageApiTargetFilename"
+                    type="text"
+                    maxlength="255"
+                    @input="onSaveImageApiTargetFilenameInput"
+                    @blur="onSaveImageApiTargetFilenameBlur"
+                  />
+                  <p v-if="saveImageApiTargetFilenameChecking" class="dialog-help">
+                    {{ t('saveImageFilenameChecking') }}
+                  </p>
+                  <p v-else-if="saveImageApiTargetFilenameAvailable === false" class="dialog-help warning" role="status" aria-live="polite">
+                    {{ t('saveImageFilenameTakenWarning') }}
+                  </p>
+                  <p v-else-if="saveImageApiTargetFilenameAvailable === true" class="dialog-help success" role="status" aria-live="polite">
+                    {{ t('saveImageFilenameAvailable') }}
+                  </p>
+                  <p v-else-if="saveImageApiTargetFilenameCheckError" class="dialog-help warning" role="status" aria-live="polite">
+                    {{ saveImageApiTargetFilenameCheckError }}
+                  </p>
+                </label>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageCaption') }}</span>
+                  <input v-model="saveImageCaption" type="text" maxlength="255" />
+                </label>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageApiAuthor') }}</span>
+                  <input v-model="saveImageApiAuthor" type="text" maxlength="255" readonly />
+                </label>
+
+                <label v-if="saveImageShowSourceUrl" class="form-field">
+                  <span>{{ t('saveImageApiSourceUrl') }}</span>
+                  <input v-model="saveImageApiSourceUrl" type="url" maxlength="500" />
+                </label>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageApiDateCreated') }}</span>
+                  <input v-model="saveImageApiDateCreated" type="text" maxlength="32" placeholder="YYYY-MM-DD" />
+                </label>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageApiLicenseTemplate') }}</span>
+                  <select v-model="saveImageApiLicenseTemplate">
+                    <option value="Cc-by-sa-4.0">{{ t('saveImageApiLicenseCcBySa40') }}</option>
+                    <option value="Cc-by-4.0">{{ t('saveImageApiLicenseCcBy40') }}</option>
+                    <option value="Cc-zero">{{ t('saveImageApiLicenseCcZero') }}</option>
+                  </select>
+                </label>
+
+                <div class="form-field">
+                  <span>{{ t('saveImageCategories') }}</span>
+                  <ul v-if="saveImageSelectedCategories.length > 0" class="category-chip-list">
+                    <li
+                      v-for="category in saveImageSelectedCategories"
+                      :key="category"
+                      class="category-chip"
+                      :class="{ 'broader-category-conflict': isSaveImageBroaderCategoryConflict(category) }"
+                    >
+                      <a
+                        :href="saveImageCategoryHref(category)"
+                        target="_blank"
+                        rel="noreferrer"
+                        class="category-chip-link"
+                        :class="{
+                          missing: saveImageCategoryExists(category) === false,
+                          'broader-category-conflict-link': isSaveImageBroaderCategoryConflict(category),
+                        }"
+                      >
+                        {{ displayUploadCategory(category) }}
+                      </a>
+                      <button
+                        type="button"
+                        class="chip-remove"
+                        :aria-label="t('removeCategory')"
+                        @click="removeSaveImageCategory(category)"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  </ul>
+                  <div
+                    v-if="saveImageSelectedBroadCategoryConflicts.length > 0"
+                    class="save-image-subcategory-suggestions"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <p class="dialog-help warning">{{ t('saveImageCategoryHierarchyWarning') }}</p>
+                  </div>
+                  <div class="save-image-category-entry">
+                    <input
+                      v-model="saveImageCategorySearch"
+                      type="text"
+                      :placeholder="t('commonsPlaceholder')"
+                      @input="onSaveImageCategoryInput"
+                      @focus="onSaveImageCategoryFocus"
+                      @blur="hideSaveImageCategorySuggestionsSoon"
+                      @keydown="onSaveImageCategoryKeydown"
+                    />
+                    <button
+                      type="button"
+                      class="secondary-btn"
+                      :disabled="!saveImageCategorySearch.trim()"
+                      @click.stop="addSaveImageCategoriesFromInput"
+                    >
+                      {{ t('addCategory') }}
+                    </button>
+                  </div>
+                  <ul v-if="saveImageCategorySuggestions.length > 0" class="autocomplete-list">
+                    <li v-for="category in saveImageCategorySuggestions" :key="category">
+                      <button type="button" class="autocomplete-option" @mousedown.prevent.stop @click.stop="selectSaveImageCategory(category)">
+                        {{ displayUploadCategory(category) }}
+                      </button>
+                    </li>
+                  </ul>
+                  <p v-if="saveImageCategoryLoading" class="dialog-help">{{ t('searching') }}</p>
+                  <p
+                    v-else-if="saveImageCategorySearch.trim() && !saveImageCategoryLoading && saveImageCategorySuggestions.length === 0"
+                    class="autocomplete-empty"
+                  >
+                    {{ t('saveImageCategorySuggestionsEmpty') }}
+                  </p>
+                  <div v-if="saveImageSubcategorySuggestions.length > 0" class="save-image-subcategory-suggestions">
+                    <p class="dialog-help">{{ t('saveImageSubcategorySuggestions') }}</p>
+                    <ul class="category-chip-list">
+                      <li v-for="category in saveImageSubcategorySuggestions" :key="'subcategory-' + category">
+                        <button type="button" class="subcategory-suggestion-btn" @click="selectSaveImageSubcategorySuggestion(category)">
+                          + {{ displayUploadCategory(category) }}
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                  <p
+                    v-else-if="saveImageSubcategoryLoading && saveImageSelectedCategories.length > 0"
+                    class="dialog-help"
+                  >
+                    {{ t('searching') }}
+                  </p>
+                  <div v-if="saveImageVisibleNearbyCategorySuggestions.length > 0" class="save-image-subcategory-suggestions">
+                    <p class="dialog-help">{{ t('saveImageNearbyCategorySuggestions') }}</p>
+                    <ul class="category-chip-list">
+                      <li v-for="category in saveImageVisibleNearbyCategorySuggestions" :key="'nearby-' + category">
+                        <button type="button" class="subcategory-suggestion-btn" @click="selectSaveImageNearbyCategorySuggestion(category)">
+                          + {{ displayUploadCategory(category) }}
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                  <p
+                    v-else-if="saveImageNearbyCategoryLoading"
+                    class="dialog-help"
+                  >
+                    {{ t('searching') }}
+                  </p>
+                  <p class="dialog-help">{{ t('saveImageCategoriesHelp') }}</p>
+                </div>
+
+                <div class="form-field">
+                  <span>{{ t('saveImageDepicts') }}</span>
+                  <ul v-if="saveImageSelectedDepicts.length > 0" class="category-chip-list">
+                    <li
+                      v-for="depictItem in saveImageSelectedDepicts"
+                      :key="'depict-' + depictItem.id"
+                      class="category-chip"
+                    >
+                      <a
+                        :href="saveImageDepictHref(depictItem)"
+                        target="_blank"
+                        rel="noreferrer"
+                        class="category-chip-link"
+                      >
+                        {{ saveImageDepictDisplayLabel(depictItem) }}
+                      </a>
+                      <button
+                        type="button"
+                        class="chip-remove"
+                        :aria-label="t('removeCategory')"
+                        @click="removeSaveImageDepict(depictItem)"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  </ul>
+                  <div class="save-image-category-entry">
+                    <input
+                      v-model="saveImageDepictSearch"
+                      type="text"
+                      :placeholder="t('wikidataItemPlaceholder')"
+                      @input="onSaveImageDepictInput"
+                      @focus="onSaveImageDepictFocus"
+                      @blur="hideSaveImageDepictSuggestionsSoon"
+                      @keydown="onSaveImageDepictKeydown"
+                    />
+                    <button
+                      type="button"
+                      class="secondary-btn"
+                      :disabled="!saveImageDepictSearch.trim()"
+                      @click.stop="addSaveImageDepictsFromInput"
+                    >
+                      {{ t('addCategory') }}
+                    </button>
+                  </div>
+                  <ul v-if="saveImageDepictSuggestions.length > 0" class="autocomplete-list">
+                    <li v-for="depictItem in saveImageDepictSuggestions" :key="'depict-suggestion-' + depictItem.id">
+                      <button
+                        type="button"
+                        class="autocomplete-option"
+                        @mousedown.prevent.stop
+                        @click.stop="selectSaveImageDepictSuggestion(depictItem)"
+                      >
+                        {{ saveImageDepictDisplayLabel(depictItem) }}
+                      </button>
+                    </li>
+                  </ul>
+                  <p v-if="saveImageDepictLoading" class="dialog-help">{{ t('searching') }}</p>
+                  <p
+                    v-else-if="saveImageDepictSearch.trim() && !saveImageDepictLoading && saveImageDepictSuggestions.length === 0"
+                    class="autocomplete-empty"
+                  >
+                    {{ t('saveImageDepictSuggestionsEmpty') }}
+                  </p>
+                  <div v-if="saveImageVisibleNearbyDepictSuggestions.length > 0" class="save-image-subcategory-suggestions">
+                    <p class="dialog-help">{{ t('saveImageNearbyDepictSuggestions') }}</p>
+                    <ul class="category-chip-list">
+                      <li v-for="depictItem in saveImageVisibleNearbyDepictSuggestions" :key="'nearby-depict-' + depictItem.id">
+                        <button type="button" class="subcategory-suggestion-btn" @click="selectSaveImageNearbyDepictSuggestion(depictItem)">
+                          + {{ saveImageDepictDisplayLabel(depictItem) }}
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                  <p
+                    v-else-if="saveImageNearbyDepictLoading"
+                    class="dialog-help"
+                  >
+                    {{ t('searching') }}
+                  </p>
+                  <p class="dialog-help">{{ t('saveImageDepictsHelp') }}</p>
+                </div>
+
+                <p v-if="saveImageError" class="status error" role="alert">{{ saveImageError }}</p>
+                <p
+                  v-if="saveImageUploadResult && saveImageUploadResult.filename"
+                  class="status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {{ t('saveImageUploadSuccess', { filename: saveImageUploadResult.filename }) }}
+                  <a
+                    v-if="isHttpUrl(saveImageUploadResult.file_page_url)"
+                    :href="saveImageUploadResult.file_page_url"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {{ t('saveImageOpenUploadedFile') }}
+                  </a>
+                </p>
+              </fieldset>
+              <div class="dialog-actions">
+                <button type="button" class="secondary-btn" @click="closeSaveImageApiForm">
+                  {{ t('cancel') }}
+                </button>
+                <button
+                  type="button"
+                  class="primary-btn"
+                  :disabled="saveImageApiUploading"
+                  @click="saveImageViaMediaWikiApi"
+                >
+                  {{ saveImageApiUploading ? t('saving') : t('saveImageUploadWithApi') }}
                 </button>
               </div>
             </section>

@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import date
 
@@ -229,6 +230,141 @@ class AddExistingWikidataItemSerializer(serializers.Serializer):
         if not qid:
             raise serializers.ValidationError('source_language_of_work_p407 must be a valid Wikidata QID.')
         return qid
+
+
+class CommonsImageUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    caption = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    caption_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
+    target_filename = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    author = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    source_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
+    date_created = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    license_template = serializers.ChoiceField(
+        choices=('Cc-by-sa-4.0', 'Cc-by-4.0', 'Cc-zero'),
+        required=False,
+        default='Cc-by-sa-4.0',
+    )
+    categories_json = serializers.CharField(required=False, allow_blank=True)
+    depicts_json = serializers.CharField(required=False, allow_blank=True)
+    coordinate_source = serializers.ChoiceField(
+        choices=('map', 'exif'),
+        required=False,
+        default='map',
+    )
+    latitude = serializers.FloatField(required=False)
+    longitude = serializers.FloatField(required=False)
+    wikidata_item = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    def validate_caption_language(self, value: str) -> str:
+        raw_value = (value or '').strip().lower()
+        if not raw_value:
+            return ''
+        if re.fullmatch(r'[a-z]{2,12}', raw_value):
+            return raw_value
+        raise serializers.ValidationError('caption_language must be a valid language code.')
+
+    def validate_target_filename(self, value: str) -> str:
+        raw_value = str(value or '').strip()
+        if not raw_value:
+            return ''
+        basename = raw_value.replace('\\', '/').split('/')[-1].strip()
+        if not basename:
+            raise serializers.ValidationError('target_filename must be a valid filename.')
+        if ':' in basename:
+            raise serializers.ValidationError('target_filename cannot contain colon (:).')
+        if '\n' in basename or '\r' in basename:
+            raise serializers.ValidationError('target_filename cannot contain newline characters.')
+        return basename
+
+    def validate_author(self, value: str) -> str:
+        return str(value or '').strip()
+
+    def validate_date_created(self, value: str) -> str:
+        return _normalize_date_like_input(value, 'date_created')
+
+    def validate_wikidata_item(self, value: str) -> str:
+        raw_value = (value or '').strip()
+        if not raw_value:
+            return ''
+        qid = _normalize_wikidata_qid(raw_value)
+        if not qid:
+            raise serializers.ValidationError('wikidata_item must be a valid Wikidata QID.')
+        return qid
+
+    def validate(self, attrs):
+        coordinate_source = str(attrs.get('coordinate_source') or 'map').strip().lower()
+        latitude = attrs.get('latitude')
+        longitude = attrs.get('longitude')
+
+        if coordinate_source == 'map':
+            if latitude is None or longitude is None:
+                raise serializers.ValidationError(
+                    {'latitude': 'Latitude and longitude are required when coordinate_source is map.'}
+                )
+            if latitude < -90 or latitude > 90:
+                raise serializers.ValidationError({'latitude': 'Latitude must be between -90 and 90.'})
+            if longitude < -180 or longitude > 180:
+                raise serializers.ValidationError({'longitude': 'Longitude must be between -180 and 180.'})
+        else:
+            attrs['latitude'] = None
+            attrs['longitude'] = None
+
+        raw_categories_json = str(attrs.pop('categories_json', '') or '').strip()
+        categories: list[str] = []
+        seen_categories: set[str] = set()
+        if raw_categories_json:
+            try:
+                parsed_categories = json.loads(raw_categories_json)
+            except json.JSONDecodeError as exc:
+                raise serializers.ValidationError({'categories_json': 'Must be valid JSON list.'}) from exc
+            if not isinstance(parsed_categories, list):
+                raise serializers.ValidationError({'categories_json': 'Must be a JSON list.'})
+
+            for index, raw_category in enumerate(parsed_categories):
+                normalized = str(raw_category or '').strip()
+                if not normalized:
+                    continue
+                normalized = re.sub(r'^category:\s*', '', normalized, flags=re.IGNORECASE).strip()
+                normalized = re.sub(r'\s+', '_', normalized)
+                if not normalized:
+                    continue
+                dedupe_key = normalized.lower()
+                if dedupe_key in seen_categories:
+                    continue
+                if len(normalized) > 255:
+                    raise serializers.ValidationError(
+                        {'categories_json': f'Category at index {index} is too long.'}
+                    )
+                seen_categories.add(dedupe_key)
+                categories.append(normalized)
+
+        raw_depicts_json = str(attrs.pop('depicts_json', '') or '').strip()
+        depicts: list[str] = []
+        seen_depicts: set[str] = set()
+        if raw_depicts_json:
+            try:
+                parsed_depicts = json.loads(raw_depicts_json)
+            except json.JSONDecodeError as exc:
+                raise serializers.ValidationError({'depicts_json': 'Must be valid JSON list.'}) from exc
+            if not isinstance(parsed_depicts, list):
+                raise serializers.ValidationError({'depicts_json': 'Must be a JSON list.'})
+
+            for index, raw_depict in enumerate(parsed_depicts):
+                qid = _normalize_wikidata_qid(str(raw_depict or ''))
+                if not qid:
+                    raise serializers.ValidationError(
+                        {'depicts_json': f'Value at index {index} must be a valid Wikidata QID.'}
+                    )
+                dedupe_key = qid.lower()
+                if dedupe_key in seen_depicts:
+                    continue
+                seen_depicts.add(dedupe_key)
+                depicts.append(qid)
+
+        attrs['categories'] = categories
+        attrs['depicts'] = depicts
+        return attrs
 
 
 class CreateWikidataItemSerializer(serializers.Serializer):

@@ -7,12 +7,14 @@ from urllib.parse import quote
 from django.conf import settings
 from django.utils import translation
 from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import DraftLocation
 from .serializers import (
     AddExistingWikidataItemSerializer,
+    CommonsImageUploadSerializer,
     CreateWikidataItemSerializer,
     DraftLocationSerializer,
     LocationSerializer,
@@ -37,6 +39,7 @@ from .services import (
     search_commons_categories,
     search_geocode_places,
     reverse_geocode_places,
+    upload_image_to_commons,
     search_wikidata_entities,
 )
 
@@ -883,6 +886,47 @@ class CommonsCategorySearchAPIView(BaseLocationAPIView):
         except ExternalServiceError as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(categories)
+
+
+class CommonsImageUploadAPIView(BaseLocationAPIView):
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        auth_error = self._require_authenticated_user(request)
+        if auth_error is not None:
+            return auth_error
+        oauth_credentials, oauth_error, oauth_status = _mediawiki_oauth_credentials_for_request(request)
+        if oauth_credentials is None:
+            return Response({'detail': oauth_error}, status=oauth_status)
+
+        serializer = CommonsImageUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        lang = self._get_lang(request)
+        caption_language = str(serializer.validated_data.get('caption_language') or lang or 'en').strip()
+        try:
+            result = upload_image_to_commons(
+                image_file=serializer.validated_data['file'],
+                caption=str(serializer.validated_data.get('caption') or '').strip(),
+                caption_language=caption_language,
+                target_filename=str(serializer.validated_data.get('target_filename') or '').strip(),
+                author=str(serializer.validated_data.get('author') or '').strip(),
+                source_url=str(serializer.validated_data.get('source_url') or '').strip(),
+                date_created=str(serializer.validated_data.get('date_created') or '').strip(),
+                license_template=str(serializer.validated_data.get('license_template') or 'Cc-by-sa-4.0').strip(),
+                categories=list(serializer.validated_data.get('categories') or []),
+                depicts=list(serializer.validated_data.get('depicts') or []),
+                wikidata_item=str(serializer.validated_data.get('wikidata_item') or '').strip(),
+                coordinate_source=str(serializer.validated_data.get('coordinate_source') or 'map').strip(),
+                latitude=serializer.validated_data.get('latitude'),
+                longitude=serializer.validated_data.get('longitude'),
+                oauth_token=oauth_credentials['oauth_token'],
+                oauth_token_secret=oauth_credentials['oauth_token_secret'],
+            )
+        except (ExternalServiceError, WikidataWriteError) as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response(result, status=status.HTTP_201_CREATED)
 
 
 class GeocodeSearchAPIView(BaseLocationAPIView):
