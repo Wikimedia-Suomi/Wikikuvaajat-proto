@@ -1099,6 +1099,25 @@ textarea:focus-visible {
   position: relative;
 }
 
+.coordinate-picker-widget {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.68rem;
+  border: 1px solid #c9dcec;
+  border-radius: 0.72rem;
+  background: linear-gradient(180deg, #fafdff 0%, #f3f9ff 100%);
+}
+
+.coordinate-picker-widget > h3 {
+  margin: 0;
+  color: #0f3f58;
+  font-size: 0.98rem;
+}
+
+.coordinate-picker-map-shell {
+  position: relative;
+}
+
 .save-image-map-shell {
   position: relative;
 }
@@ -1289,6 +1308,43 @@ textarea:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 0.55rem;
+}
+
+.save-image-file-preview {
+  margin-top: 0.45rem;
+}
+
+.save-image-file-preview-image {
+  display: block;
+  width: min(100%, 460px);
+  max-height: 280px;
+  object-fit: contain;
+  border-radius: 0.6rem;
+  border: 1px solid #c9d9e8;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
+  background: #f8fafc;
+}
+
+.save-image-location-preview {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.save-image-location-preview-map {
+  width: min(100%, 520px);
+  min-height: 220px;
+  max-height: 260px;
+  border-radius: 0.6rem;
+  border: 1px solid #c9d9e8;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
+  background: #f8fafc;
+}
+
+.save-image-coordinate-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
 }
 
 .subcategory-suggestion-btn {
