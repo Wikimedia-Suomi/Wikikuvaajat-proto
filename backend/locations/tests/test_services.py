@@ -377,19 +377,35 @@ class WikidataWriteAuthTests(SimpleTestCase):
         )
 
 
+    @patch('locations.services._commons_api_get')
     @patch('locations.services._commons_api_post')
     @patch('locations.services._commons_oauth_session')
     def test_upload_image_to_commons_uploads_file_and_returns_urls(
         self,
         commons_oauth_session_mock,
         commons_api_post_mock,
+        commons_api_get_mock,
     ):
         session = Mock()
         commons_oauth_session_mock.return_value = (session, 'csrf-token')
-        commons_api_post_mock.return_value = {
-            'upload': {
-                'result': 'Success',
-                'filename': 'Example uploaded.jpg',
+        commons_api_post_mock.side_effect = [
+            {
+                'upload': {
+                    'result': 'Success',
+                    'filename': 'Example uploaded.jpg',
+                }
+            },
+            {'claim': {'id': 'M12345$point-of-view'}},
+        ]
+        commons_api_get_mock.return_value = {
+            'query': {
+                'pages': [
+                    {
+                        'pageid': 12345,
+                        'title': 'File:Example uploaded.jpg',
+                        'pageprops': {'wikibase_item': 'M12345'},
+                    }
+                ]
             }
         }
         image_file = SimpleUploadedFile('Example uploaded.jpg', b'image-bytes', content_type='image/jpeg')
@@ -422,25 +438,45 @@ class WikidataWriteAuthTests(SimpleTestCase):
             'https://commons.wikimedia.org/wiki/Special:FilePath/Example_uploaded.jpg',
         )
         self.assertEqual(result['categories'], ['Helsinki', 'Finland'])
+        self.assertEqual(result['point_of_view']['latitude'], 60.1699)
+        self.assertEqual(result['point_of_view']['longitude'], 24.9384)
         self.assertEqual(result['wikidata_item'], 'Q1757')
         commons_oauth_session_mock.assert_called_once_with(
             oauth_token='token',
             oauth_token_secret='secret',
         )
-        commons_api_post_mock.assert_called_once()
-        call_args = commons_api_post_mock.call_args
-        self.assertEqual(call_args.kwargs['data']['action'], 'upload')
-        self.assertEqual(call_args.kwargs['data']['filename'], 'Custom_name.jpg')
-        self.assertEqual(call_args.kwargs['data']['token'], 'csrf-token')
-        self.assertIn('[[Category:Helsinki]]', call_args.kwargs['data']['text'])
-        self.assertIn('{{On Wikidata|Q1757}}', call_args.kwargs['data']['text'])
-        self.assertIn('{{Location|60.169900|24.938400}}', call_args.kwargs['data']['text'])
-        self.assertIn('|source=https://example.org/source-photo', call_args.kwargs['data']['text'])
-        self.assertIn('|author=Example Photographer', call_args.kwargs['data']['text'])
-        self.assertIn('|date=2026-02-20', call_args.kwargs['data']['text'])
-        self.assertIn('== {{int:license-header}} ==', call_args.kwargs['data']['text'])
-        self.assertIn('{{Cc-by-4.0}}', call_args.kwargs['data']['text'])
-        self.assertIn('file', call_args.kwargs['files'])
+        commons_api_get_mock.assert_called_once_with(
+            session,
+            {
+                'action': 'query',
+                'titles': 'File:Example uploaded.jpg',
+                'prop': 'pageprops',
+                'ppprop': 'wikibase_item',
+                'format': 'json',
+                'formatversion': '2',
+            },
+        )
+        self.assertEqual(commons_api_post_mock.call_count, 2)
+        upload_call = commons_api_post_mock.call_args_list[0]
+        point_of_view_call = commons_api_post_mock.call_args_list[1]
+        self.assertEqual(upload_call.kwargs['data']['action'], 'upload')
+        self.assertEqual(upload_call.kwargs['data']['filename'], 'Custom_name.jpg')
+        self.assertEqual(upload_call.kwargs['data']['token'], 'csrf-token')
+        self.assertIn('[[Category:Helsinki]]', upload_call.kwargs['data']['text'])
+        self.assertIn('{{On Wikidata|Q1757}}', upload_call.kwargs['data']['text'])
+        self.assertIn('{{Location|60.169900|24.938400}}', upload_call.kwargs['data']['text'])
+        self.assertIn('|source=https://example.org/source-photo', upload_call.kwargs['data']['text'])
+        self.assertIn('|author=Example Photographer', upload_call.kwargs['data']['text'])
+        self.assertIn('|date=2026-02-20', upload_call.kwargs['data']['text'])
+        self.assertIn('== {{int:license-header}} ==', upload_call.kwargs['data']['text'])
+        self.assertIn('{{Cc-by-4.0}}', upload_call.kwargs['data']['text'])
+        self.assertIn('file', upload_call.kwargs['files'])
+        self.assertEqual(point_of_view_call.kwargs['data']['action'], 'wbcreateclaim')
+        self.assertEqual(point_of_view_call.kwargs['data']['entity'], 'M12345')
+        self.assertEqual(point_of_view_call.kwargs['data']['property'], 'P1259')
+        point_of_view_value = json.loads(point_of_view_call.kwargs['data']['value'])
+        self.assertEqual(point_of_view_value['latitude'], 60.1699)
+        self.assertEqual(point_of_view_value['longitude'], 24.9384)
 
     @patch('locations.services._commons_api_get')
     @patch('locations.services._commons_api_post')
@@ -460,6 +496,7 @@ class WikidataWriteAuthTests(SimpleTestCase):
                     'filename': 'Example uploaded.jpg',
                 }
             },
+            {'claim': {'id': 'M12345$point-of-view'}},
             {'claim': {'id': 'M12345$depict-1'}},
             {'claim': {'id': 'M12345$depict-2'}},
         ]
@@ -487,6 +524,8 @@ class WikidataWriteAuthTests(SimpleTestCase):
         )
 
         self.assertEqual(result['depicts'], ['Q811979', 'Q16970'])
+        self.assertEqual(result['point_of_view']['latitude'], 60.1699)
+        self.assertEqual(result['point_of_view']['longitude'], 24.9384)
         commons_api_get_mock.assert_called_once_with(
             session,
             {
@@ -498,12 +537,16 @@ class WikidataWriteAuthTests(SimpleTestCase):
                 'formatversion': '2',
             },
         )
-        self.assertEqual(commons_api_post_mock.call_count, 3)
+        self.assertEqual(commons_api_post_mock.call_count, 4)
         upload_call = commons_api_post_mock.call_args_list[0]
-        first_depict_call = commons_api_post_mock.call_args_list[1]
-        second_depict_call = commons_api_post_mock.call_args_list[2]
+        point_of_view_call = commons_api_post_mock.call_args_list[1]
+        first_depict_call = commons_api_post_mock.call_args_list[2]
+        second_depict_call = commons_api_post_mock.call_args_list[3]
 
         self.assertEqual(upload_call.kwargs['data']['action'], 'upload')
+        self.assertEqual(point_of_view_call.kwargs['data']['action'], 'wbcreateclaim')
+        self.assertEqual(point_of_view_call.kwargs['data']['entity'], 'M12345')
+        self.assertEqual(point_of_view_call.kwargs['data']['property'], 'P1259')
         self.assertEqual(first_depict_call.kwargs['data']['action'], 'wbcreateclaim')
         self.assertEqual(first_depict_call.kwargs['data']['entity'], 'M12345')
         self.assertEqual(first_depict_call.kwargs['data']['property'], 'P180')
@@ -517,6 +560,75 @@ class WikidataWriteAuthTests(SimpleTestCase):
         self.assertEqual(first_depict_value['numeric-id'], 811979)
         self.assertEqual(second_depict_value['entity-type'], 'item')
         self.assertEqual(second_depict_value['numeric-id'], 16970)
+
+    @patch('locations.services._commons_api_get')
+    @patch('locations.services._commons_api_post')
+    @patch('locations.services._commons_oauth_session')
+    def test_upload_image_to_commons_adds_heading_and_elevation_qualifiers_to_point_of_view(
+        self,
+        commons_oauth_session_mock,
+        commons_api_post_mock,
+        commons_api_get_mock,
+    ):
+        session = Mock()
+        commons_oauth_session_mock.return_value = (session, 'csrf-token')
+        commons_api_post_mock.side_effect = [
+            {
+                'upload': {
+                    'result': 'Success',
+                    'filename': 'Example uploaded.jpg',
+                }
+            },
+            {'claim': {'id': 'M12345$point-of-view'}},
+            {'success': 1},
+            {'success': 1},
+        ]
+        commons_api_get_mock.return_value = {
+            'query': {
+                'pages': [
+                    {
+                        'pageid': 12345,
+                        'title': 'File:Example uploaded.jpg',
+                        'pageprops': {'wikibase_item': 'M12345'},
+                    }
+                ]
+            }
+        }
+        image_file = SimpleUploadedFile('Example uploaded.jpg', b'image-bytes', content_type='image/jpeg')
+
+        result = services.upload_image_to_commons(
+            image_file=image_file,
+            coordinate_source='map',
+            latitude=60.1699,
+            longitude=24.9384,
+            heading=173.4,
+            elevation_meters=14.2,
+            oauth_token='token',
+            oauth_token_secret='secret',
+        )
+
+        self.assertEqual(result['point_of_view']['heading'], 173.4)
+        self.assertEqual(result['point_of_view']['elevation_meters'], 14.2)
+        self.assertEqual(commons_api_post_mock.call_count, 4)
+
+        point_of_view_call = commons_api_post_mock.call_args_list[1]
+        heading_qualifier_call = commons_api_post_mock.call_args_list[2]
+        elevation_qualifier_call = commons_api_post_mock.call_args_list[3]
+
+        self.assertEqual(point_of_view_call.kwargs['data']['action'], 'wbcreateclaim')
+        self.assertEqual(point_of_view_call.kwargs['data']['property'], 'P1259')
+
+        self.assertEqual(heading_qualifier_call.kwargs['data']['action'], 'wbsetqualifier')
+        self.assertEqual(heading_qualifier_call.kwargs['data']['claim'], 'M12345$point-of-view')
+        self.assertEqual(heading_qualifier_call.kwargs['data']['property'], 'P7787')
+        heading_value = json.loads(heading_qualifier_call.kwargs['data']['value'])
+        self.assertEqual(heading_value['unit'], 'http://www.wikidata.org/entity/Q28390')
+
+        self.assertEqual(elevation_qualifier_call.kwargs['data']['action'], 'wbsetqualifier')
+        self.assertEqual(elevation_qualifier_call.kwargs['data']['claim'], 'M12345$point-of-view')
+        self.assertEqual(elevation_qualifier_call.kwargs['data']['property'], 'P2044')
+        elevation_value = json.loads(elevation_qualifier_call.kwargs['data']['value'])
+        self.assertEqual(elevation_value['unit'], 'http://www.wikidata.org/entity/Q11573')
 
     def test_upload_image_to_commons_requires_coordinates_in_map_mode(self):
         image_file = SimpleUploadedFile('Example.jpg', b'image-bytes', content_type='image/jpeg')

@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from datetime import date
 
@@ -254,6 +255,8 @@ class CommonsImageUploadSerializer(serializers.Serializer):
     )
     latitude = serializers.FloatField(required=False)
     longitude = serializers.FloatField(required=False)
+    heading = serializers.FloatField(required=False)
+    elevation_meters = serializers.FloatField(required=False)
     wikidata_item = serializers.CharField(max_length=32, required=False, allow_blank=True)
 
     def validate_caption_language(self, value: str) -> str:
@@ -296,6 +299,8 @@ class CommonsImageUploadSerializer(serializers.Serializer):
         coordinate_source = str(attrs.get('coordinate_source') or 'map').strip().lower()
         latitude = attrs.get('latitude')
         longitude = attrs.get('longitude')
+        heading = attrs.get('heading')
+        elevation_meters = attrs.get('elevation_meters')
 
         if coordinate_source == 'map':
             if latitude is None or longitude is None:
@@ -309,6 +314,25 @@ class CommonsImageUploadSerializer(serializers.Serializer):
         else:
             attrs['latitude'] = None
             attrs['longitude'] = None
+
+        if heading is None:
+            attrs['heading'] = None
+        else:
+            normalized_heading = float(heading)
+            if not math.isfinite(normalized_heading):
+                raise serializers.ValidationError({'heading': 'Heading must be a finite number.'})
+            normalized_heading = normalized_heading % 360.0
+            if normalized_heading < 0:
+                normalized_heading += 360.0
+            attrs['heading'] = normalized_heading
+
+        if elevation_meters is None:
+            attrs['elevation_meters'] = None
+        else:
+            normalized_elevation = float(elevation_meters)
+            if not math.isfinite(normalized_elevation):
+                raise serializers.ValidationError({'elevation_meters': 'Elevation must be a finite number.'})
+            attrs['elevation_meters'] = normalized_elevation
 
         raw_categories_json = str(attrs.pop('categories_json', '') or '').strip()
         categories: list[str] = []

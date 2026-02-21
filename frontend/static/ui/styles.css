@@ -1096,6 +1096,70 @@ textarea:focus-visible {
 
 .picker-map {
   min-height: 320px;
+  position: relative;
+}
+
+.picker-map-camera-center::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border: 2px solid #0f172a;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.3);
+  pointer-events: none;
+  z-index: 450;
+}
+
+.picker-map-camera-center::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  background: #0f172a;
+  clip-path: polygon(50% 0%, 100% 100%, 50% 72%, 0% 100%);
+  transform: translate(-50%, -74%) rotate(var(--save-image-camera-heading, 0deg));
+  transform-origin: 50% 75%;
+  filter: drop-shadow(0 2px 5px rgba(15, 23, 42, 0.35));
+  pointer-events: none;
+  z-index: 451;
+}
+
+.picker-map-center-point::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(2, 132, 199, 0.08);
+  border: 2px solid #0284c7;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.72), 0 2px 6px rgba(15, 23, 42, 0.22);
+  pointer-events: none;
+  z-index: 450;
+}
+
+.picker-map-center-point::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: #0284c7;
+  box-shadow: 0 0 0 2px #ffffff;
+  pointer-events: none;
+  z-index: 451;
 }
 
 .coords-inline-map {
@@ -1159,6 +1223,22 @@ textarea:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 0.55rem;
+}
+
+.save-image-coordinate-mode {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.save-image-heading-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.save-image-heading-entry .secondary-btn {
+  white-space: nowrap;
 }
 
 .subcategory-suggestion-btn {
@@ -1295,6 +1375,10 @@ textarea:focus-visible {
   }
 
   .save-image-category-entry {
+    grid-template-columns: 1fr;
+  }
+
+  .save-image-heading-entry {
     grid-template-columns: 1fr;
   }
 

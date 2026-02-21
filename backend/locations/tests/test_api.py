@@ -307,6 +307,8 @@ class LocationApiTests(APITestCase):
                 'coordinate_source': 'map',
                 'latitude': '60.1699',
                 'longitude': '24.9384',
+                'heading': '173.4',
+                'elevation_meters': '14.2',
                 'wikidata_item': 'Q1757',
             },
             format='multipart',
@@ -329,6 +331,8 @@ class LocationApiTests(APITestCase):
         self.assertEqual(call_args.kwargs['coordinate_source'], 'map')
         self.assertEqual(call_args.kwargs['latitude'], 60.1699)
         self.assertEqual(call_args.kwargs['longitude'], 24.9384)
+        self.assertEqual(call_args.kwargs['heading'], 173.4)
+        self.assertEqual(call_args.kwargs['elevation_meters'], 14.2)
         self.assertEqual(call_args.kwargs['wikidata_item'], 'Q1757')
         self.assertEqual(call_args.kwargs['oauth_token'], 'token')
         self.assertEqual(call_args.kwargs['oauth_token_secret'], 'secret')

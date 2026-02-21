@@ -920,6 +920,8 @@ class CommonsImageUploadAPIView(BaseLocationAPIView):
                 coordinate_source=str(serializer.validated_data.get('coordinate_source') or 'map').strip(),
                 latitude=serializer.validated_data.get('latitude'),
                 longitude=serializer.validated_data.get('longitude'),
+                heading=serializer.validated_data.get('heading'),
+                elevation_meters=serializer.validated_data.get('elevation_meters'),
                 oauth_token=oauth_credentials['oauth_token'],
                 oauth_token_secret=oauth_credentials['oauth_token_secret'],
             )

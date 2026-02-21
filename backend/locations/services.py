@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import partial
+import math
 import re
 from threading import Lock
 from time import perf_counter
@@ -3252,6 +3253,123 @@ def _commons_mediainfo_entity_id_for_file(
     return ''
 
 
+def _commons_claim_id_from_payload(payload: dict[str, Any], property_id: str) -> str:
+    claim = payload.get('claim', {}) if isinstance(payload, dict) else {}
+    claim_id = str(claim.get('id') if isinstance(claim, dict) else '').strip()
+    if claim_id:
+        return claim_id
+    raise WikidataWriteError(f'Wikimedia Commons API did not return claim id for {property_id}.')
+
+
+def _commons_set_claim_qualifier(
+    session: requests.Session,
+    csrf_token: str,
+    claim_id: str,
+    property_id: str,
+    datavalue: Any,
+) -> None:
+    _commons_api_post(
+        session,
+        data={
+            'action': 'wbsetqualifier',
+            'claim': claim_id,
+            'property': property_id,
+            'snaktype': 'value',
+            'value': json.dumps(datavalue, ensure_ascii=False, separators=(',', ':')),
+            'token': csrf_token,
+            'format': 'json',
+        },
+    )
+
+
+def _commons_add_point_of_view_claim(
+    session: requests.Session,
+    csrf_token: str,
+    mediainfo_id: str,
+    *,
+    latitude: float | None,
+    longitude: float | None,
+    heading: float | None,
+    elevation_meters: float | None,
+) -> dict[str, Any]:
+    if latitude is None or longitude is None:
+        return {}
+
+    normalized_mediainfo_id = str(mediainfo_id or '').strip().upper()
+    if not normalized_mediainfo_id:
+        return {}
+    if not re.fullmatch(r'M\d+', normalized_mediainfo_id):
+        raise WikidataWriteError(f'Invalid Commons MediaInfo id: {normalized_mediainfo_id!r}')
+
+    try:
+        normalized_latitude = float(latitude)
+        normalized_longitude = float(longitude)
+    except (TypeError, ValueError) as exc:
+        raise WikidataWriteError('Point-of-view coordinates must be valid numbers.') from exc
+
+    if not math.isfinite(normalized_latitude) or not math.isfinite(normalized_longitude):
+        raise WikidataWriteError('Point-of-view coordinates must be finite numbers.')
+    if normalized_latitude < -90 or normalized_latitude > 90 or normalized_longitude < -180 or normalized_longitude > 180:
+        raise WikidataWriteError('Point-of-view coordinate value is out of bounds.')
+
+    coordinate_datavalue = _wikidata_coordinate_datavalue(f'{normalized_latitude},{normalized_longitude}')
+    claim_payload = _commons_api_post(
+        session,
+        data={
+            'action': 'wbcreateclaim',
+            'entity': normalized_mediainfo_id,
+            'property': 'P1259',
+            'snaktype': 'value',
+            'value': json.dumps(coordinate_datavalue, ensure_ascii=False, separators=(',', ':')),
+            'token': csrf_token,
+            'format': 'json',
+        },
+    )
+    claim_id = _commons_claim_id_from_payload(claim_payload, 'P1259')
+
+    normalized_heading = None
+    if heading is not None:
+        try:
+            normalized_heading = float(heading)
+        except (TypeError, ValueError) as exc:
+            raise WikidataWriteError('Heading must be a valid number.') from exc
+        if not math.isfinite(normalized_heading):
+            raise WikidataWriteError('Heading must be a finite number.')
+        normalized_heading = normalized_heading % 360.0
+        if normalized_heading < 0:
+            normalized_heading += 360.0
+        _commons_set_claim_qualifier(
+            session,
+            csrf_token,
+            claim_id,
+            'P7787',
+            _wikidata_quantity_datavalue(f'{normalized_heading:.6f} Q28390'),
+        )
+
+    normalized_elevation = None
+    if elevation_meters is not None:
+        try:
+            normalized_elevation = float(elevation_meters)
+        except (TypeError, ValueError) as exc:
+            raise WikidataWriteError('Elevation must be a valid number.') from exc
+        if not math.isfinite(normalized_elevation):
+            raise WikidataWriteError('Elevation must be a finite number.')
+        _commons_set_claim_qualifier(
+            session,
+            csrf_token,
+            claim_id,
+            'P2044',
+            _wikidata_quantity_datavalue(f'{normalized_elevation:.6f} Q11573'),
+        )
+
+    return {
+        'latitude': normalized_latitude,
+        'longitude': normalized_longitude,
+        'heading': normalized_heading,
+        'elevation_meters': normalized_elevation,
+    }
+
+
 def _commons_add_depicts_claims(
     session: requests.Session,
     csrf_token: str,
@@ -3373,6 +3491,8 @@ def upload_image_to_commons(
     coordinate_source: str = 'map',
     latitude: float | None = None,
     longitude: float | None = None,
+    heading: float | None = None,
+    elevation_meters: float | None = None,
     oauth_token: str = '',
     oauth_token_secret: str = '',
 ) -> dict[str, Any]:
@@ -3461,12 +3581,25 @@ def upload_image_to_commons(
         raise WikidataWriteError('Wikimedia Commons upload failed.')
 
     uploaded_filename = str(upload_result.get('filename') or '').strip() or filename
-    if normalized_depicts:
+    point_of_view_data: dict[str, Any] = {}
+    if normalized_depicts or (latitude is not None and longitude is not None):
         mediainfo_id = _commons_mediainfo_entity_id_for_file(session, uploaded_filename)
         if not mediainfo_id:
             raise WikidataWriteError(
-                'Could not resolve Commons MediaInfo id for uploaded file while adding depicts (P180).'
+                'Could not resolve Commons MediaInfo id for uploaded file while writing structured data.'
             )
+
+        point_of_view_data = _commons_add_point_of_view_claim(
+            session,
+            csrf_token,
+            mediainfo_id,
+            latitude=latitude,
+            longitude=longitude,
+            heading=heading,
+            elevation_meters=elevation_meters,
+        )
+
+    if normalized_depicts:
         _commons_add_depicts_claims(
             session,
             csrf_token,
@@ -3484,6 +3617,7 @@ def upload_image_to_commons(
         'thumb_url': _commons_thumbnail_url(uploaded_filename),
         'categories': normalized_categories,
         'depicts': normalized_depicts,
+        'point_of_view': point_of_view_data,
         'wikidata_item': normalized_qid,
         'license_template': str(license_template or '').strip() or 'Cc-by-sa-4.0',
     }

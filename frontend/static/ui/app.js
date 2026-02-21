@@ -1932,6 +1932,41 @@ LIMIT ${queryResultLimit}
     return earthRadiusKm * c
   }
 
+  function normalizeHeadingDegrees(value) {
+    const parsed = Number.parseFloat(String(value))
+    if (!Number.isFinite(parsed)) {
+      return null
+    }
+    let normalized = parsed % 360
+    if (normalized < 0) {
+      normalized += 360
+    }
+    return normalized
+  }
+
+  function bearingBetweenCoordinates(fromLatitude, fromLongitude, toLatitude, toLongitude) {
+    const lat1 = Number(fromLatitude)
+    const lon1 = Number(fromLongitude)
+    const lat2 = Number(toLatitude)
+    const lon2 = Number(toLongitude)
+    if (!Number.isFinite(lat1) || !Number.isFinite(lon1) || !Number.isFinite(lat2) || !Number.isFinite(lon2)) {
+      return null
+    }
+
+    const toRadians = (degrees) => (degrees * Math.PI) / 180
+    const toDegrees = (radians) => (radians * 180) / Math.PI
+    const lat1Rad = toRadians(lat1)
+    const lat2Rad = toRadians(lat2)
+    const deltaLonRad = toRadians(lon2 - lon1)
+    const y = Math.sin(deltaLonRad) * Math.cos(lat2Rad)
+    const x = (
+      Math.cos(lat1Rad) * Math.sin(lat2Rad) -
+      Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(deltaLonRad)
+    )
+    const rawDegrees = toDegrees(Math.atan2(y, x))
+    return normalizeHeadingDegrees(rawDegrees)
+  }
+
   const EXIF_TYPE_BYTE_SIZES = {
     1: 1, // BYTE
     2: 1, // ASCII
@@ -2097,6 +2132,8 @@ LIMIT ${queryResultLimit}
       dateTakenDate: '',
       latitude: null,
       longitude: null,
+      heading: null,
+      altitude: null,
     }
     if (!(arrayBuffer instanceof ArrayBuffer)) {
       return emptyResult
@@ -2167,12 +2204,22 @@ LIMIT ${queryResultLimit}
 
           const latitude = _gpsDmsToDecimal(gpsIfd.get(0x0002), gpsIfd.get(0x0001))
           const longitude = _gpsDmsToDecimal(gpsIfd.get(0x0004), gpsIfd.get(0x0003))
+          const rawHeading = Number(gpsIfd.get(0x0011))
+          const heading = normalizeHeadingDegrees(rawHeading)
+          const rawAltitude = Number(gpsIfd.get(0x0006))
+          const rawAltitudeRef = Number(gpsIfd.get(0x0005))
+          let altitude = Number.isFinite(rawAltitude) ? rawAltitude : null
+          if (altitude !== null && rawAltitudeRef === 1) {
+            altitude = -altitude
+          }
 
           return {
             dateTaken: normalizedDate.display,
             dateTakenDate: normalizedDate.date,
             latitude: Number.isFinite(latitude) ? latitude : null,
             longitude: Number.isFinite(longitude) ? longitude : null,
+            heading: heading === null ? null : heading,
+            altitude: altitude !== null && Number.isFinite(altitude) ? altitude : null,
           }
         }
       }
@@ -2191,6 +2238,8 @@ LIMIT ${queryResultLimit}
           dateTakenDate: '',
           latitude: null,
           longitude: null,
+          heading: null,
+          altitude: null,
         })
         return
       }
@@ -2206,6 +2255,8 @@ LIMIT ${queryResultLimit}
             dateTakenDate: '',
             latitude: null,
             longitude: null,
+            heading: null,
+            altitude: null,
           })
         }
       }
@@ -2215,6 +2266,8 @@ LIMIT ${queryResultLimit}
           dateTakenDate: '',
           latitude: null,
           longitude: null,
+          heading: null,
+          altitude: null,
         })
       }
       reader.readAsArrayBuffer(file)
@@ -2277,12 +2330,27 @@ LIMIT ${queryResultLimit}
       saveImageExifCoordinatesHint: 'Map selection is hidden. Upload Wizard uses coordinates from image EXIF metadata.',
       saveImageResetToExifCoordinates: 'Reset to EXIF coordinates',
       saveImageResetToWikidataCoordinates: 'Reset to Wikidata item coordinates',
+      saveImageCoordinateModeLabel: 'Coordinate picking mode',
+      saveImageCoordinateModePhotographer: 'Photographer location + direction (recommended)',
+      saveImageCoordinateModeImage: 'Image location only (raw location)',
+      saveImageMapPickHelpPhotographerStart: 'Move the map so the center camera icon is at photographer location, then click map to set direction.',
+      saveImageMapPickHelpPhotographerTarget: 'Click map to update direction. Moving the map keeps heading unchanged.',
+      saveImageMapPickHelpImage: 'Move the map so the center point is at image location.',
       saveImageCaption: 'Caption text',
       saveImageFile: 'Image file',
       saveImageExifReading: 'Reading EXIF metadata from image...',
       saveImageExifDateTaken: 'Date taken (from EXIF)',
       saveImageExifCoordinates: 'Coordinates (from EXIF)',
-      saveImageExifMetadataMissing: 'No EXIF date or coordinates found in this file.',
+      saveImageExifHeading: 'Heading (from EXIF)',
+      saveImageExifElevation: 'Elevation above sea level (from EXIF)',
+      saveImageExifMetadataMissing: 'No EXIF date, coordinates, heading, or elevation found in this file.',
+      saveImageHeading: 'Camera heading (degrees)',
+      saveImageHeadingPickFromMap: 'Pick heading from map',
+      saveImageHeadingPickActive: 'Click the map to set heading direction.',
+      saveImageHeadingClear: 'Clear heading',
+      saveImageHeadingHelp: 'Optional. Use map picking or type value between 0 and 360.',
+      saveImageElevation: 'Elevation above sea level (meters)',
+      saveImageElevationHelp: 'Optional. EXIF elevation is filled automatically when available.',
       saveImageFileRequired: 'Select an image file first.',
       saveImageApiTargetFilename: 'Target filename on Commons',
       saveImageFilenameFallbackBase: 'Image',
@@ -2563,12 +2631,27 @@ LIMIT ${queryResultLimit}
       saveImageExifCoordinatesHint: 'Kartval är dolt. Upload Wizard använder koordinater från bildens EXIF-metadata.',
       saveImageResetToExifCoordinates: 'Återställ till EXIF-koordinater',
       saveImageResetToWikidataCoordinates: 'Återställ till Wikidata-objektets koordinater',
+      saveImageCoordinateModeLabel: 'Läge för koordinatval',
+      saveImageCoordinateModePhotographer: 'Fotografens plats + riktning (rekommenderat)',
+      saveImageCoordinateModeImage: 'Endast bildens plats (rå position)',
+      saveImageMapPickHelpPhotographerStart: 'Flytta kartan så att kameraikonen i mitten är vid fotografens plats, klicka sedan på kartan för att ange riktning.',
+      saveImageMapPickHelpPhotographerTarget: 'Klicka på kartan för att uppdatera riktning. Att flytta kartan behåller samma riktning.',
+      saveImageMapPickHelpImage: 'Flytta kartan så att mittpunkten är vid bildens plats.',
       saveImageCaption: 'Bildtext',
       saveImageFile: 'Bildfil',
       saveImageExifReading: 'Läser EXIF-metadata från bilden...',
       saveImageExifDateTaken: 'Fotodatum (från EXIF)',
       saveImageExifCoordinates: 'Koordinater (från EXIF)',
-      saveImageExifMetadataMissing: 'Ingen EXIF-datum eller koordinater hittades i filen.',
+      saveImageExifHeading: 'Riktning (från EXIF)',
+      saveImageExifElevation: 'Höjd över havet (från EXIF)',
+      saveImageExifMetadataMissing: 'Ingen EXIF-datum, koordinater, riktning eller höjd hittades i filen.',
+      saveImageHeading: 'Kamerariktning (grader)',
+      saveImageHeadingPickFromMap: 'Välj riktning på kartan',
+      saveImageHeadingPickActive: 'Klicka på kartan för att ange riktning.',
+      saveImageHeadingClear: 'Rensa riktning',
+      saveImageHeadingHelp: 'Valfritt. Välj på kartan eller ange värde mellan 0 och 360.',
+      saveImageElevation: 'Höjd över havet (meter)',
+      saveImageElevationHelp: 'Valfritt. EXIF-höjd fylls i automatiskt när den finns.',
       saveImageFileRequired: 'Välj en bildfil först.',
       saveImageApiTargetFilename: 'Målfilnamn på Commons',
       saveImageFilenameFallbackBase: 'Bild',
@@ -2849,12 +2932,27 @@ LIMIT ${queryResultLimit}
       saveImageExifCoordinatesHint: 'Karttavalinta on piilotettu. Upload Wizard käyttää kuvan EXIF-metatietojen koordinaatteja.',
       saveImageResetToExifCoordinates: 'Palauta EXIF-koordinaatteihin',
       saveImageResetToWikidataCoordinates: 'Palauta Wikidata-kohteen koordinaatteihin',
+      saveImageCoordinateModeLabel: 'Koordinaattien poimintatapa',
+      saveImageCoordinateModePhotographer: 'Kuvaajan sijainti + suunta (suositus)',
+      saveImageCoordinateModeImage: 'Vain kuvan sijainti (raakatieto)',
+      saveImageMapPickHelpPhotographerStart: 'Liikuta karttaa niin, että keskellä oleva kameraikoni on kuvaajan sijainnissa, ja klikkaa sitten karttaa suunnan asettamiseksi.',
+      saveImageMapPickHelpPhotographerTarget: 'Klikkaa karttaa suunnan päivittämiseksi. Kartan liikuttaminen säilyttää suunnan samana.',
+      saveImageMapPickHelpImage: 'Liikuta karttaa niin, että keskipiste on kuvan sijainnissa.',
       saveImageCaption: 'Kuvateksti',
       saveImageFile: 'Kuvatiedosto',
       saveImageExifReading: 'Luetaan kuvan EXIF-metatietoja...',
       saveImageExifDateTaken: 'Kuvauspäivä (EXIF)',
       saveImageExifCoordinates: 'Koordinaatit (EXIF)',
-      saveImageExifMetadataMissing: 'Tiedostosta ei löytynyt EXIF-päivämäärää tai koordinaatteja.',
+      saveImageExifHeading: 'Suunta (EXIF)',
+      saveImageExifElevation: 'Korkeus merenpinnasta (EXIF)',
+      saveImageExifMetadataMissing: 'Tiedostosta ei löytynyt EXIF-päivämäärää, koordinaatteja, suuntaa tai korkeutta.',
+      saveImageHeading: 'Kuvaussuunta (astetta)',
+      saveImageHeadingPickFromMap: 'Valitse suunta kartalta',
+      saveImageHeadingPickActive: 'Aseta suunta klikkaamalla karttaa.',
+      saveImageHeadingClear: 'Tyhjennä suunta',
+      saveImageHeadingHelp: 'Valinnainen. Valitse kartalta tai anna arvo väliltä 0-360.',
+      saveImageElevation: 'Korkeus merenpinnasta (metriä)',
+      saveImageElevationHelp: 'Valinnainen. EXIF-korkeus täytetään automaattisesti, jos saatavilla.',
       saveImageFileRequired: 'Valitse ensin kuvatiedosto.',
       saveImageApiTargetFilename: 'Commonsin kohdetiedoston nimi',
       saveImageFilenameFallbackBase: 'Kuva',
@@ -4203,6 +4301,8 @@ LIMIT {{limit}}`,
       const saveImageMapElement = ref(null)
       const saveImageLatitude = ref('')
       const saveImageLongitude = ref('')
+      const saveImageHeading = ref('')
+      const saveImageApiCoordinateMode = ref('photographer')
       const saveImageCaption = ref('')
       const saveImageCategorySearch = ref('')
       const saveImageCategorySuggestions = ref([])
@@ -4228,6 +4328,8 @@ LIMIT {{limit}}`,
       const saveImageExifDateTaken = ref('')
       const saveImageExifLatitude = ref(null)
       const saveImageExifLongitude = ref(null)
+      const saveImageExifHeading = ref(null)
+      const saveImageExifElevation = ref(null)
       const saveImageInitialWikidataLatitude = ref(null)
       const saveImageInitialWikidataLongitude = ref(null)
       const saveImageApiUploading = ref(false)
@@ -4242,8 +4344,10 @@ LIMIT {{limit}}`,
       const saveImageApiSourceUrl = ref('')
       const saveImageApiDateCreated = ref('')
       const saveImageApiLicenseTemplate = ref('Cc-by-sa-4.0')
+      const saveImageApiElevationMeters = ref('')
       let saveImageMapInstance = null
       let saveImageMapMarker = null
+      let saveImageMapHeadingLine = null
       const saveImageFallbackEntityCache = new Map()
       const saveImageSubcategoryCache = new Map()
       const saveImageParentCategoryCache = new Map()
@@ -4294,7 +4398,10 @@ LIMIT {{limit}}`,
         )
       })
       const saveImageHasExifMetadata = computed(() => (
-        Boolean(saveImageExifDateTaken.value) || saveImageHasExifCoordinates.value
+        Boolean(saveImageExifDateTaken.value) ||
+        saveImageHasExifCoordinates.value ||
+        Number.isFinite(saveImageExifHeading.value) ||
+        Number.isFinite(saveImageExifElevation.value)
       ))
       const saveImageVisibleNearbyCategorySuggestions = computed(() => {
         const selectedDedupeKeys = new Set(
@@ -4384,6 +4491,21 @@ LIMIT {{limit}}`,
         return conflicts
       })
       const saveImageShowSourceUrl = computed(() => !saveImageIsOwnPhoto.value)
+      const saveImageApiUsesPhotographerCoordinates = computed(
+        () => saveImageApiCoordinateMode.value !== 'image',
+      )
+      const saveImageMapPickHelpText = computed(() => {
+        if (!showSaveImageApiForm.value) {
+          return ''
+        }
+        if (!saveImageApiUsesPhotographerCoordinates.value) {
+          return t('saveImageMapPickHelpImage')
+        }
+        if (normalizeHeadingDegrees(saveImageHeading.value) === null) {
+          return t('saveImageMapPickHelpPhotographerStart')
+        }
+        return t('saveImageMapPickHelpPhotographerTarget')
+      })
 
       function isSaveImageBroaderCategoryConflict(categoryName) {
         const normalizedCategory = _normalizeUploadCategory(categoryName)
@@ -4621,6 +4743,7 @@ LIMIT {{limit}}`,
           saveImageMapInstance.remove()
           saveImageMapInstance = null
           saveImageMapMarker = null
+          saveImageMapHeadingLine = null
         }
       }
 
@@ -4775,6 +4898,180 @@ LIMIT {{limit}}`,
         return requestPromise
       }
 
+      function _clearSaveImageHeadingMapVisuals() {
+        if (!saveImageMapInstance) {
+          saveImageMapHeadingLine = null
+          _setSaveImageCameraHeadingCssVariable(null)
+          return
+        }
+        if (saveImageMapHeadingLine) {
+          saveImageMapInstance.removeLayer(saveImageMapHeadingLine)
+          saveImageMapHeadingLine = null
+        }
+        _setSaveImageCameraHeadingCssVariable(null)
+      }
+
+      function _setSaveImageCameraHeadingCssVariable(headingDegrees) {
+        if (!saveImageMapElement.value || !saveImageMapElement.value.style) {
+          return
+        }
+        const normalizedHeading = normalizeHeadingDegrees(headingDegrees)
+        const heading = normalizedHeading === null ? 0 : normalizedHeading
+        saveImageMapElement.value.style.setProperty('--save-image-camera-heading', `${heading.toFixed(3)}deg`)
+      }
+
+      function _setSaveImageHeadingValue(normalizedHeading) {
+        if (!Number.isFinite(normalizedHeading)) {
+          return
+        }
+        saveImageHeading.value = Number(normalizedHeading).toFixed(1).replace(/\.0$/, '')
+      }
+
+      function _currentSaveImageHeadingDegrees() {
+        return normalizeHeadingDegrees(saveImageHeading.value)
+      }
+
+      function _headingLineTargetPointForCurrentMapView(latitude, longitude, headingDegrees) {
+        if (!saveImageMapInstance) {
+          return null
+        }
+        const mapSize = saveImageMapInstance.getSize ? saveImageMapInstance.getSize() : null
+        if (!mapSize || !Number.isFinite(mapSize.x) || !Number.isFinite(mapSize.y) || mapSize.x <= 0 || mapSize.y <= 0) {
+          return null
+        }
+        const centerContainerPoint = saveImageMapInstance.latLngToContainerPoint(L.latLng(latitude, longitude))
+        if (
+          !centerContainerPoint ||
+          !Number.isFinite(centerContainerPoint.x) ||
+          !Number.isFinite(centerContainerPoint.y)
+        ) {
+          return null
+        }
+
+        const headingRadians = (headingDegrees * Math.PI) / 180
+        const directionX = Math.sin(headingRadians)
+        const directionY = -Math.cos(headingRadians)
+        const epsilon = 0.0000001
+        if (Math.abs(directionX) <= epsilon && Math.abs(directionY) <= epsilon) {
+          return null
+        }
+
+        const edgeDistances = []
+        if (directionX > epsilon) {
+          edgeDistances.push((mapSize.x - centerContainerPoint.x) / directionX)
+        } else if (directionX < -epsilon) {
+          edgeDistances.push((0 - centerContainerPoint.x) / directionX)
+        }
+        if (directionY > epsilon) {
+          edgeDistances.push((mapSize.y - centerContainerPoint.y) / directionY)
+        } else if (directionY < -epsilon) {
+          edgeDistances.push((0 - centerContainerPoint.y) / directionY)
+        }
+        const positiveEdgeDistances = edgeDistances.filter((value) => Number.isFinite(value) && value > 0)
+        if (!positiveEdgeDistances.length) {
+          return null
+        }
+        const distanceToEdgePx = Math.min(...positiveEdgeDistances)
+        const extensionPx = Math.max(48, Math.min(mapSize.x, mapSize.y) * 0.12)
+        const lineLengthPx = distanceToEdgePx + extensionPx
+        const targetContainerPoint = L.point(
+          centerContainerPoint.x + directionX * lineLengthPx,
+          centerContainerPoint.y + directionY * lineLengthPx,
+        )
+        const targetLatLng = saveImageMapInstance.containerPointToLatLng(targetContainerPoint)
+        if (!targetLatLng) {
+          return null
+        }
+        return {
+          latitude: Number(targetLatLng.lat),
+          longitude: Number(targetLatLng.lng),
+        }
+      }
+
+      function _updateSaveImageHeadingMapVisuals() {
+        if (!saveImageMapInstance) {
+          return
+        }
+        if (showSaveImageApiForm.value && !saveImageApiUsesPhotographerCoordinates.value) {
+          _clearSaveImageHeadingMapVisuals()
+          return
+        }
+
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        if (latitude === null || longitude === null) {
+          _clearSaveImageHeadingMapVisuals()
+          return
+        }
+
+        const fromPoint = [latitude, longitude]
+        let heading = _currentSaveImageHeadingDegrees()
+        if (heading === null) {
+          _clearSaveImageHeadingMapVisuals()
+          return
+        }
+        const targetPoint = _headingLineTargetPointForCurrentMapView(latitude, longitude, heading)
+        if (!targetPoint) {
+          _clearSaveImageHeadingMapVisuals()
+          return
+        }
+        const toPoint = [targetPoint.latitude, targetPoint.longitude]
+        _setSaveImageCameraHeadingCssVariable(heading)
+
+        if (!saveImageMapHeadingLine) {
+          saveImageMapHeadingLine = L.polyline([fromPoint, toPoint], {
+            color: '#b45309',
+            weight: 3,
+            opacity: 0.9,
+            dashArray: '6 6',
+          }).addTo(saveImageMapInstance)
+        } else {
+          saveImageMapHeadingLine.setLatLngs([fromPoint, toPoint])
+        }
+      }
+
+      function _setSaveImageHeading(value) {
+        const normalizedHeading = normalizeHeadingDegrees(value)
+        if (normalizedHeading === null) {
+          saveImageHeading.value = ''
+          _clearSaveImageHeadingMapVisuals()
+          return
+        }
+        _setSaveImageHeadingValue(normalizedHeading)
+        _updateSaveImageHeadingMapVisuals()
+      }
+
+      function onSaveImageHeadingInput() {
+        if (!String(saveImageHeading.value || '').trim()) {
+          _clearSaveImageHeadingMapVisuals()
+          return
+        }
+        _updateSaveImageHeadingMapVisuals()
+      }
+
+      function onSaveImageHeadingBlur() {
+        _setSaveImageHeading(saveImageHeading.value)
+      }
+
+      function clearSaveImageHeading() {
+        saveImageHeading.value = ''
+        _clearSaveImageHeadingMapVisuals()
+      }
+
+      function _setSaveImageHeadingFromMapClick(latitude, longitude) {
+        const centerPoint = saveImageMapInstance ? saveImageMapInstance.getCenter() : null
+        const baseLatitude = centerPoint ? Number(centerPoint.lat) : parseCoordinate(saveImageLatitude.value)
+        const baseLongitude = centerPoint ? Number(centerPoint.lng) : parseCoordinate(saveImageLongitude.value)
+        if (!Number.isFinite(baseLatitude) || !Number.isFinite(baseLongitude)) {
+          return
+        }
+        const heading = bearingBetweenCoordinates(baseLatitude, baseLongitude, latitude, longitude)
+        if (heading === null) {
+          return
+        }
+        _setSaveImageHeading(heading)
+      }
+
       function _setSaveImageCoordinates(latitude, longitude, updateMapView = true) {
         const parsedLatitude = Number(latitude)
         const parsedLongitude = Number(longitude)
@@ -4790,6 +5087,18 @@ LIMIT {{limit}}`,
         }
 
         const point = [parsedLatitude, parsedLongitude]
+        if (showSaveImageApiForm.value) {
+          if (saveImageMapMarker) {
+            saveImageMapInstance.removeLayer(saveImageMapMarker)
+            saveImageMapMarker = null
+          }
+          if (updateMapView) {
+            saveImageMapInstance.setView(point, Math.max(saveImageMapInstance.getZoom(), 13))
+          }
+          _updateSaveImageHeadingMapVisuals()
+          return
+        }
+
         if (!saveImageMapMarker) {
           saveImageMapMarker = L.marker(point).addTo(saveImageMapInstance)
         } else {
@@ -4799,6 +5108,37 @@ LIMIT {{limit}}`,
         if (updateMapView) {
           saveImageMapInstance.setView(point, Math.max(saveImageMapInstance.getZoom(), 13))
         }
+        _updateSaveImageHeadingMapVisuals()
+      }
+
+      function _syncSaveImageCoordinatesFromMapCenter() {
+        if (!saveImageMapInstance || !showSaveImageApiForm.value) {
+          return
+        }
+        const centerPoint = saveImageMapInstance.getCenter()
+        if (!centerPoint) {
+          return
+        }
+        saveImageLatitude.value = Number(centerPoint.lat).toFixed(6)
+        saveImageLongitude.value = Number(centerPoint.lng).toFixed(6)
+        if (saveImageMapMarker) {
+          saveImageMapInstance.removeLayer(saveImageMapMarker)
+          saveImageMapMarker = null
+        }
+        _updateSaveImageHeadingMapVisuals()
+      }
+
+      function onSaveImageApiCoordinateModeChange() {
+        const normalizedMode = saveImageApiCoordinateMode.value === 'image' ? 'image' : 'photographer'
+        saveImageApiCoordinateMode.value = normalizedMode
+        if (showSaveImageApiForm.value) {
+          _syncSaveImageCoordinatesFromMapCenter()
+        }
+        if (normalizedMode === 'image') {
+          clearSaveImageHeading()
+          return
+        }
+        _updateSaveImageHeadingMapVisuals()
       }
 
       function resetSaveImageCoordinatesToExif() {
@@ -4842,17 +5182,56 @@ LIMIT {{limit}}`,
           }).addTo(saveImageMapInstance)
 
           saveImageMapInstance.on('click', (event) => {
+            if (showSaveImageApiForm.value) {
+              if (saveImageApiUsesPhotographerCoordinates.value) {
+                _setSaveImageHeadingFromMapClick(event.latlng.lat, event.latlng.lng)
+              }
+              return
+            }
             _setSaveImageCoordinates(event.latlng.lat, event.latlng.lng)
+          })
+          saveImageMapInstance.on('move', () => {
+            if (showSaveImageApiForm.value) {
+              _syncSaveImageCoordinatesFromMapCenter()
+            }
+          })
+          saveImageMapInstance.on('zoom', () => {
+            if (showSaveImageApiForm.value) {
+              _syncSaveImageCoordinatesFromMapCenter()
+            }
           })
         }
 
         if (hasSelectedCoordinates) {
           _setSaveImageCoordinates(latitude, longitude, false)
-          saveImageMapInstance.setView(center, Math.max(saveImageMapInstance.getZoom(), 13))
+          if (showSaveImageApiForm.value) {
+            const mapCenter = saveImageMapInstance.getCenter()
+            const centerMatches = mapCenter && (
+              Math.abs(mapCenter.lat - latitude) < 0.000001 &&
+              Math.abs(mapCenter.lng - longitude) < 0.000001
+            )
+            if (!centerMatches) {
+              saveImageMapInstance.setView(center, Math.max(saveImageMapInstance.getZoom(), 13))
+            }
+            _syncSaveImageCoordinatesFromMapCenter()
+          } else {
+            saveImageMapInstance.setView(center, Math.max(saveImageMapInstance.getZoom(), 13))
+          }
         } else if (saveImageMapMarker) {
           saveImageMapInstance.removeLayer(saveImageMapMarker)
           saveImageMapMarker = null
           saveImageMapInstance.setView(center, saveImageMapInstance.getZoom())
+          if (showSaveImageApiForm.value) {
+            _syncSaveImageCoordinatesFromMapCenter()
+          } else {
+            _clearSaveImageHeadingMapVisuals()
+          }
+        } else {
+          if (showSaveImageApiForm.value) {
+            _syncSaveImageCoordinatesFromMapCenter()
+          } else {
+            _clearSaveImageHeadingMapVisuals()
+          }
         }
 
         window.setTimeout(() => {
@@ -4867,6 +5246,8 @@ LIMIT {{limit}}`,
         saveImageError.value = ''
         saveImageUploadResult.value = null
         saveImageApiUploading.value = false
+        saveImageHeading.value = ''
+        saveImageApiCoordinateMode.value = 'photographer'
         saveImageCategorySearch.value = ''
         saveImageCategorySuggestions.value = []
         saveImageCategoryLoading.value = false
@@ -4907,6 +5288,8 @@ LIMIT {{limit}}`,
         saveImageExifDateTaken.value = ''
         saveImageExifLatitude.value = null
         saveImageExifLongitude.value = null
+        saveImageExifHeading.value = null
+        saveImageExifElevation.value = null
         saveImageInitialWikidataLatitude.value = null
         saveImageInitialWikidataLongitude.value = null
         saveImageApiTargetFilename.value = ''
@@ -4917,6 +5300,7 @@ LIMIT {{limit}}`,
         saveImageApiSourceUrl.value = ''
         saveImageApiDateCreated.value = ''
         saveImageApiLicenseTemplate.value = 'Cc-by-sa-4.0'
+        saveImageApiElevationMeters.value = ''
         _syncSaveImageAuthorFromOwnershipSelection()
         if (saveImageFileInputElement.value) {
           saveImageFileInputElement.value.value = ''
@@ -5872,6 +6256,8 @@ LIMIT {{limit}}`,
         saveImageExifDateTaken.value = ''
         saveImageExifLatitude.value = null
         saveImageExifLongitude.value = null
+        saveImageExifHeading.value = null
+        saveImageExifElevation.value = null
 
         if (!nextFile) {
           return
@@ -5898,6 +6284,22 @@ LIMIT {{limit}}`,
             saveImageExifLatitude.value = exifLatitude
             saveImageExifLongitude.value = exifLongitude
             _setSaveImageCoordinates(exifLatitude, exifLongitude)
+          }
+
+          const exifHeading = normalizeHeadingDegrees(exifMetadata.heading)
+          if (exifHeading !== null) {
+            saveImageExifHeading.value = exifHeading
+            if (saveImageApiUsesPhotographerCoordinates.value && !String(saveImageHeading.value || '').trim()) {
+              _setSaveImageHeading(exifHeading)
+            }
+          }
+
+          const exifElevation = Number(exifMetadata.altitude)
+          if (Number.isFinite(exifElevation)) {
+            saveImageExifElevation.value = exifElevation
+            if (!String(saveImageApiElevationMeters.value || '').trim()) {
+              saveImageApiElevationMeters.value = exifElevation.toFixed(1).replace(/\.0$/, '')
+            }
           }
 
           if (!saveImageApiDateCreated.value.trim() && exifDateTakenDate) {
@@ -6013,12 +6415,16 @@ LIMIT {{limit}}`,
         saveImageError.value = ''
         saveImageApiUploading.value = false
         saveImageUploadResult.value = null
+        saveImageHeading.value = ''
+        saveImageApiCoordinateMode.value = 'photographer'
         saveImageSelectedFile.value = null
         saveImageExifReadToken += 1
         saveImageExifMetadataLoading.value = false
         saveImageExifDateTaken.value = ''
         saveImageExifLatitude.value = null
         saveImageExifLongitude.value = null
+        saveImageExifHeading.value = null
+        saveImageExifElevation.value = null
         saveImageInitialWikidataLatitude.value = null
         saveImageInitialWikidataLongitude.value = null
         saveImageApiTargetFilename.value = ''
@@ -6029,6 +6435,7 @@ LIMIT {{limit}}`,
         saveImageApiSourceUrl.value = ''
         saveImageApiDateCreated.value = ''
         saveImageApiLicenseTemplate.value = 'Cc-by-sa-4.0'
+        saveImageApiElevationMeters.value = ''
         if (saveImageFileInputElement.value) {
           saveImageFileInputElement.value.value = ''
         }
@@ -6126,6 +6533,17 @@ LIMIT {{limit}}`,
         uploadFormData.append('latitude', String(latitude))
         uploadFormData.append('longitude', String(longitude))
 
+        const heading = saveImageApiUsesPhotographerCoordinates.value
+          ? normalizeHeadingDegrees(saveImageHeading.value)
+          : null
+        if (heading !== null) {
+          uploadFormData.append('heading', String(heading))
+        }
+        const elevationMeters = parseCoordinate(saveImageApiElevationMeters.value)
+        if (elevationMeters !== null) {
+          uploadFormData.append('elevation_meters', String(elevationMeters))
+        }
+
         const categories = _uploadWizardCategories()
         if (categories.length > 0) {
           uploadFormData.append('categories_json', JSON.stringify(categories))
@@ -6157,6 +6575,8 @@ LIMIT {{limit}}`,
           saveImageExifDateTaken.value = ''
           saveImageExifLatitude.value = null
           saveImageExifLongitude.value = null
+          saveImageExifHeading.value = null
+          saveImageExifElevation.value = null
         } catch (err) {
           saveImageError.value = err instanceof Error ? err.message : t('loadError')
         } finally {
@@ -7077,7 +7497,8 @@ LIMIT {{limit}}`,
           () => saveImageLatitude.value,
           () => saveImageLongitude.value,
         ],
-        async ([isOpen]) => {
+        async ([isOpen], previousValues = []) => {
+          const previousOpen = Array.isArray(previousValues) ? Boolean(previousValues[0]) : false
           if (!isOpen) {
             destroySaveImageWizardMap()
             _clearSaveImageNearbyCategorySuggestions()
@@ -7085,8 +7506,10 @@ LIMIT {{limit}}`,
             return
           }
           refreshSaveImageNearbyCategorySuggestionsDebounced()
-          await nextTick()
-          ensureSaveImageWizardMap()
+          if (!previousOpen) {
+            await nextTick()
+            ensureSaveImageWizardMap()
+          }
         }
       )
       watch(
@@ -7144,11 +7567,17 @@ LIMIT {{limit}}`,
         saveImageMapElement,
         saveImageLatitude,
         saveImageLongitude,
+        saveImageHeading,
+        saveImageApiCoordinateMode,
+        saveImageApiUsesPhotographerCoordinates,
+        saveImageMapPickHelpText,
         saveImageCaption,
         saveImageFileInputElement,
         saveImageSelectedFileName,
         saveImageExifMetadataLoading,
         saveImageExifDateTaken,
+        saveImageExifHeading,
+        saveImageExifElevation,
         saveImageHasExifCoordinates,
         saveImageExifCoordinatesDisplay,
         saveImageCanResetToExifCoordinates,
@@ -7168,6 +7597,7 @@ LIMIT {{limit}}`,
         saveImageApiSourceUrl,
         saveImageApiDateCreated,
         saveImageApiLicenseTemplate,
+        saveImageApiElevationMeters,
         saveImageCategorySearch,
         saveImageCategorySuggestions,
         saveImageCategoryLoading,
@@ -7191,8 +7621,12 @@ LIMIT {{limit}}`,
         closeSaveImageWizard,
         closeSaveImageApiForm,
         onSaveImageOwnPhotoChange,
+        onSaveImageApiCoordinateModeChange,
         onSaveImageApiTargetFilenameInput,
         onSaveImageApiTargetFilenameBlur,
+        onSaveImageHeadingInput,
+        onSaveImageHeadingBlur,
+        clearSaveImageHeading,
         resetSaveImageCoordinatesToExif,
         resetSaveImageCoordinatesToWikidata,
         openCommonsUploadWizard,
@@ -7832,6 +8266,12 @@ LIMIT {{limit}}`,
                   <p v-if="saveImageHasExifCoordinates" class="dialog-help">
                     {{ t('saveImageExifCoordinates') }}: {{ saveImageExifCoordinatesDisplay }}
                   </p>
+                  <p v-if="saveImageExifHeading !== null" class="dialog-help">
+                    {{ t('saveImageExifHeading') }}: {{ saveImageExifHeading.toFixed(1).replace(/\.0$/, '') }}°
+                  </p>
+                  <p v-if="saveImageExifElevation !== null" class="dialog-help">
+                    {{ t('saveImageExifElevation') }}: {{ saveImageExifElevation.toFixed(1).replace(/\.0$/, '') }} m
+                  </p>
                   <p
                     v-if="saveImageSelectedFileName && !saveImageExifMetadataLoading && !saveImageHasExifMetadata"
                     class="dialog-help"
@@ -7856,6 +8296,30 @@ LIMIT {{limit}}`,
 
                 <div class="wizard-section">
                   <h3>{{ t('saveImageWizardLocationStep') }}</h3>
+                  <div class="save-image-coordinate-mode">
+                    <p class="dialog-help"><strong>{{ t('saveImageCoordinateModeLabel') }}</strong></p>
+                    <div class="toggle-switch" role="radiogroup" :aria-label="t('saveImageCoordinateModeLabel')">
+                      <label class="toggle-option" :class="{ active: saveImageApiUsesPhotographerCoordinates }">
+                        <input
+                          v-model="saveImageApiCoordinateMode"
+                          type="radio"
+                          value="photographer"
+                          @change="onSaveImageApiCoordinateModeChange"
+                        />
+                        <span>{{ t('saveImageCoordinateModePhotographer') }}</span>
+                      </label>
+                      <label class="toggle-option" :class="{ active: !saveImageApiUsesPhotographerCoordinates }">
+                        <input
+                          v-model="saveImageApiCoordinateMode"
+                          type="radio"
+                          value="image"
+                          @change="onSaveImageApiCoordinateModeChange"
+                        />
+                        <span>{{ t('saveImageCoordinateModeImage') }}</span>
+                      </label>
+                    </div>
+                    <p class="dialog-help">{{ saveImageMapPickHelpText }}</p>
+                  </div>
                   <div
                     v-if="saveImageHasExifCoordinates || saveImageHasInitialWikidataCoordinates"
                     class="save-image-coordinate-reset-actions"
@@ -7881,12 +8345,42 @@ LIMIT {{limit}}`,
                       {{ t('saveImageResetToWikidataCoordinates') }}
                     </button>
                   </div>
-                  <div ref="saveImageMapElement" class="map-canvas picker-map" aria-label="api upload coordinate picker map"></div>
+                  <div
+                    ref="saveImageMapElement"
+                    :class="[
+                      'map-canvas',
+                      'picker-map',
+                      saveImageApiUsesPhotographerCoordinates ? 'picker-map-camera-center' : 'picker-map-center-point',
+                    ]"
+                    aria-label="api upload coordinate picker map"
+                  ></div>
                   <p class="dialog-help">
                     {{ t('coordinates') }}:
                     {{ displayValue(saveImageLatitude, t('noValue')) }},
                     {{ displayValue(saveImageLongitude, t('noValue')) }}
                   </p>
+                  <p v-if="saveImageApiUsesPhotographerCoordinates" class="dialog-help"><strong>{{ t('saveImageHeading') }}</strong></p>
+                  <div v-if="saveImageApiUsesPhotographerCoordinates" class="save-image-heading-entry">
+                    <input
+                      v-model="saveImageHeading"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="360"
+                      :placeholder="t('saveImageHeading')"
+                      @input="onSaveImageHeadingInput"
+                      @blur="onSaveImageHeadingBlur"
+                    />
+                    <button
+                      type="button"
+                      class="secondary-btn"
+                      :disabled="!saveImageHeading.trim()"
+                      @click="clearSaveImageHeading"
+                    >
+                      {{ t('saveImageHeadingClear') }}
+                    </button>
+                  </div>
+                  <p v-if="saveImageApiUsesPhotographerCoordinates" class="dialog-help">{{ t('saveImageHeadingHelp') }}</p>
                 </div>
 
                 <label class="form-field">
@@ -7930,6 +8424,12 @@ LIMIT {{limit}}`,
                 <label class="form-field">
                   <span>{{ t('saveImageApiDateCreated') }}</span>
                   <input v-model="saveImageApiDateCreated" type="text" maxlength="32" placeholder="YYYY-MM-DD" />
+                </label>
+
+                <label class="form-field">
+                  <span>{{ t('saveImageElevation') }}</span>
+                  <input v-model="saveImageApiElevationMeters" type="number" step="0.1" />
+                  <p class="dialog-help">{{ t('saveImageElevationHelp') }}</p>
                 </label>
 
                 <label class="form-field">
