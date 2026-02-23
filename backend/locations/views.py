@@ -28,6 +28,7 @@ from .services import (
     decode_location_id,
     ensure_wikidata_collection_membership,
     enrich_locations_with_image_counts,
+    fetch_latest_osm_feature_metadata,
     fetch_citoid_metadata,
     encode_location_id,
     fetch_wikidata_entity,
@@ -580,6 +581,72 @@ class AuthStatusAPIView(APIView):
         return Response(payload)
 
 
+class OSMFeatureLatestAPIView(BaseLocationAPIView):
+    def get(self, request, feature_type: str, feature_id: int):
+        normalized_type = str(feature_type or '').strip().lower()
+        if normalized_type not in {'node', 'way', 'relation'}:
+            return Response(
+                {'detail': 'feature_type must be one of: node, way, relation.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if feature_id < 1:
+            return Response(
+                {'detail': 'feature_id must be a positive integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        raw_latitude = str(request.query_params.get('lat') or '').strip()
+        raw_longitude = str(request.query_params.get('lon') or '').strip()
+        raw_name = str(request.query_params.get('name') or '').strip()
+        hint_latitude: float | None = None
+        hint_longitude: float | None = None
+        hint_name: str | None = None
+        if raw_latitude:
+            try:
+                hint_latitude = float(raw_latitude)
+            except ValueError:
+                return Response(
+                    {'detail': 'lat must be a valid number.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if hint_latitude < -90 or hint_latitude > 90:
+                return Response(
+                    {'detail': 'lat must be between -90 and 90.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if raw_longitude:
+            try:
+                hint_longitude = float(raw_longitude)
+            except ValueError:
+                return Response(
+                    {'detail': 'lon must be a valid number.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if hint_longitude < -180 or hint_longitude > 180:
+                return Response(
+                    {'detail': 'lon must be between -180 and 180.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if raw_name:
+            hint_name = raw_name[:200]
+
+        lang = self._get_lang(request)
+        try:
+            payload = fetch_latest_osm_feature_metadata(
+                normalized_type,
+                feature_id,
+                lang=lang,
+                hint_latitude=hint_latitude,
+                hint_longitude=hint_longitude,
+                hint_name=hint_name,
+            )
+        except ExternalServiceError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        if payload is None:
+            return Response({'detail': 'OSM feature not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(payload)
+
+
 class LocationListAPIView(BaseLocationAPIView):
     def get(self, request):
         lang = self._get_lang(request)
@@ -904,11 +971,14 @@ class CommonsImageUploadAPIView(BaseLocationAPIView):
 
         lang = self._get_lang(request)
         caption_language = str(serializer.validated_data.get('caption_language') or lang or 'en').strip()
+        description_language = str(serializer.validated_data.get('description_language') or lang or 'en').strip()
         try:
             result = upload_image_to_commons(
                 image_file=serializer.validated_data['file'],
                 caption=str(serializer.validated_data.get('caption') or '').strip(),
                 caption_language=caption_language,
+                description=str(serializer.validated_data.get('description') or '').strip(),
+                description_language=description_language,
                 target_filename=str(serializer.validated_data.get('target_filename') or '').strip(),
                 author=str(serializer.validated_data.get('author') or '').strip(),
                 source_url=str(serializer.validated_data.get('source_url') or '').strip(),

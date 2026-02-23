@@ -12,7 +12,7 @@ import re
 from threading import Lock
 from time import perf_counter
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlparse
 import xml.etree.ElementTree as ET
 
 import requests
@@ -97,6 +97,8 @@ _WIKIDATA_API_URL = 'https://www.wikidata.org/w/api.php'
 _COMMONS_API_URL = 'https://commons.wikimedia.org/w/api.php'
 _NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search'
 _NOMINATIM_REVERSE_URL = 'https://nominatim.openstreetmap.org/reverse'
+_OSM_API_URL = 'https://api.openstreetmap.org/api/0.6'
+_WIKIDATA_QUERY_SERVICE_URL = 'https://query.wikidata.org/sparql'
 _PETSCAN_API_URL = 'https://petscan.wmcloud.org/'
 _VIEW_IT_API_BASE_URL = 'https://view-it.toolforge.org/api'
 _CITOID_REST_API_URL = 'https://en.wikipedia.org/api/rest_v1/data/citation/mediawiki/'
@@ -237,6 +239,68 @@ def decode_location_id(location_id: str) -> str:
     return unquote(location_id)
 
 
+def _build_yasgui_url(endpoint_url: str, query: str) -> str:
+    params: list[str] = []
+    if endpoint_url:
+        params.append(f'endpoint={quote(endpoint_url, safe="")}')
+    if query:
+        params.append(f'query={quote(query, safe="")}')
+    if not params:
+        return 'https://yasgui.triply.cc/'
+    return f'https://yasgui.triply.cc/?{"&".join(params)}'
+
+
+def _build_sophox_url(query: str) -> str:
+    return f'https://sophox.org/#query={quote(query, safe="")}'
+
+
+def _sparql_query_ui_url(endpoint_url: str, query: str) -> str:
+    normalized_endpoint = str(endpoint_url or '').strip()
+    normalized_query = str(query or '')
+
+    if not normalized_endpoint:
+        return _build_yasgui_url('', normalized_query)
+
+    try:
+        parsed = urlparse(normalized_endpoint)
+    except ValueError:
+        return _build_yasgui_url(normalized_endpoint, normalized_query)
+
+    if not parsed.scheme or not parsed.netloc:
+        return _build_yasgui_url(normalized_endpoint, normalized_query)
+
+    host = parsed.hostname.lower() if parsed.hostname else ''
+    path = parsed.path or ''
+
+    if host == 'query.wikidata.org':
+        return f'https://query.wikidata.org/#{quote(normalized_query, safe="")}'
+
+    if host == 'commons-query.wikimedia.org':
+        return f'https://commons-query.wikimedia.org/#{quote(normalized_query, safe="")}'
+
+    if host == 'sophox.org':
+        return _build_sophox_url(normalized_query)
+
+    if path.startswith('/api/') and 'qlever' in host:
+        dataset_path = path[len('/api/'):].strip('/')
+        if dataset_path == 'osm-planet':
+            return _build_sophox_url(normalized_query)
+        ui_base = f'{parsed.scheme}://{parsed.netloc}/{dataset_path or "wikidata"}/'
+        return f'{ui_base}?query={quote(normalized_query, safe="")}'
+
+    if host == 'dbpedia.org' and path.startswith('/sparql'):
+        return (
+            'https://dbpedia.org/sparql'
+            f'?query={quote(normalized_query, safe="")}&format=text/html'
+        )
+
+    return _build_yasgui_url(normalized_endpoint, normalized_query)
+
+
+def _sparql_error_with_query_link(message: str, query: str, endpoint_url: str) -> str:
+    return f'{message}\nSPARQL query UI URL: {_sparql_query_ui_url(endpoint_url, query)}'
+
+
 def _query_sparql(query: str) -> list[dict[str, Any]]:
     request_started_at = perf_counter()
     request_url = str(getattr(settings, 'SPARQL_ENDPOINT', '') or '')
@@ -260,7 +324,13 @@ def _query_sparql(query: str) -> list[dict[str, Any]]:
             started_at=request_started_at,
             error=exc,
         )
-        raise SPARQLServiceError(f'SPARQL request failed: {exc}') from exc
+        raise SPARQLServiceError(
+            _sparql_error_with_query_link(
+                f'SPARQL request failed: {exc}',
+                query,
+                request_url,
+            )
+        ) from exc
     _list_render_debug_log_external_fetch(
         source='sparql',
         url=request_url,
@@ -271,7 +341,13 @@ def _query_sparql(query: str) -> list[dict[str, Any]]:
         try:
             root = ET.fromstring(xml_text)
         except ET.ParseError as exc:
-            raise SPARQLServiceError(f'SPARQL XML parse failed: {exc}') from exc
+            raise SPARQLServiceError(
+                _sparql_error_with_query_link(
+                    f'SPARQL XML parse failed: {exc}',
+                    query,
+                    request_url,
+                )
+            ) from exc
 
         ns = {'sr': 'http://www.w3.org/2005/sparql-results#'}
         bindings: list[dict[str, Any]] = []
@@ -314,8 +390,12 @@ def _query_sparql(query: str) -> list[dict[str, Any]]:
             return _parse_sparql_xml_results(response.text)
 
         raise SPARQLServiceError(
-            'SPARQL endpoint did not return supported results format. '
-            f'content_type={content_type!r}, preview={preview!r}'
+            _sparql_error_with_query_link(
+                'SPARQL endpoint did not return supported results format. '
+                f'content_type={content_type!r}, preview={preview!r}',
+                query,
+                request_url,
+            )
         ) from exc
 
     return payload.get('results', {}).get('bindings', [])
@@ -3408,6 +3488,8 @@ def _commons_add_depicts_claims(
 def _commons_upload_description_wikitext(
     caption: str,
     caption_language: str,
+    description: str,
+    description_language: str,
     categories: list[str] | None,
     wikidata_item: str,
     author: str,
@@ -3418,20 +3500,43 @@ def _commons_upload_description_wikitext(
     longitude: float | None,
     use_exif_coordinates: bool,
 ) -> str:
-    normalized_language = _wikidata_language_code(caption_language, fallback='en')
+    normalized_caption_language = _wikidata_language_code(caption_language, fallback='en')
+    normalized_description_language = _wikidata_language_code(
+        description_language,
+        fallback=normalized_caption_language,
+    )
     normalized_caption = str(caption or '').replace('\r', ' ').replace('\n', ' ').strip()
-    if not normalized_caption:
-        normalized_caption = 'Uploaded with Locations Explorer.'
+    normalized_description = str(description or '').replace('\r', ' ').replace('\n', ' ').strip()
     normalized_wikidata_qid = _extract_wikidata_qid(str(wikidata_item or ''))
     normalized_author = str(author or '').replace('\r', ' ').replace('\n', ' ').strip()
     normalized_source_url = str(source_url or '').strip()
     normalized_date_created = str(date_created or '').strip()
     normalized_license_template = str(license_template or '').strip() or 'Cc-by-sa-4.0'
 
+    description_entries: list[str] = []
+    description_seen: set[str] = set()
+
+    def _push_description_entry(language: str, text: str) -> None:
+        normalized_text = str(text or '').strip()
+        normalized_language = _wikidata_language_code(language, fallback='en')
+        if not normalized_text:
+            return
+        dedupe_key = f'{normalized_language}|{normalized_text.casefold()}'
+        if dedupe_key in description_seen:
+            return
+        description_seen.add(dedupe_key)
+        description_entries.append(f'{{{{{normalized_language}|1={normalized_text}}}}}')
+
+    _push_description_entry(normalized_caption_language, normalized_caption)
+    _push_description_entry(normalized_description_language, normalized_description)
+    if not description_entries:
+        _push_description_entry('en', 'Uploaded with Locations Explorer.')
+    description_value = '<br />'.join(description_entries)
+
     lines = [
         '== {{int:filedesc}} ==',
         '{{Information',
-        f'|description={{{{{normalized_language}|1={normalized_caption}}}}}',
+        f'|description={description_value}',
         (
             f'|date={normalized_date_created}'
             if normalized_date_created
@@ -3480,6 +3585,8 @@ def upload_image_to_commons(
     image_file: Any,
     caption: str = '',
     caption_language: str = 'en',
+    description: str = '',
+    description_language: str = 'en',
     target_filename: str = '',
     author: str = '',
     source_url: str = '',
@@ -3532,6 +3639,8 @@ def upload_image_to_commons(
     description_text = _commons_upload_description_wikitext(
         caption=caption,
         caption_language=caption_language,
+        description=description,
+        description_language=description_language,
         categories=normalized_categories,
         wikidata_item=wikidata_item,
         author=author,
@@ -5033,6 +5142,444 @@ def fetch_wikidata_entity(entity_id: str, lang: str | None = None) -> dict[str, 
         'image_name': image_name,
         'image_url': image_url,
         'image_thumb_url': image_thumb_url,
+    }
+
+
+def _normalize_osm_feature_type(value: str) -> str:
+    normalized = str(value or '').strip().lower()
+    if normalized in {'node', 'way', 'relation'}:
+        return normalized
+    return ''
+
+
+def _normalize_osm_feature_id(value: Any) -> int | None:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    if normalized < 1:
+        return None
+    return normalized
+
+
+def _sanitize_osm_tags(tags: Any) -> dict[str, str]:
+    if not isinstance(tags, dict):
+        return {}
+    normalized_tags: dict[str, str] = {}
+    for raw_key, raw_value in tags.items():
+        key = str(raw_key or '').strip()
+        value = str(raw_value or '').strip()
+        if not key or not value:
+            continue
+        normalized_tags[key] = value
+    return normalized_tags
+
+
+def _escape_sparql_literal(value: str) -> str:
+    return (
+        str(value or '')
+        .replace('\\', '\\\\')
+        .replace('"', '\\"')
+        .replace('\n', ' ')
+        .replace('\r', ' ')
+    )
+
+
+def _normalize_osm_feature_coordinate(value: Any, *, minimum: float, maximum: float) -> float | None:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(normalized):
+        return None
+    if normalized < minimum or normalized > maximum:
+        return None
+    return normalized
+
+
+def _normalize_osm_feature_name_for_lookup(value: Any) -> str:
+    normalized = re.sub(r'\s+', ' ', str(value or '').strip())
+    if len(normalized) < 2:
+        return ''
+    return normalized[:200]
+
+
+def _wikidata_reverse_and_nearby_name_lookup_for_osm_feature(
+    feature_type: str | None,
+    feature_id: Any,
+    *,
+    name: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    lang: str | None = None,
+    limit: int = 8,
+    radius_km: float = 2.5,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    normalized_type = _normalize_osm_feature_type(str(feature_type or ''))
+    normalized_id = _normalize_osm_feature_id(feature_id)
+    property_id = ''
+    if normalized_type == 'way' and normalized_id is not None:
+        property_id = 'P10689'
+    elif normalized_type == 'relation' and normalized_id is not None:
+        property_id = 'P402'
+
+    normalized_name = _normalize_osm_feature_name_for_lookup(name)
+    normalized_latitude = _normalize_osm_feature_coordinate(latitude, minimum=-90.0, maximum=90.0)
+    normalized_longitude = _normalize_osm_feature_coordinate(longitude, minimum=-180.0, maximum=180.0)
+    has_id_lookup = bool(property_id and normalized_id is not None)
+    has_name_lookup = bool(normalized_name and normalized_latitude is not None and normalized_longitude is not None)
+    if not has_id_lookup and not has_name_lookup:
+        return [], []
+
+    query_limit = max(1, min(int(limit), 25))
+    query_radius = max(0.05, min(float(radius_km), 30.0))
+    query_languages = _sparql_label_languages(lang).replace('"', '')
+    search_languages = [
+        language_code
+        for language_code in _language_fallbacks(lang, include_mul=False)
+        if re.fullmatch(r'[a-z]{2,12}(?:-[a-z0-9]{2,12})?', language_code)
+    ]
+    if 'en' not in search_languages:
+        search_languages.append('en')
+    if not search_languages:
+        search_languages = ['en']
+    language_clause = ', '.join(
+        f'"{_escape_sparql_literal(language_code)}"'
+        for language_code in search_languages
+    )
+
+    clauses: list[str] = []
+    if has_id_lookup and normalized_id is not None:
+        escaped_match_value = _escape_sparql_literal(str(normalized_id))
+        clauses.append(
+            f"""
+  {{
+    ?item wdt:{property_id} "{escaped_match_value}" .
+    BIND("{property_id}" AS ?property)
+    BIND("ID" AS ?matchType)
+    BIND("{escaped_match_value}" AS ?matchValue)
+    BIND(0 AS ?matchPriority)
+    BIND(0.0 AS ?distanceSort)
+  }}
+""".strip()
+        )
+    if has_name_lookup and normalized_latitude is not None and normalized_longitude is not None:
+        escaped_name = _escape_sparql_literal(normalized_name)
+        clauses.append(
+            f"""
+  {{
+    SERVICE wikibase:around {{
+      ?item wdt:P625 ?location .
+      bd:serviceParam wikibase:center "Point({normalized_longitude:.7f} {normalized_latitude:.7f})"^^geo:wktLiteral .
+      bd:serviceParam wikibase:radius "{query_radius:.3f}" .
+      bd:serviceParam wikibase:distance ?distance .
+    }}
+    {{
+      ?item rdfs:label ?candidateLabel .
+    }}
+    UNION
+    {{
+      ?item skos:altLabel ?candidateLabel .
+    }}
+    FILTER(LANG(?candidateLabel) IN ({language_clause}))
+    FILTER(LCASE(STR(?candidateLabel)) = LCASE("{escaped_name}"))
+    BIND("NAME" AS ?property)
+    BIND("NAME" AS ?matchType)
+    BIND("{escaped_name}" AS ?matchValue)
+    BIND(1 AS ?matchPriority)
+    BIND(?distance AS ?distanceSort)
+  }}
+""".strip()
+        )
+
+    combined_limit = query_limit * len(clauses)
+    query = f"""
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT ?item ?itemLabel ?itemDescription ?property ?matchType ?matchValue ?distanceSort
+WHERE {{
+  {' UNION '.join(clauses)}
+  FILTER(STRSTARTS(STR(?item), "http://www.wikidata.org/entity/Q"))
+  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{query_languages}". }}
+}}
+ORDER BY ASC(?matchPriority) ASC(?distanceSort)
+LIMIT {combined_limit}
+""".strip()
+
+    if getattr(settings, 'DEBUG', False):
+        print(
+            '[SPARQL-DEBUG] source=wikidata-reverse-and-name '
+            f'endpoint={_WIKIDATA_QUERY_SERVICE_URL} '
+            f'feature_type={normalized_type!r} '
+            f'feature_id={normalized_id!r} '
+            f'name={normalized_name!r} '
+            f'lat={normalized_latitude!r} '
+            f'lon={normalized_longitude!r} '
+            f'radius_km={query_radius:.3f}\n'
+            f'{query}',
+            flush=True,
+        )
+
+    request_started_at = perf_counter()
+    request_url = _WIKIDATA_QUERY_SERVICE_URL
+    try:
+        response = requests.post(
+            _WIKIDATA_QUERY_SERVICE_URL,
+            data={
+                'query': query,
+                'format': 'application/sparql-results+json',
+            },
+            headers={
+                'Accept': 'application/sparql-results+json, application/json;q=0.9, */*;q=0.1',
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+            },
+            timeout=_external_timeout_seconds(),
+        )
+        request_url = str(getattr(response, 'url', '') or request_url)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        _list_render_debug_log_external_fetch(
+            source='wikidata-reverse-and-name',
+            url=request_url,
+            started_at=request_started_at,
+            error=exc,
+        )
+        raise ExternalServiceError(f'Wikidata reverse/name lookup failed: {exc}') from exc
+    _list_render_debug_log_external_fetch(
+        source='wikidata-reverse-and-name',
+        url=request_url,
+        started_at=request_started_at,
+    )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        preview = response.text[:200].replace('\n', ' ').strip()
+        raise ExternalServiceError(
+            'Wikidata reverse/name lookup did not return JSON. '
+            f'preview={preview!r}'
+        ) from exc
+
+    bindings = (
+        payload.get('results', {}).get('bindings', [])
+        if isinstance(payload, dict)
+        else []
+    )
+    if not isinstance(bindings, list):
+        return [], []
+
+    reverse_results: list[dict[str, str]] = []
+    nearby_name_results: list[dict[str, str]] = []
+    seen_reverse_qids: set[str] = set()
+    seen_name_qids: set[str] = set()
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        item_value = (
+            binding.get('item', {}).get('value', '')
+            if isinstance(binding.get('item'), dict)
+            else ''
+        )
+        qid = _extract_wikidata_qid(str(item_value))
+        if not qid:
+            continue
+        item_label = (
+            binding.get('itemLabel', {}).get('value', '')
+            if isinstance(binding.get('itemLabel'), dict)
+            else ''
+        )
+        item_description = (
+            binding.get('itemDescription', {}).get('value', '')
+            if isinstance(binding.get('itemDescription'), dict)
+            else ''
+        )
+        property_value = (
+            binding.get('property', {}).get('value', '')
+            if isinstance(binding.get('property'), dict)
+            else ''
+        )
+        match_type = (
+            binding.get('matchType', {}).get('value', '')
+            if isinstance(binding.get('matchType'), dict)
+            else ''
+        ).strip().upper()
+        match_value = (
+            binding.get('matchValue', {}).get('value', '')
+            if isinstance(binding.get('matchValue'), dict)
+            else ''
+        )
+        if match_type == 'NAME':
+            if qid in seen_name_qids:
+                continue
+            seen_name_qids.add(qid)
+            distance_value = (
+                binding.get('distanceSort', {}).get('value', '')
+                if isinstance(binding.get('distanceSort'), dict)
+                else ''
+            )
+            try:
+                parsed_distance = float(distance_value)
+                distance_km = f'{parsed_distance:.3f}'
+            except (TypeError, ValueError):
+                distance_km = ''
+            nearby_name_results.append(
+                {
+                    'id': qid,
+                    'label': str(item_label or '').strip(),
+                    'description': str(item_description or '').strip(),
+                    'property': 'NAME',
+                    'match_value': str(match_value or normalized_name),
+                    'distance_km': distance_km,
+                }
+            )
+            continue
+        if qid in seen_reverse_qids:
+            continue
+        seen_reverse_qids.add(qid)
+        reverse_results.append(
+            {
+                'id': qid,
+                'label': str(item_label or '').strip(),
+                'description': str(item_description or '').strip(),
+                'property': str(property_value or property_id).strip(),
+                'match_value': str(match_value or (normalized_id if normalized_id is not None else '')).strip(),
+            }
+        )
+    return reverse_results, nearby_name_results
+
+
+def _wikidata_reverse_lookup_for_osm_feature(
+    feature_type: str,
+    feature_id: int,
+    *,
+    lang: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, str]]:
+    reverse_candidates, _ = _wikidata_reverse_and_nearby_name_lookup_for_osm_feature(
+        feature_type,
+        feature_id,
+        lang=lang,
+        limit=limit,
+    )
+    return reverse_candidates
+
+
+def _wikidata_nearby_same_name_lookup(
+    name: str,
+    latitude: float,
+    longitude: float,
+    *,
+    lang: str | None = None,
+    limit: int = 8,
+    radius_km: float = 2.5,
+) -> list[dict[str, str]]:
+    _, nearby_name_candidates = _wikidata_reverse_and_nearby_name_lookup_for_osm_feature(
+        None,
+        None,
+        name=name,
+        latitude=latitude,
+        longitude=longitude,
+        lang=lang,
+        limit=limit,
+        radius_km=radius_km,
+    )
+    return nearby_name_candidates
+
+
+def fetch_latest_osm_feature_metadata(
+    feature_type: str,
+    feature_id: int,
+    *,
+    lang: str | None = None,
+    hint_latitude: float | None = None,
+    hint_longitude: float | None = None,
+    hint_name: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_type = _normalize_osm_feature_type(feature_type)
+    normalized_id = _normalize_osm_feature_id(feature_id)
+    if not normalized_type or normalized_id is None:
+        return None
+
+    request_url = f'{_OSM_API_URL}/{normalized_type}/{normalized_id}.json'
+    request_started_at = perf_counter()
+    try:
+        response = requests.get(
+            request_url,
+            headers={
+                'Accept': 'application/json',
+                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+            },
+            timeout=_external_timeout_seconds(),
+        )
+        request_url = str(getattr(response, 'url', '') or request_url)
+        if response.status_code == 404:
+            _list_render_debug_log_external_fetch(
+                source='osm-latest',
+                url=request_url,
+                started_at=request_started_at,
+            )
+            return None
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        _list_render_debug_log_external_fetch(
+            source='osm-latest',
+            url=request_url,
+            started_at=request_started_at,
+            error=exc,
+        )
+        raise ExternalServiceError(f'OSM latest feature request failed: {exc}') from exc
+    _list_render_debug_log_external_fetch(
+        source='osm-latest',
+        url=request_url,
+        started_at=request_started_at,
+    )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        preview = response.text[:200].replace('\n', ' ').strip()
+        raise ExternalServiceError(f'OSM API did not return JSON. preview={preview!r}') from exc
+
+    if not isinstance(payload, dict):
+        raise ExternalServiceError('OSM API returned unexpected payload.')
+
+    elements = payload.get('elements', [])
+    if not isinstance(elements, list):
+        return None
+
+    element: dict[str, Any] | None = None
+    for candidate in elements:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_type = _normalize_osm_feature_type(str(candidate.get('type') or ''))
+        candidate_id = _normalize_osm_feature_id(candidate.get('id'))
+        if candidate_type == normalized_type and candidate_id == normalized_id:
+            element = candidate
+            break
+    if element is None:
+        return None
+
+    tags = _sanitize_osm_tags(element.get('tags'))
+    name = str(tags.get('name') or '').strip()
+    direct_wikidata_qid = _extract_wikidata_qid(str(tags.get('wikidata') or ''))
+
+    latitude = _normalize_osm_feature_coordinate(element.get('lat'), minimum=-90.0, maximum=90.0)
+    longitude = _normalize_osm_feature_coordinate(element.get('lon'), minimum=-180.0, maximum=180.0)
+
+    return {
+        'type': normalized_type,
+        'id': normalized_id,
+        'name': name,
+        'wikidata': direct_wikidata_qid,
+        'lat': latitude,
+        'lon': longitude,
+        'tags': tags,
     }
 
 

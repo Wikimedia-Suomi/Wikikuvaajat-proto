@@ -10,4 +10,5 @@ class FrontendAppView(TemplateView):
         context['api_base_url'] = settings.API_BASE_URL
         context['sparql_default_endpoint'] = getattr(settings, 'SPARQL_ENDPOINT', '')
         context['sparql_predefined_endpoints'] = getattr(settings, 'SPARQL_PREDEFINED_ENDPOINTS', [])
+        context['sparql_osm_endpoint'] = getattr(settings, 'SPARQL_OSM_ENDPOINT', '')
         return context

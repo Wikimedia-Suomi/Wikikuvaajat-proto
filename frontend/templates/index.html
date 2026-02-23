@@ -14,11 +14,13 @@
     {{ api_base_url|json_script:"api-base-url" }}
     {{ sparql_default_endpoint|json_script:"sparql-default-endpoint" }}
     {{ sparql_predefined_endpoints|json_script:"sparql-predefined-endpoints" }}
+    {{ sparql_osm_endpoint|json_script:"sparql-osm-endpoint" }}
     <script>
       window.APP_CONFIG = {
         apiBaseUrl: JSON.parse(document.getElementById('api-base-url').textContent),
         sparqlDefaultEndpoint: JSON.parse(document.getElementById('sparql-default-endpoint').textContent),
-        sparqlPredefinedEndpoints: JSON.parse(document.getElementById('sparql-predefined-endpoints').textContent)
+        sparqlPredefinedEndpoints: JSON.parse(document.getElementById('sparql-predefined-endpoints').textContent),
+        sparqlOsmEndpoint: JSON.parse(document.getElementById('sparql-osm-endpoint').textContent)
       }
     </script>
 
@@ -26,6 +28,6 @@
     <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
     <script src="https://unpkg.com/vue-i18n@9/dist/vue-i18n.global.prod.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="{% static 'ui/app.js' %}"></script>
+    <script src="{% static 'ui/app.js' %}?v=20260222-11"></script>
   </body>
 </html>

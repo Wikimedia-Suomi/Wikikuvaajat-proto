@@ -82,7 +82,27 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:8000/api')
-SPARQL_ENDPOINT = os.getenv('SPARQL_ENDPOINT', 'https://query.wikidata.org/sparql')
+SPARQL_ENDPOINT_OPTIONS = {
+    'wikidata': 'https://query.wikidata.org/sparql',
+    'qlever-wikidata': 'https://qlever.cs.uni-freiburg.de/api/wikidata',
+}
+SPARQL_ENDPOINT_KEY = os.getenv('SPARQL_ENDPOINT_KEY', 'wikidata')
+SPARQL_ENDPOINT = os.getenv(
+    'SPARQL_ENDPOINT',
+    SPARQL_ENDPOINT_OPTIONS.get(SPARQL_ENDPOINT_KEY, SPARQL_ENDPOINT_OPTIONS['wikidata']),
+)
 SPARQL_PREDEFINED_ENDPOINTS = [
-    {'id': 'wikidata', 'label': 'Wikidata', 'url': 'https://query.wikidata.org/sparql'},
+    {'id': 'wikidata', 'label': 'Wikidata', 'url': SPARQL_ENDPOINT_OPTIONS['wikidata']},
+    {'id': 'qlever-wikidata', 'label': 'QLever Wikidata', 'url': SPARQL_ENDPOINT_OPTIONS['qlever-wikidata']},
 ]
+SPARQL_OSM_ENDPOINT_OPTIONS = {
+    'qlever-osm-planet': 'https://qlever.dev/api/osm-planet',
+}
+SPARQL_OSM_ENDPOINT_KEY = os.getenv('SPARQL_OSM_ENDPOINT_KEY', 'qlever-osm-planet')
+SPARQL_OSM_ENDPOINT = os.getenv(
+    'SPARQL_OSM_ENDPOINT',
+    SPARQL_OSM_ENDPOINT_OPTIONS.get(
+        SPARQL_OSM_ENDPOINT_KEY,
+        SPARQL_OSM_ENDPOINT_OPTIONS['qlever-osm-planet'],
+    ),
+)

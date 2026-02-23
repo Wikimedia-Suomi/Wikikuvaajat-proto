@@ -237,6 +237,8 @@ class CommonsImageUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
     caption = serializers.CharField(max_length=500, required=False, allow_blank=True)
     caption_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    description_language = serializers.CharField(max_length=12, required=False, allow_blank=True)
     target_filename = serializers.CharField(max_length=255, required=False, allow_blank=True)
     author = serializers.CharField(max_length=255, required=False, allow_blank=True)
     source_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
@@ -266,6 +268,14 @@ class CommonsImageUploadSerializer(serializers.Serializer):
         if re.fullmatch(r'[a-z]{2,12}', raw_value):
             return raw_value
         raise serializers.ValidationError('caption_language must be a valid language code.')
+
+    def validate_description_language(self, value: str) -> str:
+        raw_value = (value or '').strip().lower()
+        if not raw_value:
+            return ''
+        if re.fullmatch(r'[a-z]{2,12}', raw_value):
+            return raw_value
+        raise serializers.ValidationError('description_language must be a valid language code.')
 
     def validate_target_filename(self, value: str) -> str:
         raw_value = str(value or '').strip()

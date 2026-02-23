@@ -52,8 +52,7 @@ SELECT * WHERE {
 }
 ```
 
-The backend extends it with label/description and coordinates needed by the list/map views, and executes it against:
-- `https://query.wikidata.org/sparql`
+The backend extends it with label/description and coordinates needed by the list/map views, and executes it against the configured SPARQL endpoint (Wikidata or QLever by default settings).
 
 ## API endpoints
 
@@ -73,7 +72,8 @@ The backend extends it with label/description and coordinates needed by the list
 
 ## Backend environment variables (optional)
 
-- `SPARQL_ENDPOINT` (default: `https://query.wikidata.org/sparql`)
+- `SPARQL_ENDPOINT_KEY` (default: `wikidata`, options: `wikidata`, `qlever-wikidata`)
+- `SPARQL_ENDPOINT` (optional explicit override URL; if unset, selected by `SPARQL_ENDPOINT_KEY`)
 - `SPARQL_DEFAULT_LIMIT` (default: `500`)
 - `SPARQL_TIMEOUT_SECONDS` (default: `15`)
 - `API_BASE_URL` (default: `/api`)

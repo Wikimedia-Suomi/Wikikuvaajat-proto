@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from urllib.parse import quote
 from unittest.mock import Mock, patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -414,6 +415,8 @@ class WikidataWriteAuthTests(SimpleTestCase):
             image_file=image_file,
             caption='Test caption',
             caption_language='fi',
+            description='Test description',
+            description_language='en',
             target_filename='Custom_name.jpg',
             author='Example Photographer',
             source_url='https://example.org/source-photo',
@@ -467,6 +470,8 @@ class WikidataWriteAuthTests(SimpleTestCase):
         self.assertIn('{{Location|60.169900|24.938400}}', upload_call.kwargs['data']['text'])
         self.assertIn('|source=https://example.org/source-photo', upload_call.kwargs['data']['text'])
         self.assertIn('|author=Example Photographer', upload_call.kwargs['data']['text'])
+        self.assertIn('{{fi|1=Test caption}}', upload_call.kwargs['data']['text'])
+        self.assertIn('{{en|1=Test description}}', upload_call.kwargs['data']['text'])
         self.assertIn('|date=2026-02-20', upload_call.kwargs['data']['text'])
         self.assertIn('== {{int:license-header}} ==', upload_call.kwargs['data']['text'])
         self.assertIn('{{Cc-by-4.0}}', upload_call.kwargs['data']['text'])
@@ -710,10 +715,45 @@ class LocationServiceTests(SimpleTestCase):
         response.json.side_effect = ValueError('invalid json')
         response.text = '<html>Too many requests</html>'
         response.headers = {'Content-Type': 'text/html'}
+        response.url = 'https://query.wikidata.org/sparql'
         requests_post_mock.return_value = response
 
-        with self.assertRaises(SPARQLServiceError):
-            _query_sparql('SELECT * WHERE { ?s ?p ?o } LIMIT 1')
+        query = 'SELECT * WHERE { ?s ?p ?o } LIMIT 1'
+        with self.assertRaises(SPARQLServiceError) as exc_context:
+            _query_sparql(query)
+        message = str(exc_context.exception)
+        self.assertIn('SPARQL query UI URL: https://query.wikidata.org/#', message)
+        self.assertIn(quote(query, safe=''), message)
+        self.assertNotIn('SPARQL query:\n', message)
+        self.assertNotIn(query, message)
+
+    @patch('locations.services.requests.post')
+    def test_query_sparql_request_error_includes_query(self, requests_post_mock):
+        requests_post_mock.side_effect = services.requests.RequestException('connection failed')
+
+        query = 'SELECT ?item WHERE { ?item wdt:P31 wd:Q5 } LIMIT 1'
+        with self.assertRaises(SPARQLServiceError) as exc_context:
+            _query_sparql(query)
+        message = str(exc_context.exception)
+        self.assertIn('SPARQL query UI URL: https://query.wikidata.org/#', message)
+        self.assertIn(quote(query, safe=''), message)
+        self.assertNotIn('SPARQL query:\n', message)
+        self.assertNotIn(query, message)
+
+    @override_settings(SPARQL_ENDPOINT='https://qlever.cs.uni-freiburg.de/api/wikidata')
+    @patch('locations.services.requests.post')
+    def test_query_sparql_request_error_uses_qlever_ui_url(self, requests_post_mock):
+        requests_post_mock.side_effect = services.requests.RequestException('connection failed')
+
+        query = 'SELECT ?item WHERE { ?item wdt:P31 wd:Q5 } LIMIT 1'
+        with self.assertRaises(SPARQLServiceError) as exc_context:
+            _query_sparql(query)
+        message = str(exc_context.exception)
+        self.assertIn(
+            'SPARQL query UI URL: https://qlever.cs.uni-freiburg.de/wikidata/?query=',
+            message,
+        )
+        self.assertIn(quote(query, safe=''), message)
 
     @patch('locations.services.requests.post')
     def test_query_sparql_accepts_xml_response(self, requests_post_mock):
@@ -742,6 +782,151 @@ class LocationServiceTests(SimpleTestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['itemLabel']['value'], 'Helsinki')
+
+    @patch('locations.services.requests.post')
+    def test_wikidata_nearby_same_name_lookup_builds_valid_language_in_clause(self, requests_post_mock):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.url = 'https://query.wikidata.org/sparql'
+        response.json.return_value = {
+            'results': {
+                'bindings': [],
+            },
+        }
+        requests_post_mock.return_value = response
+
+        result = services._wikidata_nearby_same_name_lookup(
+            'Tukkutorinkuja',
+            60.187813,
+            24.983468,
+            lang='fi',
+        )
+
+        self.assertEqual(result, [])
+        requests_post_mock.assert_called_once()
+        query = requests_post_mock.call_args.kwargs['data']['query']
+        self.assertIn('FILTER(LANG(?candidateLabel) IN ("fi", "en"))', query)
+        self.assertNotIn('FILTER(LANG(?candidateLabel) IN ("fi" "en"))', query)
+
+    @patch('locations.services.requests.get')
+    def test_fetch_latest_osm_feature_metadata_returns_osm_metadata(
+        self,
+        requests_get_mock,
+    ):
+        response = Mock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.url = 'https://api.openstreetmap.org/api/0.6/way/12345.json'
+        response.json.return_value = {
+            'elements': [
+                {
+                    'type': 'way',
+                    'id': 12345,
+                    'tags': {
+                        'name': 'Example Street',
+                        'wikidata': 'Q123456',
+                        'highway': 'residential',
+                    },
+                },
+            ],
+        }
+        requests_get_mock.return_value = response
+
+        result = services.fetch_latest_osm_feature_metadata(
+            'way',
+            12345,
+            lang='fi',
+            hint_latitude=60.187813,
+            hint_longitude=24.983468,
+            hint_name='Example Street',
+        )
+
+        self.assertEqual(result['id'], 12345)
+        self.assertEqual(result['name'], 'Example Street')
+        self.assertEqual(result['wikidata'], 'Q123456')
+        self.assertEqual(result['lat'], None)
+        self.assertEqual(result['lon'], None)
+        self.assertEqual(result['tags'].get('highway'), 'residential')
+        self.assertNotIn('wikidata_reverse_qid', result)
+        self.assertNotIn('wikidata_reverse_candidates', result)
+        self.assertNotIn('wikidata_name_match_candidates', result)
+
+    @patch('locations.services.requests.get')
+    def test_fetch_latest_osm_feature_metadata_keeps_name_empty_when_osm_name_missing(
+        self,
+        requests_get_mock,
+    ):
+        response = Mock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.url = 'https://api.openstreetmap.org/api/0.6/way/12345.json'
+        response.json.return_value = {
+            'elements': [
+                {
+                    'type': 'way',
+                    'id': 12345,
+                    'tags': {
+                        'highway': 'pedestrian',
+                    },
+                },
+            ],
+        }
+        requests_get_mock.return_value = response
+
+        result = services.fetch_latest_osm_feature_metadata(
+            'way',
+            12345,
+            lang='fi',
+            hint_latitude=60.187813,
+            hint_longitude=24.983468,
+            hint_name='Tukkutorinkuja',
+        )
+
+        self.assertEqual(result['id'], 12345)
+        self.assertEqual(result['name'], '')
+        self.assertEqual(result['wikidata'], '')
+        self.assertEqual(result['tags'].get('highway'), 'pedestrian')
+        self.assertNotIn('wikidata_reverse_qid', result)
+        self.assertNotIn('wikidata_reverse_candidates', result)
+        self.assertNotIn('wikidata_name_match_candidates', result)
+
+    @patch('locations.services.requests.get')
+    def test_fetch_latest_osm_feature_metadata_returns_direct_wikidata_from_tags(
+        self,
+        requests_get_mock,
+    ):
+        response = Mock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.url = 'https://api.openstreetmap.org/api/0.6/relation/54321.json'
+        response.json.return_value = {
+            'elements': [
+                {
+                    'type': 'relation',
+                    'id': 54321,
+                    'tags': {
+                        'name': 'Example Area',
+                        'wikidata': 'Q12345',
+                    },
+                },
+            ],
+        }
+        requests_get_mock.return_value = response
+
+        result = services.fetch_latest_osm_feature_metadata(
+            'relation',
+            54321,
+            lang='en',
+            hint_latitude=60.1701,
+            hint_longitude=24.9412,
+        )
+
+        self.assertEqual(result['id'], 54321)
+        self.assertEqual(result['name'], 'Example Area')
+        self.assertEqual(result['wikidata'], 'Q12345')
+        self.assertNotIn('wikidata_reverse_qid', result)
+        self.assertNotIn('wikidata_reverse_candidates', result)
+        self.assertNotIn('wikidata_name_match_candidates', result)
 
     def test_language_fallbacks_support_regional_locale(self):
         self.assertEqual(_language_fallbacks('sv-SE'), ['sv', 'en', 'mul'])

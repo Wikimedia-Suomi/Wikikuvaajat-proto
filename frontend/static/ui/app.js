@@ -13,6 +13,11 @@
       ? window.APP_CONFIG.sparqlDefaultEndpoint
       : ''
     ).trim()
+  const configuredSparqlOsmEndpoint =
+    (window.APP_CONFIG && typeof window.APP_CONFIG.sparqlOsmEndpoint === 'string'
+      ? window.APP_CONFIG.sparqlOsmEndpoint
+      : ''
+    ).trim()
   const configuredPredefinedEndpoints =
     window.APP_CONFIG && Array.isArray(window.APP_CONFIG.sparqlPredefinedEndpoints)
       ? window.APP_CONFIG.sparqlPredefinedEndpoints
@@ -21,12 +26,99 @@
   const SUPPORTED_LOCALES = ['en', 'sv', 'fi']
   const WIKIDATA_LANGUAGE_SEARCH_URL = 'https://commons.wikimedia.org/w/api.php'
   const WIKIDATA_PROPERTY_SEARCH_URL = 'https://www.wikidata.org/w/api.php'
-  const WIKIDATA_SPARQL_ENDPOINT_URL = 'https://query.wikidata.org/sparql'
-  const OVERPASS_API_URL = 'https://overpass-api.de/api/interpreter'
+  const WIKIDATA_SPARQL_ENDPOINT_URL = configuredSparqlDefaultEndpoint || 'https://query.wikidata.org/sparql'
+  const OSM_PLANET_SPARQL_ENDPOINT_URL = configuredSparqlOsmEndpoint || 'https://qlever.dev/api/osm-planet'
   const SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS = 150
   const SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS = 100
   const SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS = 10
+  const SAVE_IMAGE_SUBJECT_OSM_RADIUS_METERS = 30
+  const SAVE_IMAGE_SUBJECT_OSM_MAX_ELEMENTS = 80
+  const SAVE_IMAGE_SUBJECT_OSM_MAX_TAG_MAPPINGS = 120
+  const SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_BASE_LIMIT = 100
+  const SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_VISIBLE_LIMIT = 15
+  const SAVE_IMAGE_SUBJECT_NEARBY_WIKIDATA_MAX_ITEMS = 20
+  const SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_RADIUS_KM = 2.5
+  const SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_LIMIT = 8
+  const SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_CACHE_MAX_ITEMS = 200
+  const SAVE_IMAGE_SUBCATEGORY_COORDINATE_BATCH_SIZE = 10
+  const SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_QIDS = 40
+  const SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES = 120
+  const SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES = 20
+  const SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_P373 = 20
+  const SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_CACHE_MAX_ITEMS = 200
+  const SAVE_IMAGE_FILENAME_BUILDER_MAX_SUBJECTS = 2
+  const SAVE_IMAGE_FILENAME_BUILDER_MAX_CATEGORIES = 2
+  const SAVE_IMAGE_FILENAME_BUILDER_MAX_BASE_LENGTH = 220
+  const SAVE_IMAGE_SUBJECT_CONTAINER_FALLBACK_QID = 'Q1757'
+  const SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_TAG_KEYS = [
+    'name',
+    'wikidata',
+    'amenity',
+    'building',
+    'landuse',
+    'natural',
+    'boundary',
+    'highway',
+    'tourism',
+    'shop',
+    'leisure',
+    'historic',
+    'man_made',
+    'railway',
+    'public_transport',
+    'place',
+    'waterway',
+    'aeroway',
+    'route',
+    'power',
+    'office',
+    'craft',
+    'healthcare',
+    'station',
+    'bus',
+    'tram',
+    'subway',
+    'ferry',
+    'parking',
+    'sport',
+    'bridge',
+    'tunnel',
+    'service',
+    'aerialway',
+    'barrier',
+    'junction',
+    'water',
+    'landcover',
+    'area',
+  ]
+  const SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_ADDRESS_BINDINGS = [
+    {
+      variable: 'addrStreet',
+      predicateIri: 'https://www.openstreetmap.org/wiki/Key:addr:street',
+      tagKey: 'addr:street',
+    },
+    {
+      variable: 'addrHousenumber',
+      predicateIri: 'https://www.openstreetmap.org/wiki/Key:addr:housenumber',
+      tagKey: 'addr:housenumber',
+    },
+    {
+      variable: 'addrPlace',
+      predicateIri: 'https://www.openstreetmap.org/wiki/Key:addr:place',
+      tagKey: 'addr:place',
+    },
+  ]
   const SAVE_IMAGE_SELECTED_CATEGORY_ANCESTOR_DEPTH = 3
+  const SAVE_IMAGE_SUBJECT_TYPE_DEFINITIONS = [
+    { value: 'interior', locationRelevant: true },
+    { value: 'exterior', locationRelevant: true },
+    { value: 'aerial', locationRelevant: true },
+    { value: 'portrait', locationRelevant: false },
+    { value: 'general', locationRelevant: false },
+  ]
+  const SAVE_IMAGE_SUBJECT_TYPE_BY_VALUE = new Map(
+    SAVE_IMAGE_SUBJECT_TYPE_DEFINITIONS.map((entry) => [entry.value, entry])
+  )
   const WIKIDATA_LANGUAGE_CODE_CANONICAL = {
     sme: 'se',
   }
@@ -93,6 +185,24 @@
     NEW_WIKIDATA_OPTIONAL_PROPERTY_DEFINITIONS.map((entry) => [entry.propertyId, entry])
   )
   const AUTOCOMPLETE_RESULT_LIMIT = 20
+  const SUBJECT_WIKIDATA_DEBUG_LOG_ENABLED = (() => {
+    try {
+      if (window.APP_CONFIG && window.APP_CONFIG.debugSubjectWikidataSuggestions === true) {
+        return true
+      }
+      const hostname = (
+        window &&
+        window.location &&
+        typeof window.location.hostname === 'string'
+      )
+        ? window.location.hostname.trim().toLowerCase()
+        : ''
+      return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0'
+    } catch (error) {
+      void error
+      return false
+    }
+  })()
   const LOCATION_SILENT_REFRESH_DELAY_MS = 5000
   const DETAIL_IMAGE_PLACEHOLDER_DATA_URI = (() => {
     const svg = (
@@ -108,6 +218,85 @@
     )
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
   })()
+  const SAVE_IMAGE_SUBJECT_PIN_COLOR = '#1a73e8'
+  const SAVE_IMAGE_SUBJECT_LINKED_PIN_COLORS = [
+    '#d93025',
+    '#188038',
+    '#f9ab00',
+    '#9334e6',
+    '#00897b',
+    '#ef6c00',
+    '#c2185b',
+    '#5e35b1',
+    '#546e7a',
+    '#3949ab',
+  ]
+  const SAVE_IMAGE_SUBJECT_PIN_DATA_URI_BY_COLOR = new Map()
+
+  function buildSaveImageSubjectPinDataUri(color) {
+    const pinColor = typeof color === 'string' && color.trim()
+      ? color.trim()
+      : SAVE_IMAGE_SUBJECT_PIN_COLOR
+    const svg = (
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+      + '<path fill="' + pinColor + '" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>'
+      + '</svg>'
+    )
+    return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg)
+  }
+
+  function getSaveImageSubjectPinDataUri(color) {
+    const normalizedColor = typeof color === 'string' && color.trim()
+      ? color.trim()
+      : SAVE_IMAGE_SUBJECT_PIN_COLOR
+    if (SAVE_IMAGE_SUBJECT_PIN_DATA_URI_BY_COLOR.has(normalizedColor)) {
+      return SAVE_IMAGE_SUBJECT_PIN_DATA_URI_BY_COLOR.get(normalizedColor)
+    }
+    const dataUri = buildSaveImageSubjectPinDataUri(normalizedColor)
+    SAVE_IMAGE_SUBJECT_PIN_DATA_URI_BY_COLOR.set(normalizedColor, dataUri)
+    return dataUri
+  }
+
+  function getSaveImageSubjectLinkedPinColor(indexValue) {
+    const normalizedIndex = Number.parseInt(String(indexValue), 10)
+    if (!Number.isFinite(normalizedIndex) || normalizedIndex < 0) {
+      return SAVE_IMAGE_SUBJECT_LINKED_PIN_COLORS[0] || SAVE_IMAGE_SUBJECT_PIN_COLOR
+    }
+    if (SAVE_IMAGE_SUBJECT_LINKED_PIN_COLORS.length < 1) {
+      return SAVE_IMAGE_SUBJECT_PIN_COLOR
+    }
+    return SAVE_IMAGE_SUBJECT_LINKED_PIN_COLORS[normalizedIndex % SAVE_IMAGE_SUBJECT_LINKED_PIN_COLORS.length]
+  }
+
+  const SAVE_IMAGE_SUBJECT_PIN_DATA_URI = getSaveImageSubjectPinDataUri(SAVE_IMAGE_SUBJECT_PIN_COLOR)
+
+  function normalizeSaveImageSubjectType(value) {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (!normalized) {
+      return ''
+    }
+    return SAVE_IMAGE_SUBJECT_TYPE_BY_VALUE.has(normalized) ? normalized : ''
+  }
+
+  function saveImageSubjectTypeIsLocationRelevant(value) {
+    const normalized = normalizeSaveImageSubjectType(value)
+    if (!normalized) {
+      return false
+    }
+    const definition = SAVE_IMAGE_SUBJECT_TYPE_BY_VALUE.get(normalized)
+    return Boolean(definition && definition.locationRelevant)
+  }
+
+  function preferredSaveImageSubjectLinkMode(subjectType) {
+    const normalizedType = normalizeSaveImageSubjectType(subjectType)
+    if (!normalizedType) {
+      return 'map'
+    }
+    if (normalizedType === 'exterior' || normalizedType === 'aerial') {
+      return 'map'
+    }
+    return 'image-only'
+  }
 
   function normalizeLanguageSearchToken(value) {
     return String(value || '')
@@ -466,104 +655,6 @@ LIMIT ${queryResultLimit}
     return items
   }
 
-  async function fetchNearbyOverpassWikidataItems(latitude, longitude, {
-    radiusMeters = SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS,
-    limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
-  } = {}) {
-    const latitudeValue = Number(latitude)
-    const longitudeValue = Number(longitude)
-    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) {
-      return []
-    }
-
-    const searchRadiusMeters = Math.max(1, Math.min(Number.parseInt(String(radiusMeters), 10) || SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS, 5000))
-    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
-    const overpassQuery = `
-[out:json][timeout:25];
-(
-  node(around:${searchRadiusMeters},${latitudeValue.toFixed(7)},${longitudeValue.toFixed(7)})["wikidata"~"^Q[0-9]+$"];
-  way(around:${searchRadiusMeters},${latitudeValue.toFixed(7)},${longitudeValue.toFixed(7)})["wikidata"~"^Q[0-9]+$"];
-  relation(around:${searchRadiusMeters},${latitudeValue.toFixed(7)},${longitudeValue.toFixed(7)})["wikidata"~"^Q[0-9]+$"];
-);
-out body center qt;
-`.trim()
-
-    const requestBody = new URLSearchParams()
-    requestBody.set('data', overpassQuery)
-    const response = await fetch(OVERPASS_API_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-      },
-      body: requestBody.toString(),
-    })
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
-    }
-
-    const payload = await response.json()
-    const elements =
-      payload &&
-      typeof payload === 'object' &&
-      Array.isArray(payload.elements)
-        ? payload.elements
-        : []
-
-    const readCoordinate = (candidate) => {
-      const parsed = Number(candidate)
-      return Number.isFinite(parsed) ? parsed : null
-    }
-
-    const nearestItemByQid = new Map()
-    for (const element of elements) {
-      if (!element || typeof element !== 'object') {
-        continue
-      }
-      const elementTags =
-        element.tags && typeof element.tags === 'object'
-          ? element.tags
-          : {}
-      const qid = extractWikidataId(String(elementTags.wikidata || ''))
-      if (!qid) {
-        continue
-      }
-
-      const directLatitude = readCoordinate(element.lat)
-      const directLongitude = readCoordinate(element.lon)
-      const centerLatitude = (
-        element.center && typeof element.center === 'object'
-          ? readCoordinate(element.center.lat)
-          : null
-      )
-      const centerLongitude = (
-        element.center && typeof element.center === 'object'
-          ? readCoordinate(element.center.lon)
-          : null
-      )
-      const itemLatitude = directLatitude !== null ? directLatitude : centerLatitude
-      const itemLongitude = directLongitude !== null ? directLongitude : centerLongitude
-      const distanceKm = haversineDistanceKilometers(
-        latitudeValue,
-        longitudeValue,
-        itemLatitude,
-        itemLongitude,
-      )
-      const distanceSortValue = Number.isFinite(distanceKm) ? distanceKm : Number.POSITIVE_INFINITY
-      const existing = nearestItemByQid.get(qid)
-      if (!existing || distanceSortValue < existing.distanceSortValue) {
-        nearestItemByQid.set(qid, {
-          qid,
-          distanceSortValue,
-        })
-      }
-    }
-
-    return Array.from(nearestItemByQid.values())
-      .sort((left, right) => left.distanceSortValue - right.distanceSortValue)
-      .slice(0, resultLimit)
-  }
-
   async function fetchCommonsCategoriesForWikidataQids(qids, {
     limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
   } = {}) {
@@ -697,6 +788,320 @@ LIMIT ${queryResultLimit}
       }
     }
     return categories
+  }
+
+  async function fetchWikidataCategoryContextForQids(qids, { lang = null } = {}) {
+    const normalizedQids = []
+    const seenQids = new Set()
+    const maxQids = Math.max(
+      1,
+      Math.min(
+        Number.parseInt(String(SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_QIDS), 10) || SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_QIDS,
+        50,
+      ),
+    )
+    for (const rawQid of Array.isArray(qids) ? qids : []) {
+      const normalizedQid = extractWikidataId(String(rawQid || ''))
+      if (!normalizedQid || seenQids.has(normalizedQid)) {
+        continue
+      }
+      seenQids.add(normalizedQid)
+      normalizedQids.push(normalizedQid)
+      if (normalizedQids.length >= maxQids) {
+        break
+      }
+    }
+    if (normalizedQids.length < 1) {
+      return {
+        subjectCategories: [],
+        places: [],
+      }
+    }
+
+    const valuesClause = normalizedQids.map((qid) => `wd:${qid}`).join(' ')
+    const queryLanguage = normalizeSupportedLocale(lang) || 'en'
+    const labelLanguage = Array.from(new Set([queryLanguage, 'en'])).join(',')
+    const queryResultLimit = Math.max(
+      SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES,
+      Math.min(normalizedQids.length * 30, 1200),
+    )
+    const sparql = `
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+
+SELECT ?seed ?subjectCommonsCategory ?subjectCommonsCategoryFromType ?place ?placeLabel
+WHERE {
+  VALUES ?seed { ${valuesClause} }
+  OPTIONAL {
+    ?seed wdt:P373 ?subjectCommonsCategoryRaw .
+    BIND(STR(?subjectCommonsCategoryRaw) AS ?subjectCommonsCategory)
+  }
+  OPTIONAL {
+    ?seed (wdt:P31|wdt:P279) ?seedTypeItem .
+    ?seedTypeItem wdt:P373 ?subjectCommonsCategoryFromTypeRaw .
+    BIND(STR(?subjectCommonsCategoryFromTypeRaw) AS ?subjectCommonsCategoryFromType)
+  }
+  OPTIONAL {
+    ?seed (wdt:P131|wdt:P706|wdt:P276) ?place .
+    FILTER(STRSTARTS(STR(?place), "http://www.wikidata.org/entity/Q"))
+  }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${labelLanguage}". }
+}
+LIMIT ${queryResultLimit}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const seedIndexByQid = new Map()
+    for (let index = 0; index < normalizedQids.length; index += 1) {
+      seedIndexByQid.set(normalizedQids[index], index)
+    }
+
+    const categoriesBySeed = new Map()
+    const categoryKeysBySeed = new Map()
+    const placeByQid = new Map()
+    const placeOrderByQid = new Map()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const seedQid = extractWikidataId(
+        binding.seed &&
+        typeof binding.seed === 'object' &&
+        typeof binding.seed.value === 'string'
+          ? binding.seed.value
+          : '',
+      )
+      if (!seedQid) {
+        continue
+      }
+
+      const pushCategoryForSeed = (rawCategoryValue) => {
+        const subjectCommonsCategory = normalizeCommonsCategoryName(rawCategoryValue)
+        if (!subjectCommonsCategory) {
+          return
+        }
+        if (!categoriesBySeed.has(seedQid)) {
+          categoriesBySeed.set(seedQid, [])
+        }
+        if (!categoryKeysBySeed.has(seedQid)) {
+          categoryKeysBySeed.set(seedQid, new Set())
+        }
+        const dedupeKey = subjectCommonsCategory.toLowerCase()
+        const seenKeys = categoryKeysBySeed.get(seedQid)
+        if (seenKeys.has(dedupeKey)) {
+          return
+        }
+        seenKeys.add(dedupeKey)
+        categoriesBySeed.get(seedQid).push(subjectCommonsCategory)
+      }
+
+      pushCategoryForSeed(
+        binding.subjectCommonsCategory &&
+        typeof binding.subjectCommonsCategory === 'object' &&
+        typeof binding.subjectCommonsCategory.value === 'string'
+          ? binding.subjectCommonsCategory.value
+          : '',
+      )
+      pushCategoryForSeed(
+        binding.subjectCommonsCategoryFromType &&
+        typeof binding.subjectCommonsCategoryFromType === 'object' &&
+        typeof binding.subjectCommonsCategoryFromType.value === 'string'
+          ? binding.subjectCommonsCategoryFromType.value
+          : '',
+      )
+
+      const placeQid = extractWikidataId(
+        binding.place &&
+        typeof binding.place === 'object' &&
+        typeof binding.place.value === 'string'
+          ? binding.place.value
+          : '',
+      )
+      if (!placeQid) {
+        continue
+      }
+
+      const placeLabel = (
+        binding.placeLabel &&
+        typeof binding.placeLabel === 'object' &&
+        typeof binding.placeLabel.value === 'string'
+      )
+        ? binding.placeLabel.value.trim()
+        : ''
+      if (!placeByQid.has(placeQid)) {
+        placeByQid.set(placeQid, {
+          id: placeQid,
+          label: placeLabel,
+        })
+        placeOrderByQid.set(
+          placeQid,
+          seedIndexByQid.has(seedQid) ? seedIndexByQid.get(seedQid) : Number.MAX_SAFE_INTEGER,
+        )
+      } else {
+        const current = placeByQid.get(placeQid)
+        if (current && !current.label && placeLabel) {
+          current.label = placeLabel
+        }
+      }
+    }
+
+    const subjectCategories = []
+    const seenCategoryKeys = new Set()
+    for (const seedQid of normalizedQids) {
+      const seedCategories = categoriesBySeed.get(seedQid)
+      if (!Array.isArray(seedCategories)) {
+        continue
+      }
+      for (const categoryName of seedCategories) {
+        const normalizedCategory = normalizeCommonsCategoryName(categoryName)
+        if (!normalizedCategory) {
+          continue
+        }
+        const dedupeKey = normalizedCategory.toLowerCase()
+        if (seenCategoryKeys.has(dedupeKey)) {
+          continue
+        }
+        seenCategoryKeys.add(dedupeKey)
+        subjectCategories.push(normalizedCategory)
+        if (subjectCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+          break
+        }
+      }
+      if (subjectCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+        break
+      }
+    }
+
+    const places = Array.from(placeByQid.values())
+      .sort((left, right) => {
+        const leftOrder = placeOrderByQid.has(left.id) ? placeOrderByQid.get(left.id) : Number.MAX_SAFE_INTEGER
+        const rightOrder = placeOrderByQid.has(right.id) ? placeOrderByQid.get(right.id) : Number.MAX_SAFE_INTEGER
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder
+        }
+        return String(left.label || left.id).localeCompare(
+          String(right.label || right.id),
+          'en',
+          { sensitivity: 'base' },
+        )
+      })
+      .slice(0, SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES)
+      .map((place) => ({
+        id: place.id,
+        label: String(place.label || '').trim(),
+      }))
+
+    return {
+      subjectCategories,
+      places,
+    }
+  }
+
+  async function fetchCommonsCategoryExistenceMap(categoryNames) {
+    const normalizedCategories = []
+    const categoryByDedupeKey = new Map()
+    for (const rawCategory of Array.isArray(categoryNames) ? categoryNames : []) {
+      const normalizedCategory = normalizeCommonsCategoryName(String(rawCategory || ''))
+      if (!normalizedCategory) {
+        continue
+      }
+      const dedupeKey = normalizedCategory.toLowerCase()
+      if (categoryByDedupeKey.has(dedupeKey)) {
+        continue
+      }
+      categoryByDedupeKey.set(dedupeKey, normalizedCategory)
+      normalizedCategories.push(normalizedCategory)
+    }
+    if (normalizedCategories.length < 1) {
+      return new Map()
+    }
+
+    const existenceByDedupeKey = new Map()
+    const requestChunkSize = 25
+    for (let index = 0; index < normalizedCategories.length; index += requestChunkSize) {
+      const categoryChunk = normalizedCategories.slice(index, index + requestChunkSize)
+      if (categoryChunk.length < 1) {
+        continue
+      }
+
+      const url = new URL('https://commons.wikimedia.org/w/api.php')
+      url.searchParams.set('action', 'query')
+      url.searchParams.set('titles', categoryChunk.map((name) => `Category:${name}`).join('|'))
+      url.searchParams.set('format', 'json')
+      url.searchParams.set('formatversion', '2')
+      url.searchParams.set('origin', '*')
+
+      const response = await fetch(url.toString(), { method: 'GET' })
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`)
+      }
+
+      const payload = await response.json()
+      if (payload && typeof payload === 'object' && payload.error && payload.error.info) {
+        throw new Error(String(payload.error.info))
+      }
+
+      const pages =
+        payload &&
+        typeof payload === 'object' &&
+        payload.query &&
+        typeof payload.query === 'object' &&
+        Array.isArray(payload.query.pages)
+          ? payload.query.pages
+          : []
+      for (const page of pages) {
+        if (!page || typeof page !== 'object') {
+          continue
+        }
+        const normalizedTitle = normalizeCommonsCategoryName(
+          typeof page.title === 'string' ? page.title : '',
+        )
+        if (!normalizedTitle) {
+          continue
+        }
+        const dedupeKey = normalizedTitle.toLowerCase()
+        if (!categoryByDedupeKey.has(dedupeKey)) {
+          continue
+        }
+        existenceByDedupeKey.set(dedupeKey, !Object.prototype.hasOwnProperty.call(page, 'missing'))
+      }
+
+      for (const categoryName of categoryChunk) {
+        const dedupeKey = categoryName.toLowerCase()
+        if (!existenceByDedupeKey.has(dedupeKey)) {
+          existenceByDedupeKey.set(dedupeKey, false)
+        }
+      }
+    }
+
+    return existenceByDedupeKey
   }
 
   async function fetchWikidataDepictItemsForQids(qids, {
@@ -857,16 +1262,11 @@ LIMIT ${queryResultLimit}
     radiusMeters = SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS,
     limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
   } = {}) {
-    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
-    const nearbyItems = await fetchNearbyOverpassWikidataItems(latitude, longitude, {
-      radiusMeters,
-      limit: resultLimit,
-    })
-    const qids = nearbyItems.map((item) => item.qid)
-    const categories = await fetchCommonsCategoriesForWikidataQids(qids, { limit: resultLimit })
-    return categories.map((item) => ({
-      category: item.category,
-    }))
+    void latitude
+    void longitude
+    void radiusMeters
+    void limit
+    return []
   }
 
   async function fetchNearbyOsmDepictItems(latitude, longitude, {
@@ -874,16 +1274,3746 @@ LIMIT ${queryResultLimit}
     limit = SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
     lang = null,
   } = {}) {
-    const resultLimit = Math.max(1, Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS, 50))
-    const nearbyItems = await fetchNearbyOverpassWikidataItems(latitude, longitude, {
-      radiusMeters,
-      limit: resultLimit,
+    void latitude
+    void longitude
+    void radiusMeters
+    void limit
+    void lang
+    return []
+  }
+
+  function normalizeOsmTagKeyForWikidataMapping(value) {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (!normalized) {
+      return ''
+    }
+    if (normalized.length > 64) {
+      return ''
+    }
+    if (!/^[a-z0-9:_-]+$/.test(normalized)) {
+      return ''
+    }
+    return normalized
+  }
+
+  function normalizeOsmTagValueForWikidataMapping(value) {
+    const normalized = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+    if (!normalized) {
+      return ''
+    }
+    if (normalized.length > 96) {
+      return ''
+    }
+    if (/[\n\r\t]/.test(normalized)) {
+      return ''
+    }
+    return normalized
+  }
+
+  function normalizeOsmTagPairForWikidataMapping(value) {
+    const normalized = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+    if (!normalized) {
+      return ''
+    }
+    const separatorIndex = normalized.indexOf('=')
+    if (separatorIndex <= 0 || separatorIndex >= normalized.length - 1) {
+      return ''
+    }
+    const key = normalizeOsmTagKeyForWikidataMapping(normalized.slice(0, separatorIndex))
+    const tagValue = normalizeOsmTagValueForWikidataMapping(normalized.slice(separatorIndex + 1))
+    if (!key || !tagValue) {
+      return ''
+    }
+    return `${key}=${tagValue}`
+  }
+
+  function shouldIgnoreOsmTagForWikidataMapping(tagKey) {
+    const normalizedKey = normalizeOsmTagKeyForWikidataMapping(tagKey)
+    if (!normalizedKey) {
+      return true
+    }
+    if (
+      normalizedKey === 'wikidata' ||
+      normalizedKey === 'wikipedia' ||
+      normalizedKey === 'area' ||
+      normalizedKey === 'name' ||
+      normalizedKey === 'alt_name' ||
+      normalizedKey === 'official_name' ||
+      normalizedKey === 'description' ||
+      normalizedKey === 'note' ||
+      normalizedKey === 'fixme' ||
+      normalizedKey === 'source' ||
+      normalizedKey === 'image' ||
+      normalizedKey === 'website' ||
+      normalizedKey === 'url' ||
+      normalizedKey === 'email' ||
+      normalizedKey === 'phone'
+    ) {
+      return true
+    }
+    if (
+      normalizedKey.startsWith('addr:') ||
+      normalizedKey.startsWith('contact:') ||
+      normalizedKey.startsWith('source:') ||
+      normalizedKey.startsWith('name:') ||
+      normalizedKey.startsWith('ref:') ||
+      normalizedKey.startsWith('old_name:')
+    ) {
+      return true
+    }
+    return false
+  }
+
+  const OSM_FEATURE_TYPE_GENERIC_VALUES = new Set([
+    'yes',
+    'no',
+    '1',
+    '0',
+    'true',
+    'false',
+    'unknown',
+    'unclassified',
+    'undefined',
+    'other',
+    'none',
+    'null',
+  ])
+
+  function splitNormalizedOsmTagPair(tagPair) {
+    const normalizedTagPair = normalizeOsmTagPairForWikidataMapping(tagPair)
+    if (!normalizedTagPair) {
+      return { key: '', value: '' }
+    }
+    const separatorIndex = normalizedTagPair.indexOf('=')
+    if (separatorIndex < 1) {
+      return { key: '', value: '' }
+    }
+    return {
+      key: normalizedTagPair.slice(0, separatorIndex),
+      value: normalizedTagPair.slice(separatorIndex + 1),
+    }
+  }
+
+  function isGenericOsmFeatureTypeValue(value) {
+    const normalizedValue = normalizeOsmTagValueForWikidataMapping(value)
+    if (!normalizedValue) {
+      return true
+    }
+    return OSM_FEATURE_TYPE_GENERIC_VALUES.has(normalizedValue)
+  }
+
+  function pickPrimaryOsmTypeTagForSuggestion(tagPairs) {
+    const normalizedTagPairs = []
+    const seenTagPairs = new Set()
+    for (const rawTagPair of Array.isArray(tagPairs) ? tagPairs : []) {
+      const normalizedTagPair = normalizeOsmTagPairForWikidataMapping(rawTagPair)
+      if (!normalizedTagPair || seenTagPairs.has(normalizedTagPair)) {
+        continue
+      }
+      seenTagPairs.add(normalizedTagPair)
+      normalizedTagPairs.push(normalizedTagPair)
+    }
+    if (normalizedTagPairs.length < 1) {
+      return ''
+    }
+
+    const preferredTypeKeys = [
+      'amenity',
+      'public_transport',
+      'railway',
+      'highway',
+      'building',
+      'tourism',
+      'shop',
+      'leisure',
+      'natural',
+      'landuse',
+      'waterway',
+      'aeroway',
+      'historic',
+      'man_made',
+      'route',
+      'healthcare',
+      'office',
+      'craft',
+      'power',
+      'boundary',
+      'place',
+      'barrier',
+    ]
+
+    for (const preferredKey of preferredTypeKeys) {
+      const specificMatch = normalizedTagPairs.find((tagPair) => {
+        const pair = splitNormalizedOsmTagPair(tagPair)
+        return pair.key === preferredKey && !isGenericOsmFeatureTypeValue(pair.value)
+      })
+      if (specificMatch) {
+        return specificMatch
+      }
+      const genericMatch = normalizedTagPairs.find((tagPair) => splitNormalizedOsmTagPair(tagPair).key === preferredKey)
+      if (genericMatch) {
+        return genericMatch
+      }
+    }
+
+    return normalizedTagPairs
+      .slice()
+      .sort((left, right) => left.localeCompare(right, 'en', { sensitivity: 'base' }))[0]
+  }
+
+  const OSM_FEATURE_TYPE_KEY_LABELS = {
+    en: {
+      amenity: 'Amenity',
+      building: 'Building',
+      landuse: 'Land use',
+      natural: 'Natural feature',
+      boundary: 'Boundary',
+      highway: 'Road',
+      tourism: 'Tourism',
+      shop: 'Shop',
+      leisure: 'Leisure',
+      historic: 'Historic site',
+      man_made: 'Built structure',
+      railway: 'Railway',
+      public_transport: 'Public transport',
+      place: 'Place',
+      waterway: 'Waterway',
+      aeroway: 'Aeroway',
+      route: 'Route',
+      power: 'Power infrastructure',
+      office: 'Office',
+      craft: 'Craft',
+      healthcare: 'Healthcare',
+      station: 'Station type',
+      bus: 'Bus',
+      tram: 'Tram',
+      subway: 'Subway',
+      ferry: 'Ferry',
+      parking: 'Parking',
+      sport: 'Sport',
+      bridge: 'Bridge',
+      tunnel: 'Tunnel',
+      service: 'Service type',
+      aerialway: 'Cable transport',
+      barrier: 'Barrier',
+      junction: 'Junction',
+      water: 'Water type',
+      landcover: 'Land cover',
+      area: 'Area',
+    },
+    fi: {
+      amenity: 'Palvelu',
+      building: 'Rakennus',
+      landuse: 'Maankaytto',
+      natural: 'Luontokohde',
+      boundary: 'Raja',
+      highway: 'Tie',
+      tourism: 'Matkailukohde',
+      shop: 'Liike',
+      leisure: 'Vapaa-ajan kohde',
+      historic: 'Historiallinen kohde',
+      man_made: 'Rakennettu kohde',
+      railway: 'Rautatiekohde',
+      public_transport: 'Joukkoliikennekohde',
+      place: 'Paikka',
+      waterway: 'Vesisto',
+      aeroway: 'Ilmailukohde',
+      route: 'Reitti',
+      power: 'Sahkoinfra',
+      office: 'Toimisto',
+      craft: 'Kasityo',
+      healthcare: 'Terveydenhuolto',
+      station: 'Aseman tyyppi',
+      bus: 'Bussi',
+      tram: 'Raitiovaunu',
+      subway: 'Metro',
+      ferry: 'Lautta',
+      parking: 'Pysakointi',
+      sport: 'Urheilu',
+      bridge: 'Silta',
+      tunnel: 'Tunneli',
+      service: 'Palvelutyyppi',
+      aerialway: 'Koysirata',
+      barrier: 'Este',
+      junction: 'Liittyma',
+      water: 'Vesityyppi',
+      landcover: 'Maanpeite',
+      area: 'Alue',
+    },
+    sv: {
+      amenity: 'Service',
+      building: 'Byggnad',
+      landuse: 'Markanvandning',
+      natural: 'Naturobjekt',
+      boundary: 'Grans',
+      highway: 'Vag',
+      tourism: 'Turismobjekt',
+      shop: 'Butik',
+      leisure: 'Fritidsobjekt',
+      historic: 'Historiskt objekt',
+      man_made: 'Byggd struktur',
+      railway: 'Jarnvagsobjekt',
+      public_transport: 'Kollektivtrafikobjekt',
+      place: 'Plats',
+      waterway: 'Vattendrag',
+      aeroway: 'Flygobjekt',
+      route: 'Rutt',
+      power: 'Elinfrastruktur',
+      office: 'Kontor',
+      craft: 'Handverk',
+      healthcare: 'Halsovard',
+      station: 'Stationstyp',
+      bus: 'Buss',
+      tram: 'Sparvagn',
+      subway: 'Tunnelbana',
+      ferry: 'Farja',
+      parking: 'Parkering',
+      sport: 'Sport',
+      bridge: 'Bro',
+      tunnel: 'Tunnel',
+      service: 'Servicetyp',
+      aerialway: 'Linbana',
+      barrier: 'Hinder',
+      junction: 'Korsning',
+      water: 'Vattentyp',
+      landcover: 'Marktacke',
+      area: 'Omrade',
+    },
+  }
+
+  const OSM_FEATURE_TYPE_PAIR_LABELS = {
+    en: {
+      'building=apartments': 'Apartment building',
+      'building=residential': 'Residential building',
+      'building=house': 'House',
+      'building=detached': 'Detached house',
+      'building=commercial': 'Commercial building',
+      'building=industrial': 'Industrial building',
+      'building=retail': 'Retail building',
+      'building=warehouse': 'Warehouse',
+      'amenity=school': 'School',
+      'amenity=kindergarten': 'Kindergarten',
+      'amenity=hospital': 'Hospital',
+      'amenity=clinic': 'Clinic',
+      'amenity=restaurant': 'Restaurant',
+      'amenity=cafe': 'Cafe',
+      'amenity=pub': 'Pub',
+      'amenity=bar': 'Bar',
+      'amenity=parking': 'Parking area',
+      'amenity=library': 'Library',
+      'amenity=townhall': 'Town hall',
+      'amenity=place_of_worship': 'Place of worship',
+      'tourism=museum': 'Museum',
+      'tourism=attraction': 'Attraction',
+      'tourism=viewpoint': 'Viewpoint',
+      'leisure=park': 'Park',
+      'natural=water': 'Water area',
+      'natural=wood': 'Woodland',
+      'landuse=residential': 'Residential area',
+      'highway=residential': 'Residential street',
+      'highway=service': 'Service road',
+      'highway=footway': 'Footway',
+      'highway=path': 'Path',
+      'highway=cycleway': 'Cycleway',
+      'boundary=administrative': 'Administrative boundary',
+      'railway=station': 'Railway station',
+      'place=neighbourhood': 'Neighbourhood',
+      'place=suburb': 'Suburb',
+    },
+    fi: {
+      'building=apartments': 'Kerrostalo',
+      'building=residential': 'Asuinrakennus',
+      'building=house': 'Talo',
+      'building=detached': 'Omakotitalo',
+      'building=commercial': 'Liikerakennus',
+      'building=industrial': 'Teollisuusrakennus',
+      'building=retail': 'Myymalarakennus',
+      'building=warehouse': 'Varasto',
+      'amenity=school': 'Koulu',
+      'amenity=kindergarten': 'Paivakoti',
+      'amenity=hospital': 'Sairaala',
+      'amenity=clinic': 'Klinikka',
+      'amenity=restaurant': 'Ravintola',
+      'amenity=cafe': 'Kahvila',
+      'amenity=pub': 'Pubi',
+      'amenity=bar': 'Baari',
+      'amenity=parking': 'Pysakointialue',
+      'amenity=library': 'Kirjasto',
+      'amenity=townhall': 'Kaupungintalo',
+      'amenity=place_of_worship': 'Uskonnollinen rakennus',
+      'tourism=museum': 'Museo',
+      'tourism=attraction': 'Nähtavyys',
+      'tourism=viewpoint': 'Nakopaikka',
+      'leisure=park': 'Puisto',
+      'natural=water': 'Vesialue',
+      'natural=wood': 'Metsikko',
+      'landuse=residential': 'Asuinalue',
+      'highway=residential': 'Asuntokatu',
+      'highway=service': 'Huoltotie',
+      'highway=footway': 'Kaytava',
+      'highway=path': 'Polku',
+      'highway=cycleway': 'Pyoratie',
+      'boundary=administrative': 'Hallinnollinen raja',
+      'railway=station': 'Rautatieasema',
+      'place=neighbourhood': 'Kaupunginosa',
+      'place=suburb': 'Lahio',
+    },
+    sv: {
+      'building=apartments': 'Flerbostadshus',
+      'building=residential': 'Bostadsbyggnad',
+      'building=house': 'Hus',
+      'building=detached': 'Fristaende hus',
+      'building=commercial': 'Affarsbyggnad',
+      'building=industrial': 'Industribyggnad',
+      'building=retail': 'Butiksbyggnad',
+      'building=warehouse': 'Lager',
+      'amenity=school': 'Skola',
+      'amenity=kindergarten': 'Daghem',
+      'amenity=hospital': 'Sjukhus',
+      'amenity=clinic': 'Klinik',
+      'amenity=restaurant': 'Restaurang',
+      'amenity=cafe': 'Kafe',
+      'amenity=pub': 'Pub',
+      'amenity=bar': 'Bar',
+      'amenity=parking': 'Parkeringsomrade',
+      'amenity=library': 'Bibliotek',
+      'amenity=townhall': 'Stadshus',
+      'amenity=place_of_worship': 'Religios byggnad',
+      'tourism=museum': 'Museum',
+      'tourism=attraction': 'Sevardhet',
+      'tourism=viewpoint': 'Utsiktsplats',
+      'leisure=park': 'Park',
+      'natural=water': 'Vattenomrade',
+      'natural=wood': 'Skogsomrade',
+      'landuse=residential': 'Bostadsomrade',
+      'highway=residential': 'Bostadsgata',
+      'highway=service': 'Servic vag',
+      'highway=footway': 'Gangvag',
+      'highway=path': 'Stig',
+      'highway=cycleway': 'Cykelvag',
+      'boundary=administrative': 'Administrativ grans',
+      'railway=station': 'Jarnvagsstation',
+      'place=neighbourhood': 'Stadsdel',
+      'place=suburb': 'Forort',
+    },
+  }
+
+  const OSM_FEATURE_TYPE_VALUE_LABELS = {
+    en: {
+      amenity: {
+        school: 'School',
+        kindergarten: 'Kindergarten',
+        university: 'University',
+        college: 'College',
+        hospital: 'Hospital',
+        clinic: 'Clinic',
+        doctors: 'Doctor clinic',
+        dentist: 'Dental clinic',
+        pharmacy: 'Pharmacy',
+        restaurant: 'Restaurant',
+        cafe: 'Cafe',
+        pub: 'Pub',
+        bar: 'Bar',
+        parking: 'Parking area',
+        library: 'Library',
+        townhall: 'Town hall',
+        place_of_worship: 'Place of worship',
+        bus_station: 'Bus station',
+        ferry_terminal: 'Ferry terminal',
+        fuel: 'Fuel station',
+        police: 'Police station',
+        fire_station: 'Fire station',
+        post_office: 'Post office',
+        marketplace: 'Market square',
+        theatre: 'Theatre',
+        cinema: 'Cinema',
+        toilets: 'Public toilets',
+        grave_yard: 'Graveyard',
+      },
+      building: {
+        yes: 'Building',
+        apartments: 'Apartment building',
+        residential: 'Residential building',
+        house: 'House',
+        detached: 'Detached house',
+        commercial: 'Commercial building',
+        industrial: 'Industrial building',
+        retail: 'Retail building',
+        warehouse: 'Warehouse',
+        school: 'School building',
+        hospital: 'Hospital building',
+        church: 'Church',
+        civic: 'Civic building',
+        garage: 'Garage',
+        parking: 'Parking garage',
+        office: 'Office building',
+        train_station: 'Station building',
+      },
+      highway: {
+        motorway: 'Motorway',
+        primary: 'Primary road',
+        secondary: 'Secondary road',
+        tertiary: 'Tertiary road',
+        residential: 'Residential street',
+        service: 'Service road',
+        living_street: 'Living street',
+        pedestrian: 'Pedestrian street',
+        footway: 'Footway',
+        cycleway: 'Cycleway',
+        path: 'Path',
+        steps: 'Steps',
+        track: 'Track',
+        bus_stop: 'Bus stop',
+      },
+      landuse: {
+        residential: 'Residential area',
+        commercial: 'Commercial area',
+        industrial: 'Industrial area',
+        retail: 'Retail area',
+        forest: 'Forest area',
+        cemetery: 'Cemetery',
+        recreation_ground: 'Recreation area',
+        meadow: 'Meadow',
+        farmland: 'Farmland',
+        grass: 'Grass area',
+        reservoir: 'Reservoir area',
+      },
+      natural: {
+        water: 'Water area',
+        wood: 'Woodland',
+        scrub: 'Scrubland',
+        wetland: 'Wetland',
+        grassland: 'Grassland',
+        heath: 'Heathland',
+        beach: 'Beach',
+        peak: 'Peak',
+      },
+      tourism: {
+        museum: 'Museum',
+        attraction: 'Attraction',
+        viewpoint: 'Viewpoint',
+        hotel: 'Hotel',
+        hostel: 'Hostel',
+        guest_house: 'Guest house',
+        camp_site: 'Camp site',
+        picnic_site: 'Picnic site',
+        information: 'Visitor information',
+      },
+      shop: {
+        supermarket: 'Supermarket',
+        convenience: 'Convenience store',
+        mall: 'Shopping mall',
+        kiosk: 'Kiosk',
+        bakery: 'Bakery',
+        butcher: 'Butcher',
+        clothes: 'Clothing store',
+        hardware: 'Hardware store',
+        florist: 'Florist',
+      },
+      leisure: {
+        park: 'Park',
+        pitch: 'Sports field',
+        playground: 'Playground',
+        sports_centre: 'Sports centre',
+        garden: 'Garden',
+        nature_reserve: 'Nature reserve',
+        stadium: 'Stadium',
+      },
+      railway: {
+        station: 'Railway station',
+        tram_stop: 'Tram stop',
+        halt: 'Railway halt',
+        subway_entrance: 'Subway entrance',
+        level_crossing: 'Level crossing',
+      },
+      public_transport: {
+        station: 'Public transport station',
+        platform: 'Public transport platform',
+        stop_position: 'Public transport stop',
+      },
+      place: {
+        neighbourhood: 'Neighbourhood',
+        suburb: 'Suburb',
+        quarter: 'Quarter',
+        village: 'Village',
+        town: 'Town',
+        city: 'City',
+        hamlet: 'Hamlet',
+      },
+      waterway: {
+        river: 'River',
+        stream: 'Stream',
+        canal: 'Canal',
+        ditch: 'Ditch',
+      },
+      aeroway: {
+        aerodrome: 'Aerodrome',
+        terminal: 'Airport terminal',
+        runway: 'Runway',
+        taxiway: 'Taxiway',
+        helipad: 'Helipad',
+        gate: 'Airport gate',
+      },
+      route: {
+        bus: 'Bus route',
+        tram: 'Tram route',
+        train: 'Train route',
+        ferry: 'Ferry route',
+        bicycle: 'Bicycle route',
+        hiking: 'Hiking route',
+      },
+      power: {
+        substation: 'Substation',
+        line: 'Power line',
+        tower: 'Power tower',
+        plant: 'Power plant',
+        generator: 'Generator',
+      },
+      historic: {
+        memorial: 'Memorial',
+        monument: 'Monument',
+        castle: 'Castle',
+        archaeological_site: 'Archaeological site',
+      },
+      man_made: {
+        tower: 'Tower',
+        pier: 'Pier',
+        bridge: 'Bridge',
+        lighthouse: 'Lighthouse',
+        chimney: 'Chimney',
+      },
+      healthcare: {
+        hospital: 'Hospital',
+        clinic: 'Clinic',
+        doctor: 'Doctor service',
+        dentist: 'Dental service',
+        pharmacy: 'Pharmacy',
+      },
+      office: {
+        company: 'Office',
+        government: 'Government office',
+        administrative: 'Administrative office',
+      },
+      craft: {
+        carpenter: 'Carpenter',
+        electrician: 'Electrician',
+        plumber: 'Plumber',
+        shoemaker: 'Shoemaker',
+      },
+      barrier: {
+        fence: 'Fence',
+        wall: 'Wall',
+        bollard: 'Bollard',
+        gate: 'Gate',
+      },
+    },
+    fi: {
+      amenity: {
+        school: 'Koulu',
+        kindergarten: 'Paivakoti',
+        university: 'Yliopisto',
+        college: 'Korkeakoulu',
+        hospital: 'Sairaala',
+        clinic: 'Klinikka',
+        pharmacy: 'Apteekki',
+        restaurant: 'Ravintola',
+        cafe: 'Kahvila',
+        pub: 'Pubi',
+        bar: 'Baari',
+        parking: 'Pysakointialue',
+        library: 'Kirjasto',
+        place_of_worship: 'Uskonnollinen rakennus',
+        bus_station: 'Linja-autoasema',
+        ferry_terminal: 'Lauttaterminaali',
+        fuel: 'Huoltoasema',
+        police: 'Poliisiasema',
+        fire_station: 'Paloasema',
+        post_office: 'Posti',
+        marketplace: 'Tori',
+      },
+      building: {
+        yes: 'Rakennus',
+        apartments: 'Kerrostalo',
+        residential: 'Asuinrakennus',
+        house: 'Talo',
+        detached: 'Omakotitalo',
+        commercial: 'Liikerakennus',
+        industrial: 'Teollisuusrakennus',
+        retail: 'Myymalarakennus',
+        warehouse: 'Varasto',
+        school: 'Koulurakennus',
+        hospital: 'Sairaalarakennus',
+        church: 'Kirkko',
+        office: 'Toimistorakennus',
+      },
+      highway: {
+        motorway: 'Moottoritie',
+        primary: 'Paatie',
+        secondary: 'Seututie',
+        tertiary: 'Yhdystie',
+        residential: 'Asuntokatu',
+        service: 'Huoltotie',
+        living_street: 'Hidaskatu',
+        pedestrian: 'Kavelykatu',
+        footway: 'Kaytava',
+        cycleway: 'Pyoratie',
+        path: 'Polku',
+        steps: 'Portaat',
+        track: 'Metsatie',
+        bus_stop: 'Bussipysakki',
+      },
+      landuse: {
+        residential: 'Asuinalue',
+        commercial: 'Liikealue',
+        industrial: 'Teollisuusalue',
+        retail: 'Kauppa-alue',
+        forest: 'Metsa-alue',
+        cemetery: 'Hautausmaa',
+        recreation_ground: 'Virkistysalue',
+        meadow: 'Niitty',
+        farmland: 'Viljelysmaa',
+      },
+      natural: {
+        water: 'Vesialue',
+        wood: 'Metsikko',
+        wetland: 'Kosteikko',
+        beach: 'Ranta',
+        peak: 'Huippu',
+      },
+      tourism: {
+        museum: 'Museo',
+        attraction: 'Nahtavyys',
+        viewpoint: 'Nakopaikka',
+        hotel: 'Hotelli',
+        hostel: 'Hostelli',
+        camp_site: 'Leirintaalue',
+      },
+      shop: {
+        supermarket: 'Supermarket',
+        convenience: 'Lahikauppa',
+        kiosk: 'Kioski',
+        bakery: 'Leipomo',
+        butcher: 'Lihakauppa',
+        clothes: 'Vaatekauppa',
+      },
+      leisure: {
+        park: 'Puisto',
+        pitch: 'Urheilukentta',
+        playground: 'Leikkipuisto',
+        sports_centre: 'Urheilukeskus',
+        nature_reserve: 'Luonnonsuojelualue',
+        stadium: 'Stadion',
+      },
+      railway: {
+        station: 'Rautatieasema',
+        tram_stop: 'Raitiovaunupysakki',
+        halt: 'Seisake',
+        subway_entrance: 'Metron sisaan kaynti',
+      },
+      public_transport: {
+        station: 'Joukkoliikenneasema',
+        platform: 'Joukkoliikennelaituri',
+        stop_position: 'Joukkoliikennepysakki',
+      },
+      place: {
+        neighbourhood: 'Kaupunginosa',
+        suburb: 'Lahio',
+        quarter: 'Kortteli',
+        village: 'Kyla',
+        town: 'Kaupunki',
+        city: 'Suurkaupunki',
+      },
+      waterway: {
+        river: 'Joki',
+        stream: 'Puro',
+        canal: 'Kanava',
+        ditch: 'Oja',
+      },
+      aeroway: {
+        aerodrome: 'Lentokentta',
+        terminal: 'Lentoterminaali',
+        runway: 'Kiitotie',
+        taxiway: 'Rullaustie',
+        helipad: 'Helikopterikentta',
+      },
+      route: {
+        bus: 'Bussireitti',
+        tram: 'Raitiovaunureitti',
+        train: 'Junareitti',
+        ferry: 'Lauttareitti',
+        bicycle: 'Pyorareitti',
+        hiking: 'Retkeilyreitti',
+      },
+      power: {
+        substation: 'Sahkoasema',
+        line: 'Sahkolinja',
+        tower: 'Sahkomasto',
+        plant: 'Voimalaitos',
+      },
+      historic: {
+        memorial: 'Muistomerkki',
+        monument: 'Monumentti',
+        castle: 'Linna',
+      },
+      man_made: {
+        tower: 'Torni',
+        pier: 'Laituri',
+        bridge: 'Silta',
+        lighthouse: 'Majakka',
+      },
+      healthcare: {
+        hospital: 'Sairaala',
+        clinic: 'Klinikka',
+        doctor: 'Laakaripalvelu',
+        dentist: 'Hammaslaakari',
+        pharmacy: 'Apteekki',
+      },
+      barrier: {
+        fence: 'Aita',
+        wall: 'Muuri',
+        gate: 'Portti',
+      },
+    },
+    sv: {
+      amenity: {
+        school: 'Skola',
+        kindergarten: 'Daghem',
+        university: 'Universitet',
+        college: 'Hogskola',
+        hospital: 'Sjukhus',
+        clinic: 'Klinik',
+        pharmacy: 'Apotek',
+        restaurant: 'Restaurang',
+        cafe: 'Kafe',
+        pub: 'Pub',
+        bar: 'Bar',
+        parking: 'Parkeringsomrade',
+        library: 'Bibliotek',
+        place_of_worship: 'Religios byggnad',
+        bus_station: 'Busstation',
+        ferry_terminal: 'Farjeterminal',
+        fuel: 'Bensinstation',
+        police: 'Polisstation',
+        fire_station: 'Brandstation',
+        post_office: 'Postkontor',
+        marketplace: 'Torg',
+      },
+      building: {
+        yes: 'Byggnad',
+        apartments: 'Flerbostadshus',
+        residential: 'Bostadsbyggnad',
+        house: 'Hus',
+        detached: 'Fristaende hus',
+        commercial: 'Affarsbyggnad',
+        industrial: 'Industribyggnad',
+        retail: 'Butiksbyggnad',
+        warehouse: 'Lager',
+        school: 'Skolbyggnad',
+        hospital: 'Sjukhusbyggnad',
+        church: 'Kyrka',
+        office: 'Kontorsbyggnad',
+      },
+      highway: {
+        motorway: 'Motorvag',
+        primary: 'Huvudvag',
+        secondary: 'Sekundar vag',
+        tertiary: 'Tertiar vag',
+        residential: 'Bostadsgata',
+        service: 'Servicevag',
+        living_street: 'Gangfartsomrade',
+        pedestrian: 'Ganggata',
+        footway: 'Gangvag',
+        cycleway: 'Cykelvag',
+        path: 'Stig',
+        steps: 'Trappa',
+        track: 'Skogsvag',
+        bus_stop: 'Busshallplats',
+      },
+      landuse: {
+        residential: 'Bostadsomrade',
+        commercial: 'Handelsomrade',
+        industrial: 'Industriomrade',
+        retail: 'Butiksomrade',
+        forest: 'Skogsomrade',
+        cemetery: 'Begravningsplats',
+        recreation_ground: 'Rekreationsomrade',
+        meadow: 'Ang',
+        farmland: 'Akermark',
+      },
+      natural: {
+        water: 'Vattenomrade',
+        wood: 'Skogsomrade',
+        wetland: 'Vatmark',
+        beach: 'Strand',
+        peak: 'Topp',
+      },
+      tourism: {
+        museum: 'Museum',
+        attraction: 'Sevardhet',
+        viewpoint: 'Utsiktsplats',
+        hotel: 'Hotell',
+        hostel: 'Vandrarhem',
+        camp_site: 'Campingplats',
+      },
+      shop: {
+        supermarket: 'Stormarknad',
+        convenience: 'Narbutik',
+        kiosk: 'Kiosk',
+        bakery: 'Bageri',
+        butcher: 'Kottbutik',
+        clothes: 'Kladbutik',
+      },
+      leisure: {
+        park: 'Park',
+        pitch: 'Idrottsplan',
+        playground: 'Lekplats',
+        sports_centre: 'Idrottscenter',
+        nature_reserve: 'Naturreservat',
+        stadium: 'Stadion',
+      },
+      railway: {
+        station: 'Jarnvagsstation',
+        tram_stop: 'Sparvagnshallplats',
+        halt: 'Taghallplats',
+        subway_entrance: 'Tunnelbaneingang',
+      },
+      public_transport: {
+        station: 'Kollektivtrafikstation',
+        platform: 'Kollektivtrafikplattform',
+        stop_position: 'Kollektivtrafikstopp',
+      },
+      place: {
+        neighbourhood: 'Stadsdel',
+        suburb: 'Forort',
+        quarter: 'Kvarter',
+        village: 'By',
+        town: 'Stad',
+        city: 'Storstad',
+      },
+      waterway: {
+        river: 'Flod',
+        stream: 'Back',
+        canal: 'Kanal',
+        ditch: 'Dike',
+      },
+      aeroway: {
+        aerodrome: 'Flygplats',
+        terminal: 'Flygterminal',
+        runway: 'Landningsbana',
+        taxiway: 'Taxibana',
+        helipad: 'Helikopterplatta',
+      },
+      route: {
+        bus: 'Busslinje',
+        tram: 'Sparvagnslinje',
+        train: 'Taglinje',
+        ferry: 'Farjelinje',
+        bicycle: 'Cykelrutt',
+        hiking: 'Vandringsled',
+      },
+      power: {
+        substation: 'Elstation',
+        line: 'Elledning',
+        tower: 'Elmast',
+        plant: 'Kraftverk',
+      },
+      historic: {
+        memorial: 'Minnesmarke',
+        monument: 'Monument',
+        castle: 'Slott',
+      },
+      man_made: {
+        tower: 'Torn',
+        pier: 'Brygga',
+        bridge: 'Bro',
+        lighthouse: 'Fyr',
+      },
+      healthcare: {
+        hospital: 'Sjukhus',
+        clinic: 'Klinik',
+        doctor: 'Lakartjanst',
+        dentist: 'Tandlakare',
+        pharmacy: 'Apotek',
+      },
+      barrier: {
+        fence: 'Stangsel',
+        wall: 'Mur',
+        gate: 'Grind',
+      },
+    },
+  }
+
+  const OSM_FEATURE_TYPE_COMBINATION_LABELS = {
+    en: {
+      busStop: 'Bus stop',
+      busStation: 'Bus station',
+      tramStop: 'Tram stop',
+      railwayStation: 'Railway station',
+      subwayStation: 'Subway station',
+      ferryTerminal: 'Ferry terminal',
+      airportTerminal: 'Airport terminal',
+      runway: 'Runway',
+      taxiway: 'Taxiway',
+      helipad: 'Helipad',
+      multistoreyParking: 'Multi-storey parking',
+      footballPitch: 'Football field',
+      basketballCourt: 'Basketball court',
+      tennisCourt: 'Tennis court',
+      iceRink: 'Ice rink',
+      cemetery: 'Cemetery',
+      protectedArea: 'Protected area',
+      forestArea: 'Forest area',
+      waterArea: 'Water area',
+      placeOfWorship: 'Place of worship',
+      roadBridge: 'Road bridge',
+      railBridge: 'Railway bridge',
+      roadTunnel: 'Road tunnel',
+      railTunnel: 'Railway tunnel',
+    },
+    fi: {
+      busStop: 'Bussipysakki',
+      busStation: 'Linja-autoasema',
+      tramStop: 'Raitiovaunupysakki',
+      railwayStation: 'Rautatieasema',
+      subwayStation: 'Metroasema',
+      ferryTerminal: 'Lauttaterminaali',
+      airportTerminal: 'Lentoterminaali',
+      runway: 'Kiitotie',
+      taxiway: 'Rullaustie',
+      helipad: 'Helikopterikentta',
+      multistoreyParking: 'Pysakointitalo',
+      footballPitch: 'Jalkapallokentta',
+      basketballCourt: 'Koripallokentta',
+      tennisCourt: 'Tenniskentta',
+      iceRink: 'Jaakaukalo',
+      cemetery: 'Hautausmaa',
+      protectedArea: 'Suojelualue',
+      forestArea: 'Metsa-alue',
+      waterArea: 'Vesialue',
+      placeOfWorship: 'Uskonnollinen rakennus',
+      roadBridge: 'Tiesilta',
+      railBridge: 'Rautatiesilta',
+      roadTunnel: 'Tietunneli',
+      railTunnel: 'Rautatietunneli',
+    },
+    sv: {
+      busStop: 'Busshallplats',
+      busStation: 'Busstation',
+      tramStop: 'Sparvagnshallplats',
+      railwayStation: 'Jarnvagsstation',
+      subwayStation: 'Tunnelbanestation',
+      ferryTerminal: 'Farjeterminal',
+      airportTerminal: 'Flygterminal',
+      runway: 'Landningsbana',
+      taxiway: 'Taxibana',
+      helipad: 'Helikopterplatta',
+      multistoreyParking: 'Parkeringshus',
+      footballPitch: 'Fotbollsplan',
+      basketballCourt: 'Basketplan',
+      tennisCourt: 'Tennisplan',
+      iceRink: 'Isrink',
+      cemetery: 'Begravningsplats',
+      protectedArea: 'Skyddsomrade',
+      forestArea: 'Skogsomrade',
+      waterArea: 'Vattenomrade',
+      placeOfWorship: 'Religios byggnad',
+      roadBridge: 'Vagbro',
+      railBridge: 'Jarnvagsbro',
+      roadTunnel: 'Vagtunnel',
+      railTunnel: 'Jarnvagstunnel',
+    },
+  }
+
+  function lookupLocalizedOsmPairLabel(pair, locale) {
+    const localePairs = OSM_FEATURE_TYPE_PAIR_LABELS[locale] || {}
+    if (Object.prototype.hasOwnProperty.call(localePairs, pair)) {
+      return localePairs[pair]
+    }
+    const englishPairs = OSM_FEATURE_TYPE_PAIR_LABELS.en || {}
+    if (Object.prototype.hasOwnProperty.call(englishPairs, pair)) {
+      return englishPairs[pair]
+    }
+    return ''
+  }
+
+  function lookupLocalizedOsmKeyLabel(key, locale) {
+    const localeKeys = OSM_FEATURE_TYPE_KEY_LABELS[locale] || {}
+    if (Object.prototype.hasOwnProperty.call(localeKeys, key)) {
+      return localeKeys[key]
+    }
+    const englishKeys = OSM_FEATURE_TYPE_KEY_LABELS.en || {}
+    if (Object.prototype.hasOwnProperty.call(englishKeys, key)) {
+      return englishKeys[key]
+    }
+    return ''
+  }
+
+  function lookupLocalizedOsmValueLabel(key, value, locale) {
+    const localeByKey = OSM_FEATURE_TYPE_VALUE_LABELS[locale] || {}
+    const localeValues = localeByKey && localeByKey[key] && typeof localeByKey[key] === 'object'
+      ? localeByKey[key]
+      : null
+    if (localeValues && Object.prototype.hasOwnProperty.call(localeValues, value)) {
+      return localeValues[value]
+    }
+    const englishByKey = OSM_FEATURE_TYPE_VALUE_LABELS.en || {}
+    const englishValues = englishByKey && englishByKey[key] && typeof englishByKey[key] === 'object'
+      ? englishByKey[key]
+      : null
+    if (englishValues && Object.prototype.hasOwnProperty.call(englishValues, value)) {
+      return englishValues[value]
+    }
+    return ''
+  }
+
+  function lookupLocalizedOsmCombinationLabel(labelKey, locale) {
+    const localeLabels = OSM_FEATURE_TYPE_COMBINATION_LABELS[locale] || {}
+    if (Object.prototype.hasOwnProperty.call(localeLabels, labelKey)) {
+      return localeLabels[labelKey]
+    }
+    const englishLabels = OSM_FEATURE_TYPE_COMBINATION_LABELS.en || {}
+    if (Object.prototype.hasOwnProperty.call(englishLabels, labelKey)) {
+      return englishLabels[labelKey]
+    }
+    return ''
+  }
+
+  function normalizeOsmFeatureTagsForUi(tags) {
+    const normalizedTagMap = new Map()
+    const normalizedPairs = []
+    const seenPairs = new Set()
+    for (const [rawKey, rawValue] of Object.entries(tags || {})) {
+      const normalizedKey = normalizeOsmTagKeyForWikidataMapping(rawKey)
+      if (!normalizedKey || shouldIgnoreOsmTagForWikidataMapping(normalizedKey)) {
+        continue
+      }
+      const normalizedValue = normalizeOsmTagValueForWikidataMapping(rawValue)
+      if (!normalizedValue) {
+        continue
+      }
+      const normalizedPair = `${normalizedKey}=${normalizedValue}`
+      if (seenPairs.has(normalizedPair)) {
+        continue
+      }
+      seenPairs.add(normalizedPair)
+      normalizedTagMap.set(normalizedKey, normalizedValue)
+      normalizedPairs.push(normalizedPair)
+    }
+    return {
+      normalizedTagMap,
+      normalizedPairs,
+    }
+  }
+
+  function describeOsmFeatureTypeFromTagCombination(normalizedTagMap, locale) {
+    if (!(normalizedTagMap instanceof Map) || normalizedTagMap.size < 1) {
+      return ''
+    }
+
+    const hasPair = (key, value) => normalizedTagMap.get(key) === value
+    const hasKey = (key) => normalizedTagMap.has(key)
+    const label = (labelKey) => lookupLocalizedOsmCombinationLabel(labelKey, locale)
+
+    if (hasPair('railway', 'station') || hasPair('public_transport', 'station')) {
+      if (hasPair('station', 'subway') || hasPair('subway', 'yes')) {
+        return label('subwayStation')
+      }
+      return label('railwayStation')
+    }
+
+    if (
+      hasPair('railway', 'tram_stop') ||
+      ((hasPair('public_transport', 'platform') || hasPair('public_transport', 'stop_position')) && hasPair('tram', 'yes'))
+    ) {
+      return label('tramStop')
+    }
+
+    if (hasPair('amenity', 'bus_station')) {
+      return label('busStation')
+    }
+
+    if (
+      hasPair('highway', 'bus_stop') ||
+      ((hasPair('public_transport', 'platform') || hasPair('public_transport', 'stop_position')) && hasPair('bus', 'yes'))
+    ) {
+      return label('busStop')
+    }
+
+    if (
+      hasPair('amenity', 'ferry_terminal') ||
+      hasPair('route', 'ferry') ||
+      ((hasPair('public_transport', 'platform') || hasPair('public_transport', 'stop_position')) && hasPair('ferry', 'yes'))
+    ) {
+      return label('ferryTerminal')
+    }
+
+    if (hasPair('aeroway', 'terminal')) {
+      return label('airportTerminal')
+    }
+    if (hasPair('aeroway', 'runway')) {
+      return label('runway')
+    }
+    if (hasPair('aeroway', 'taxiway')) {
+      return label('taxiway')
+    }
+    if (hasPair('aeroway', 'helipad')) {
+      return label('helipad')
+    }
+
+    if (hasPair('amenity', 'parking') && (hasPair('parking', 'multi-storey') || hasPair('building', 'parking'))) {
+      return label('multistoreyParking')
+    }
+
+    if (hasPair('leisure', 'pitch')) {
+      if (hasPair('sport', 'football')) {
+        return label('footballPitch')
+      }
+      if (hasPair('sport', 'basketball')) {
+        return label('basketballCourt')
+      }
+      if (hasPair('sport', 'tennis')) {
+        return label('tennisCourt')
+      }
+      if (hasPair('sport', 'ice_hockey')) {
+        return label('iceRink')
+      }
+    }
+
+    if (hasPair('landuse', 'cemetery') || hasPair('amenity', 'grave_yard')) {
+      return label('cemetery')
+    }
+    if (hasPair('boundary', 'protected_area') || hasPair('leisure', 'nature_reserve')) {
+      return label('protectedArea')
+    }
+    if (hasPair('natural', 'wood') || hasPair('landuse', 'forest')) {
+      return label('forestArea')
+    }
+    if (
+      hasPair('natural', 'water') ||
+      hasPair('water', 'lake') ||
+      hasPair('water', 'reservoir') ||
+      hasPair('landuse', 'reservoir')
+    ) {
+      return label('waterArea')
+    }
+    if (hasPair('building', 'church') || hasPair('amenity', 'place_of_worship')) {
+      return label('placeOfWorship')
+    }
+
+    if (hasPair('bridge', 'yes')) {
+      if (hasKey('railway')) {
+        return label('railBridge')
+      }
+      if (hasKey('highway')) {
+        return label('roadBridge')
+      }
+    }
+    if (hasPair('tunnel', 'yes')) {
+      if (hasKey('railway')) {
+        return label('railTunnel')
+      }
+      if (hasKey('highway')) {
+        return label('roadTunnel')
+      }
+    }
+
+    return ''
+  }
+
+  function resolveOsmFeatureLabelLocale(lang) {
+    const normalized = normalizeSupportedLocale(lang) || 'en'
+    if (normalized === 'fi' || normalized === 'sv') {
+      return normalized
+    }
+    return 'en'
+  }
+
+  function humanizeOsmTagValueForUi(value) {
+    return String(value || '')
+      .trim()
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+  }
+
+  function describeOsmFeatureTypeForUi(tags, { lang = null, primaryTagPair = '' } = {}) {
+    const locale = resolveOsmFeatureLabelLocale(lang)
+    const { normalizedTagMap, normalizedPairs } = normalizeOsmFeatureTagsForUi(tags)
+    if (normalizedPairs.length < 1) {
+      return ''
+    }
+
+    const combinationLabel = describeOsmFeatureTypeFromTagCombination(normalizedTagMap, locale)
+    if (combinationLabel) {
+      return combinationLabel
+    }
+
+    let normalizedPair = normalizeOsmTagPairForWikidataMapping(primaryTagPair)
+    if (normalizedPair && !normalizedPairs.includes(normalizedPair)) {
+      normalizedPair = ''
+    }
+    if (!normalizedPair) {
+      normalizedPair = pickPrimaryOsmTypeTagForSuggestion(normalizedPairs)
+    }
+    if (!normalizedPair) {
+      return ''
+    }
+
+    const pairLabel = lookupLocalizedOsmPairLabel(normalizedPair, locale)
+    if (pairLabel) {
+      return pairLabel
+    }
+
+    const pair = splitNormalizedOsmTagPair(normalizedPair)
+    if (!pair.key) {
+      return normalizedPair
+    }
+
+    const valueLabelFromDictionary = lookupLocalizedOsmValueLabel(pair.key, pair.value, locale)
+    if (valueLabelFromDictionary) {
+      return valueLabelFromDictionary
+    }
+
+    const keyLabel = lookupLocalizedOsmKeyLabel(pair.key, locale) || pair.key.replace(/_/g, ' ')
+    if (isGenericOsmFeatureTypeValue(pair.value)) {
+      return keyLabel
+    }
+
+    const valueLabel = humanizeOsmTagValueForUi(pair.value)
+    if (!valueLabel) {
+      return keyLabel
+    }
+    return `${keyLabel}: ${valueLabel}`
+  }
+
+  function escapeSparqlStringLiteral(value) {
+    return String(value || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, ' ')
+      .replace(/\r/g, ' ')
+  }
+
+  function normalizeOsmFeatureNameForWikidataLookup(value) {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+    if (normalized.length < 2) {
+      return ''
+    }
+    return normalized.slice(0, 200)
+  }
+
+  function buildWikidataLookupLanguages(lang = null) {
+    const normalizedLocale = normalizeSupportedLocale(lang) || 'en'
+    const languages = [normalizedLocale, 'en']
+    return Array.from(new Set(
+      languages.filter((code) => /^[a-z]{2,12}(?:-[a-z0-9]{2,12})?$/i.test(String(code || '')))
+    ))
+  }
+
+  const saveImageSubjectWikidataReverseLookupCache = new Map()
+
+  function readCachedWikidataReverseLookupResult(cacheKey) {
+    if (!saveImageSubjectWikidataReverseLookupCache.has(cacheKey)) {
+      return null
+    }
+    const cached = saveImageSubjectWikidataReverseLookupCache.get(cacheKey)
+    if (!cached || typeof cached !== 'object') {
+      return null
+    }
+    const reverseCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(
+      cached.reverseCandidates || cached.reverse_candidates,
+    )
+    const nearbyNameCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(
+      cached.nearbyNameCandidates || cached.nearby_name_candidates,
+    )
+    return {
+      reverseCandidates,
+      nearbyNameCandidates,
+    }
+  }
+
+  function writeCachedWikidataReverseLookupResult(cacheKey, payload) {
+    if (!cacheKey) {
+      return
+    }
+    if (saveImageSubjectWikidataReverseLookupCache.has(cacheKey)) {
+      saveImageSubjectWikidataReverseLookupCache.delete(cacheKey)
+    }
+    saveImageSubjectWikidataReverseLookupCache.set(cacheKey, payload)
+    while (saveImageSubjectWikidataReverseLookupCache.size > SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_CACHE_MAX_ITEMS) {
+      const firstKey = saveImageSubjectWikidataReverseLookupCache.keys().next().value
+      if (!firstKey) {
+        break
+      }
+      saveImageSubjectWikidataReverseLookupCache.delete(firstKey)
+    }
+  }
+
+  async function fetchWikidataReverseAndNearbyNameCandidatesForOsmFeature(
+    featureType,
+    featureId,
+    {
+      name = '',
+      latitude = null,
+      longitude = null,
+      municipalityQid = '',
+      lang = null,
+      limit = SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_LIMIT,
+      radiusKm = SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_RADIUS_KM,
+    } = {},
+  ) {
+    const normalizedType = normalizeOsmMapFeatureType(featureType)
+    const normalizedId = Number.parseInt(String(featureId), 10)
+    if (!normalizedType || !Number.isFinite(normalizedId) || normalizedId < 1) {
+      return {
+        reverseCandidates: [],
+        nearbyNameCandidates: [],
+      }
+    }
+
+    let propertyId = ''
+    if (normalizedType === 'way') {
+      propertyId = 'P10689'
+    } else if (normalizedType === 'relation') {
+      propertyId = 'P402'
+    }
+
+    const lookupName = normalizeOsmFeatureNameForWikidataLookup(name)
+    const latitudeValue = readOsmMapFeatureCoordinateValue(latitude)
+    const longitudeValue = readOsmMapFeatureCoordinateValue(longitude)
+    const normalizedMunicipalityQid = extractWikidataId(String(municipalityQid || ''))
+    const hasIdLookup = Boolean(propertyId)
+    const hasNameLookup = (
+      lookupName &&
+      latitudeValue !== null &&
+      longitudeValue !== null
+    )
+    if (!hasIdLookup && !hasNameLookup) {
+      return {
+        reverseCandidates: [],
+        nearbyNameCandidates: [],
+      }
+    }
+
+    const resultLimit = Math.max(
+      1,
+      Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_LIMIT, 25),
+    )
+    const searchRadiusKm = Math.max(0.05, Math.min(Number(radiusKm) || SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_RADIUS_KM, 30))
+    const lookupLanguages = buildWikidataLookupLanguages(lang)
+    const languageClause = lookupLanguages.map((code) => `"${escapeSparqlStringLiteral(code)}"`).join(', ')
+    const queryLanguage = lookupLanguages.join(',') || 'en'
+
+    const cacheKey = [
+      WIKIDATA_SPARQL_ENDPOINT_URL,
+      normalizedType,
+      String(normalizedId),
+      lookupName.toLowerCase(),
+      normalizedMunicipalityQid,
+      latitudeValue === null ? '' : latitudeValue.toFixed(7),
+      longitudeValue === null ? '' : longitudeValue.toFixed(7),
+      queryLanguage,
+      String(resultLimit),
+      searchRadiusKm.toFixed(3),
+    ].join('|')
+    const cached = readCachedWikidataReverseLookupResult(cacheKey)
+    if (cached) {
+      return cached
+    }
+
+    const clauses = []
+    if (hasIdLookup) {
+      const escapedId = escapeSparqlStringLiteral(String(normalizedId))
+      clauses.push(`
+  {
+    ?item wdt:${propertyId} "${escapedId}" .
+    BIND("${propertyId}" AS ?property)
+    BIND("ID" AS ?matchType)
+    BIND("${escapedId}" AS ?matchValue)
+    BIND(0 AS ?matchPriority)
+    BIND(0.0 AS ?distanceSort)
+  }
+`.trim())
+    }
+    if (hasNameLookup) {
+      const escapedName = escapeSparqlStringLiteral(lookupName)
+      const municipalityNameFilterClause = normalizedMunicipalityQid
+        ? `
+    ?item wdt:P131 ?itemP131 .
+    ?itemP131 wdt:P131* wd:${normalizedMunicipalityQid} .
+`.trim()
+        : ''
+      clauses.push(`
+  {
+    SERVICE wikibase:around {
+      ?item wdt:P625 ?location .
+      bd:serviceParam wikibase:center "Point(${longitudeValue.toFixed(7)} ${latitudeValue.toFixed(7)})"^^geo:wktLiteral .
+      bd:serviceParam wikibase:radius "${searchRadiusKm.toFixed(3)}" .
+      bd:serviceParam wikibase:distance ?distance .
+    }
+    {
+      ?item rdfs:label ?candidateLabel .
+    }
+    UNION
+    {
+      ?item skos:altLabel ?candidateLabel .
+    }
+    FILTER(LANG(?candidateLabel) IN (${languageClause}))
+    FILTER(LCASE(STR(?candidateLabel)) = LCASE("${escapedName}"))
+    ${municipalityNameFilterClause}
+    BIND("NAME" AS ?property)
+    BIND("NAME" AS ?matchType)
+    BIND("${escapedName}" AS ?matchValue)
+    BIND(1 AS ?matchPriority)
+    BIND(?distance AS ?distanceSort)
+  }
+`.trim())
+    }
+
+    const sparql = `
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT ?item ?itemLabel ?itemDescription ?property ?matchType ?matchValue ?distanceSort
+WHERE {
+  ${clauses.join('\n  UNION\n  ')}
+  FILTER(STRSTARTS(STR(?item), "http://www.wikidata.org/entity/Q"))
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${queryLanguage}". }
+}
+ORDER BY ASC(?matchPriority) ASC(?distanceSort)
+LIMIT ${Math.max(resultLimit * clauses.length, 1)}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json, application/json;q=0.9, */*;q=0.1',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
     })
-    const qids = nearbyItems.map((item) => item.qid)
-    return fetchWikidataDepictItemsForQids(qids, {
-      limit: resultLimit,
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const reverseCandidates = []
+    const nearbyNameCandidates = []
+    const seenReverseQids = new Set()
+    const seenNameQids = new Set()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const qid = extractWikidataId(readSparqlBindingValue(binding, 'item'))
+      if (!qid) {
+        continue
+      }
+      const propertyValue = String(readSparqlBindingValue(binding, 'property') || propertyId || '').trim().toUpperCase()
+      const matchType = String(readSparqlBindingValue(binding, 'matchType') || '').trim().toUpperCase()
+      const matchValue = String(readSparqlBindingValue(binding, 'matchValue') || '').trim()
+      const item = {
+        id: qid,
+        label: String(readSparqlBindingValue(binding, 'itemLabel') || '').trim(),
+        description: String(readSparqlBindingValue(binding, 'itemDescription') || '').trim(),
+        property: propertyValue,
+        match_value: matchValue,
+      }
+      if (matchType === 'NAME' || propertyValue === 'NAME') {
+        if (seenNameQids.has(qid)) {
+          continue
+        }
+        seenNameQids.add(qid)
+        const distanceValue = Number(readSparqlBindingValue(binding, 'distanceSort'))
+        if (Number.isFinite(distanceValue)) {
+          item.distance_km = distanceValue.toFixed(3)
+        }
+        nearbyNameCandidates.push(item)
+        continue
+      }
+      if (seenReverseQids.has(qid)) {
+        continue
+      }
+      seenReverseQids.add(qid)
+      reverseCandidates.push(item)
+    }
+
+    const normalizedReverseCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(reverseCandidates)
+    const normalizedNearbyNameCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(nearbyNameCandidates)
+    const result = {
+      reverseCandidates: normalizedReverseCandidates,
+      nearbyNameCandidates: normalizedNearbyNameCandidates,
+    }
+    writeCachedWikidataReverseLookupResult(cacheKey, result)
+    return result
+  }
+
+  async function fetchWikidataItemsForOsmTagMappings(osmKeys, osmTags, {
+    limit = SAVE_IMAGE_SUBJECT_OSM_MAX_TAG_MAPPINGS,
+    lang = null,
+  } = {}) {
+    const normalizedKeys = []
+    const seenKeys = new Set()
+    for (const rawKey of Array.isArray(osmKeys) ? osmKeys : []) {
+      const normalizedKey = normalizeOsmTagKeyForWikidataMapping(rawKey)
+      if (!normalizedKey || seenKeys.has(normalizedKey)) {
+        continue
+      }
+      seenKeys.add(normalizedKey)
+      normalizedKeys.push(normalizedKey)
+    }
+
+    const normalizedTags = []
+    const seenTags = new Set()
+    for (const rawTag of Array.isArray(osmTags) ? osmTags : []) {
+      const normalizedTag = normalizeOsmTagPairForWikidataMapping(rawTag)
+      if (!normalizedTag || seenTags.has(normalizedTag)) {
+        continue
+      }
+      seenTags.add(normalizedTag)
+      normalizedTags.push(normalizedTag)
+    }
+
+    const limitedKeys = normalizedKeys.slice(0, SAVE_IMAGE_SUBJECT_OSM_MAX_TAG_MAPPINGS)
+    const limitedTags = normalizedTags.slice(0, SAVE_IMAGE_SUBJECT_OSM_MAX_TAG_MAPPINGS)
+    if (limitedKeys.length === 0 && limitedTags.length === 0) {
+      return {
+        keyMatches: new Map(),
+        tagMatches: new Map(),
+        itemByQid: new Map(),
+      }
+    }
+
+    const queryLanguage = normalizeSupportedLocale(lang) || 'en'
+    const clauses = []
+    if (limitedKeys.length > 0) {
+      const keyValuesClause = limitedKeys.map((key) => `"${escapeSparqlStringLiteral(key)}"`).join(' ')
+      clauses.push(`
+  {
+    VALUES ?osmKey { ${keyValuesClause} }
+    ?item wdt:P13786 ?osmKey .
+  }
+`.trim())
+    }
+    if (limitedTags.length > 0) {
+      const tagValuesClause = limitedTags.map((tag) => `"${escapeSparqlStringLiteral(tag)}"`).join(' ')
+      clauses.push(`
+  {
+    VALUES ?osmTag { ${tagValuesClause} }
+    ?item wdt:P1282 ?osmTag .
+  }
+`.trim())
+    }
+    if (clauses.length === 0) {
+      return {
+        keyMatches: new Map(),
+        tagMatches: new Map(),
+        itemByQid: new Map(),
+      }
+    }
+
+    const resultLimit = Math.max(
+      limitedKeys.length + limitedTags.length,
+      Math.min((limitedKeys.length + limitedTags.length) * 6, 1000),
+    )
+    const sparql = `
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+
+SELECT ?item ?itemLabel ?itemDescription ?osmKey ?osmTag
+WHERE {
+  ${clauses.join('\n  UNION\n  ')}
+  FILTER(STRSTARTS(STR(?item), "http://www.wikidata.org/entity/Q"))
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${queryLanguage},en". }
+}
+LIMIT ${resultLimit}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const keyMatches = new Map()
+    const keyMatchQids = new Map()
+    const tagMatches = new Map()
+    const tagMatchQids = new Map()
+    const itemByQid = new Map()
+
+    const pushMatch = (targetMap, seenMap, mappingKey, item) => {
+      if (!mappingKey || !item || typeof item !== 'object') {
+        return
+      }
+      if (!targetMap.has(mappingKey)) {
+        targetMap.set(mappingKey, [])
+      }
+      if (!seenMap.has(mappingKey)) {
+        seenMap.set(mappingKey, new Set())
+      }
+      const seenQidsForKey = seenMap.get(mappingKey)
+      const qid = extractWikidataId(String(item.id || ''))
+      if (!qid || seenQidsForKey.has(qid)) {
+        return
+      }
+      seenQidsForKey.add(qid)
+      targetMap.get(mappingKey).push(item)
+    }
+
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const qid = extractWikidataId(
+        binding.item &&
+        typeof binding.item === 'object' &&
+        typeof binding.item.value === 'string'
+          ? binding.item.value
+          : '',
+      )
+      if (!qid) {
+        continue
+      }
+      const item = {
+        id: qid,
+        label:
+          binding.itemLabel &&
+          typeof binding.itemLabel === 'object' &&
+          typeof binding.itemLabel.value === 'string'
+            ? binding.itemLabel.value.trim()
+            : '',
+        description:
+          binding.itemDescription &&
+          typeof binding.itemDescription === 'object' &&
+          typeof binding.itemDescription.value === 'string'
+            ? binding.itemDescription.value.trim()
+            : '',
+      }
+      if (!itemByQid.has(qid)) {
+        itemByQid.set(qid, item)
+      }
+
+      const mappingKey = normalizeOsmTagKeyForWikidataMapping(
+        binding.osmKey &&
+        typeof binding.osmKey === 'object' &&
+        typeof binding.osmKey.value === 'string'
+          ? binding.osmKey.value
+          : '',
+      )
+      if (mappingKey) {
+        pushMatch(keyMatches, keyMatchQids, mappingKey, item)
+      }
+
+      const mappingTag = normalizeOsmTagPairForWikidataMapping(
+        binding.osmTag &&
+        typeof binding.osmTag === 'object' &&
+        typeof binding.osmTag.value === 'string'
+          ? binding.osmTag.value
+          : '',
+      )
+      if (mappingTag) {
+        pushMatch(tagMatches, tagMatchQids, mappingTag, item)
+      }
+    }
+
+    return {
+      keyMatches,
+      tagMatches,
+      itemByQid,
+    }
+  }
+
+  async function fetchWikidataItemSummariesForQids(qids, { lang = null } = {}) {
+    const normalizedQids = []
+    const seenQids = new Set()
+    for (const rawQid of Array.isArray(qids) ? qids : []) {
+      const normalizedQid = extractWikidataId(String(rawQid || ''))
+      if (!normalizedQid || seenQids.has(normalizedQid)) {
+        continue
+      }
+      seenQids.add(normalizedQid)
+      normalizedQids.push(normalizedQid)
+    }
+    if (normalizedQids.length === 0) {
+      return new Map()
+    }
+
+    const valuesClause = normalizedQids.slice(0, 50).map((qid) => `wd:${qid}`).join(' ')
+    const queryLanguage = normalizeSupportedLocale(lang) || 'en'
+    const sparql = `
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+
+SELECT ?item ?itemLabel ?itemDescription
+WHERE {
+  VALUES ?item { ${valuesClause} }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${queryLanguage},en". }
+}
+LIMIT ${normalizedQids.length}
+`.trim()
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', sparql)
+    const requestUrl = new URL(WIKIDATA_SPARQL_ENDPOINT_URL)
+    requestUrl.searchParams.set('format', 'json')
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const bindings =
+      payload &&
+      typeof payload === 'object' &&
+      payload.results &&
+      typeof payload.results === 'object' &&
+      Array.isArray(payload.results.bindings)
+        ? payload.results.bindings
+        : []
+
+    const itemByQid = new Map()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const qid = extractWikidataId(
+        binding.item &&
+        typeof binding.item === 'object' &&
+        typeof binding.item.value === 'string'
+          ? binding.item.value
+          : '',
+      )
+      if (!qid) {
+        continue
+      }
+      itemByQid.set(qid, {
+        id: qid,
+        label:
+          binding.itemLabel &&
+          typeof binding.itemLabel === 'object' &&
+          typeof binding.itemLabel.value === 'string'
+            ? binding.itemLabel.value.trim()
+            : '',
+        description:
+          binding.itemDescription &&
+          typeof binding.itemDescription === 'object' &&
+          typeof binding.itemDescription.value === 'string'
+            ? binding.itemDescription.value.trim()
+            : '',
+      })
+    }
+    return itemByQid
+  }
+
+  async function fetchNearbyOsmDepictItemsFromClickedPoint(latitude, longitude, {
+    radiusMeters = SAVE_IMAGE_SUBJECT_OSM_RADIUS_METERS,
+    limit = SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_BASE_LIMIT,
+    lang = null,
+  } = {}) {
+    void latitude
+    void longitude
+    void radiusMeters
+    void limit
+    void lang
+    return []
+  }
+
+  function normalizeOsmMapFeatureType(value) {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (normalized === 'node' || normalized === 'way' || normalized === 'relation') {
+      return normalized
+    }
+    return ''
+  }
+
+  function buildOsmMapFeatureKey(type, id) {
+    const normalizedType = normalizeOsmMapFeatureType(type)
+    const normalizedId = Number.parseInt(String(id), 10)
+    if (!normalizedType || !Number.isFinite(normalizedId)) {
+      return ''
+    }
+    return `${normalizedType}:${normalizedId}`
+  }
+
+  function readOsmMapFeatureCoordinateValue(value) {
+    if (value === null || value === undefined) {
+      return null
+    }
+    if (typeof value !== 'number' && typeof value !== 'string') {
+      return null
+    }
+    const rawValue = typeof value === 'string' ? value.trim() : String(value)
+    if (!rawValue) {
+      return null
+    }
+    const parsed = Number(rawValue)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  function readOsmMapFeatureCenter(element) {
+    if (!element || typeof element !== 'object') {
+      return { latitude: null, longitude: null }
+    }
+    const directLatitude = readOsmMapFeatureCoordinateValue(element.lat)
+    const directLongitude = readOsmMapFeatureCoordinateValue(element.lon)
+    if (directLatitude !== null && directLongitude !== null) {
+      return { latitude: directLatitude, longitude: directLongitude }
+    }
+    const centerLatitude = (
+      element.center && typeof element.center === 'object'
+        ? readOsmMapFeatureCoordinateValue(element.center.lat)
+        : null
+    )
+    const centerLongitude = (
+      element.center && typeof element.center === 'object'
+        ? readOsmMapFeatureCoordinateValue(element.center.lon)
+        : null
+    )
+    if (centerLatitude !== null && centerLongitude !== null) {
+      return { latitude: centerLatitude, longitude: centerLongitude }
+    }
+    if (Array.isArray(element.geometry) && element.geometry.length > 0) {
+      const firstPoint = element.geometry.find((point) => (
+        point &&
+        typeof point === 'object' &&
+        readOsmMapFeatureCoordinateValue(point.lat) !== null &&
+        readOsmMapFeatureCoordinateValue(point.lon) !== null
+      ))
+      if (firstPoint) {
+        return {
+          latitude: readOsmMapFeatureCoordinateValue(firstPoint.lat),
+          longitude: readOsmMapFeatureCoordinateValue(firstPoint.lon),
+        }
+      }
+    }
+    return { latitude: null, longitude: null }
+  }
+
+  function readPreferredOsmMapFeatureName(tags, queryLanguage = null) {
+    if (!tags || typeof tags !== 'object') {
+      return ''
+    }
+    const normalizedLanguage = String(normalizeSupportedLocale(queryLanguage) || '').trim().toLowerCase()
+    const candidates = []
+    if (normalizedLanguage) {
+      candidates.push(`name:${normalizedLanguage}`)
+      const baseLanguage = normalizedLanguage.split('-')[0]
+      if (baseLanguage && baseLanguage !== normalizedLanguage) {
+        candidates.push(`name:${baseLanguage}`)
+      }
+    }
+    candidates.push('name', 'name:en')
+    for (const key of candidates) {
+      const value = typeof tags[key] === 'string' ? tags[key].trim() : ''
+      if (value) {
+        return value
+      }
+    }
+    return ''
+  }
+
+  function hasOsmMapFeatureName(tags) {
+    if (!tags || typeof tags !== 'object') {
+      return false
+    }
+    return Object.entries(tags).some(([rawKey, rawValue]) => {
+      const key = String(rawKey || '').trim().toLowerCase()
+      if (!key || (key !== 'name' && !key.startsWith('name:'))) {
+        return false
+      }
+      return Boolean(String(rawValue || '').trim())
+    })
+  }
+
+  function readOsmMapFeatureAddressText(tags) {
+    if (!tags || typeof tags !== 'object') {
+      return ''
+    }
+    const readFirstTagValue = (...candidateKeys) => {
+      for (const candidateKey of candidateKeys) {
+        const value = typeof tags[candidateKey] === 'string' ? tags[candidateKey].trim() : ''
+        if (value) {
+          return value
+        }
+      }
+      return ''
+    }
+    const street = readFirstTagValue('addr:street', 'addr_street')
+    const place = readFirstTagValue('addr:place', 'addr_place')
+    const houseNumber = readFirstTagValue('addr:housenumber', 'addr_housenumber')
+    const streetOrPlace = street || place
+    if (streetOrPlace && houseNumber) {
+      return `${streetOrPlace} ${houseNumber}`.trim()
+    }
+    return streetOrPlace || houseNumber || ''
+  }
+
+  function buildOsmMapFeatureFallbackSummary(tags) {
+    const pairs = []
+    for (const [rawKey, rawValue] of Object.entries(tags || {})) {
+      const key = normalizeOsmTagKeyForWikidataMapping(rawKey)
+      if (!key || shouldIgnoreOsmTagForWikidataMapping(key)) {
+        continue
+      }
+      const value = normalizeOsmTagValueForWikidataMapping(rawValue)
+      if (!value) {
+        continue
+      }
+      pairs.push(`${key}=${value}`)
+      if (pairs.length >= 3) {
+        break
+      }
+    }
+    return pairs.join(', ')
+  }
+
+  function normalizeOsmMapFeatureForQueryList(element, {
+    clickLatitude = null,
+    clickLongitude = null,
+    sourceKind = 'nearby',
+    lang = null,
+  } = {}) {
+    if (!element || typeof element !== 'object') {
+      return null
+    }
+    const type = normalizeOsmMapFeatureType(element.type)
+    const id = Number.parseInt(String(element.id), 10)
+    if (!type || !Number.isFinite(id)) {
+      return null
+    }
+    const tags = element.tags && typeof element.tags === 'object'
+      ? element.tags
+      : {}
+    const { latitude, longitude } = readOsmMapFeatureCenter(element)
+    const distanceKm = haversineDistanceKilometers(
+      clickLatitude,
+      clickLongitude,
+      latitude,
+      longitude,
+    )
+    const distanceSortValue = Number.isFinite(distanceKm) ? Number(distanceKm) : Number.POSITIVE_INFINITY
+    const distanceMeters = Number.isFinite(distanceSortValue)
+      ? Math.max(0, Math.round(distanceSortValue * 1000))
+      : null
+    const normalizedTagPairs = []
+    const detailTags = []
+    for (const [rawKey, rawValue] of Object.entries(tags)) {
+      const normalizedKey = normalizeOsmTagKeyForWikidataMapping(rawKey)
+      if (!normalizedKey) {
+        continue
+      }
+      const normalizedValue = normalizeOsmTagValueForWikidataMapping(rawValue)
+      if (!normalizedValue) {
+        continue
+      }
+      detailTags.push({ key: normalizedKey, value: normalizedValue })
+      if (!shouldIgnoreOsmTagForWikidataMapping(normalizedKey)) {
+        normalizedTagPairs.push(`${normalizedKey}=${normalizedValue}`)
+      }
+    }
+    detailTags.sort((left, right) => left.key.localeCompare(right.key, 'en', { sensitivity: 'base' }))
+    const primaryTypeTag = pickPrimaryOsmTypeTagForSuggestion(normalizedTagPairs)
+    const featureTypeDescription = describeOsmFeatureTypeForUi(tags, {
       lang,
+      primaryTagPair: primaryTypeTag,
     })
+    const preferredName = readPreferredOsmMapFeatureName(tags, lang)
+    const addressText = readOsmMapFeatureAddressText(tags)
+    const fallbackSummary = buildOsmMapFeatureFallbackSummary(tags)
+    const geometryWkt = typeof element.geometryWkt === 'string'
+      ? element.geometryWkt.trim()
+      : ''
+    const displayLabel = preferredName
+      || (
+        featureTypeDescription
+          ? `${featureTypeDescription}${addressText ? ` ${addressText}` : ''}`
+          : ''
+      )
+      || fallbackSummary
+      || `${type} ${id}`
+    const displayMetaParts = [`${type} ${id}`]
+    if (distanceMeters !== null) {
+      displayMetaParts.push(`${distanceMeters} m`)
+    }
+    if (
+      featureTypeDescription &&
+      featureTypeDescription !== displayLabel &&
+      !displayLabel.startsWith(`${featureTypeDescription} `)
+    ) {
+      displayMetaParts.unshift(featureTypeDescription)
+    }
+    const key = buildOsmMapFeatureKey(type, id)
+    if (!key) {
+      return null
+    }
+    return {
+      key,
+      type,
+      id,
+      sourceKind: sourceKind === 'enclosing' ? 'enclosing' : 'nearby',
+      displayLabel,
+      featureTypeDescription,
+      addressText,
+      displayMeta: displayMetaParts.join(' · '),
+      distanceSortValue,
+      distanceMeters,
+      hasNameTag: hasOsmMapFeatureName(tags),
+      primaryTypeTag,
+      tags: detailTags,
+      rawTags: tags,
+      latitude,
+      longitude,
+      geometryWkt,
+      directQid: extractWikidataId(String(tags.wikidata || '')),
+      osmUrl: `https://www.openstreetmap.org/${type}/${id}`,
+    }
+  }
+
+  function sortSaveImageSubjectNearbyFeaturesInPlace(features) {
+    if (!Array.isArray(features)) {
+      return
+    }
+    features.sort((left, right) => {
+      const leftDistance = Number.isFinite(Number(left && left.distanceSortValue))
+        ? Number(left.distanceSortValue)
+        : Number.POSITIVE_INFINITY
+      const rightDistance = Number.isFinite(Number(right && right.distanceSortValue))
+        ? Number(right && right.distanceSortValue)
+        : Number.POSITIVE_INFINITY
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance
+      }
+      const leftLabel = left && typeof left.displayLabel === 'string'
+        ? left.displayLabel
+        : ''
+      const rightLabel = right && typeof right.displayLabel === 'string'
+        ? right.displayLabel
+        : ''
+      return leftLabel.localeCompare(rightLabel, 'en', { sensitivity: 'base' })
+    })
+  }
+
+  function buildSaveImageSubjectNameGroupKey(value) {
+    const normalizedName = normalizeTextForCompare(value).replace(/\s+/g, ' ')
+    if (!normalizedName) {
+      return ''
+    }
+    return `name-group:${normalizedName}`
+  }
+
+  function mergeSaveImageSubjectNearbyFeaturesByName(features, { lang = null } = {}) {
+    const sourceFeatures = Array.isArray(features) ? features : []
+    const ungroupedFeatures = []
+    const groupedFeatures = new Map()
+
+    for (const feature of sourceFeatures) {
+      if (!feature || typeof feature !== 'object') {
+        continue
+      }
+      const rawTags = feature.rawTags && typeof feature.rawTags === 'object'
+        ? feature.rawTags
+        : {}
+      const featureName = String(readPreferredOsmMapFeatureName(rawTags, lang) || '').trim()
+      const groupKey = buildSaveImageSubjectNameGroupKey(featureName)
+      if (!groupKey) {
+        ungroupedFeatures.push(feature)
+        continue
+      }
+      if (!groupedFeatures.has(groupKey)) {
+        groupedFeatures.set(groupKey, [])
+      }
+      groupedFeatures.get(groupKey).push(feature)
+    }
+
+    const mergedFeatures = [...ungroupedFeatures]
+    for (const [groupKey, groupItemsRaw] of groupedFeatures.entries()) {
+      const groupItems = Array.isArray(groupItemsRaw) ? groupItemsRaw.slice() : []
+      if (groupItems.length < 1) {
+        continue
+      }
+      if (groupItems.length === 1) {
+        mergedFeatures.push(groupItems[0])
+        continue
+      }
+      sortSaveImageSubjectNearbyFeaturesInPlace(groupItems)
+      const primaryFeature = groupItems[0]
+      if (!primaryFeature || typeof primaryFeature !== 'object') {
+        continue
+      }
+
+      const primaryRawTags = primaryFeature.rawTags && typeof primaryFeature.rawTags === 'object'
+        ? primaryFeature.rawTags
+        : {}
+      const groupedName = String(
+        readPreferredOsmMapFeatureName(primaryRawTags, lang) ||
+        primaryFeature.displayLabel ||
+        ''
+      ).trim()
+      const groupedDistanceMeters = Number.isFinite(Number(primaryFeature.distanceMeters))
+        ? Math.max(0, Math.round(Number(primaryFeature.distanceMeters)))
+        : null
+      const groupedDistanceSortValue = Number.isFinite(Number(primaryFeature.distanceSortValue))
+        ? Number(primaryFeature.distanceSortValue)
+        : Number.POSITIVE_INFINITY
+      const groupedDisplayMetaParts = []
+      if (
+        primaryFeature.featureTypeDescription &&
+        primaryFeature.featureTypeDescription !== groupedName
+      ) {
+        groupedDisplayMetaParts.push(primaryFeature.featureTypeDescription)
+      }
+      groupedDisplayMetaParts.push(`x${groupItems.length}`)
+      if (groupedDistanceMeters !== null) {
+        groupedDisplayMetaParts.push(`${groupedDistanceMeters} m`)
+      }
+      const groupedLatitude = readOsmMapFeatureCoordinateValue(primaryFeature.latitude)
+      const groupedLongitude = readOsmMapFeatureCoordinateValue(primaryFeature.longitude)
+
+      const directQidsInOrder = []
+      const seenDirectQids = new Set()
+      for (const groupItem of groupItems) {
+        const directQid = extractWikidataId(
+          String(
+            (groupItem && groupItem.directQid)
+            || (groupItem && groupItem.rawTags && groupItem.rawTags.wikidata ? groupItem.rawTags.wikidata : '')
+            || '',
+          ),
+        )
+        if (!directQid || seenDirectQids.has(directQid)) {
+          continue
+        }
+        seenDirectQids.add(directQid)
+        directQidsInOrder.push(directQid)
+      }
+      const primaryDirectQid = extractWikidataId(
+        String(
+          primaryFeature.directQid ||
+          (primaryRawTags && primaryRawTags.wikidata ? primaryRawTags.wikidata : '') ||
+          '',
+        ),
+      )
+      const groupedDirectQid = primaryDirectQid || (directQidsInOrder[0] || '')
+      const groupedRawTags = {
+        ...primaryRawTags,
+      }
+      if (groupedName) {
+        groupedRawTags.name = groupedName
+      }
+      if (groupedDirectQid) {
+        groupedRawTags.wikidata = groupedDirectQid
+      }
+
+      mergedFeatures.push({
+        ...primaryFeature,
+        key: groupKey,
+        type: '',
+        id: null,
+        sourceKind: 'nearby',
+        displayLabel: groupedName || String(primaryFeature.displayLabel || '').trim() || groupKey,
+        displayMeta: groupedDisplayMetaParts.join(' · '),
+        distanceSortValue: groupedDistanceSortValue,
+        distanceMeters: groupedDistanceMeters,
+        latitude: groupedLatitude,
+        longitude: groupedLongitude,
+        rawTags: groupedRawTags,
+        directQid: groupedDirectQid,
+        mergedDirectQids: directQidsInOrder,
+        mergedComponents: groupItems.map((item) => ({ ...item })),
+        mergedFeatureCount: groupItems.length,
+      })
+    }
+
+    sortSaveImageSubjectNearbyFeaturesInPlace(mergedFeatures)
+    return mergedFeatures
+  }
+
+  function normalizeOsmMapFeatureReverseWikidataCandidates(candidates) {
+    const normalizedCandidates = []
+    const seenQids = new Set()
+    for (const candidate of Array.isArray(candidates) ? candidates : []) {
+      if (!candidate || typeof candidate !== 'object') {
+        continue
+      }
+      const qid = extractWikidataId(String(candidate.id || ''))
+      if (!qid || seenQids.has(qid)) {
+        continue
+      }
+      seenQids.add(qid)
+      normalizedCandidates.push({
+        id: qid,
+        label: String(candidate.label || '').trim(),
+        description: String(candidate.description || '').trim(),
+        property: String(candidate.property || '').trim().toUpperCase(),
+        matchValue: String(candidate.match_value || candidate.matchValue || '').trim(),
+      })
+    }
+    return normalizedCandidates
+  }
+
+  function mergeOsmMapFeatureReverseWikidataCandidates(...candidateGroups) {
+    const mergedCandidates = []
+    const seenQids = new Set()
+    for (const candidates of candidateGroups) {
+      const normalizedCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(candidates)
+      for (const candidate of normalizedCandidates) {
+        const qid = extractWikidataId(String(candidate.id || ''))
+        if (!qid || seenQids.has(qid)) {
+          continue
+        }
+        seenQids.add(qid)
+        mergedCandidates.push(candidate)
+      }
+    }
+    return mergedCandidates
+  }
+
+  function mergeOsmMapFeatureWithLatestMetadata(feature, latestPayload, {
+    clickLatitude = null,
+    clickLongitude = null,
+    lang = null,
+  } = {}) {
+    if (!feature || typeof feature !== 'object' || !latestPayload || typeof latestPayload !== 'object') {
+      return null
+    }
+    const featureType = normalizeOsmMapFeatureType(feature.type)
+    const featureId = Number.parseInt(String(feature.id), 10)
+    const payloadType = normalizeOsmMapFeatureType(latestPayload.type)
+    const payloadId = Number.parseInt(String(latestPayload.id), 10)
+    if (
+      !featureType ||
+      !Number.isFinite(featureId) ||
+      !payloadType ||
+      !Number.isFinite(payloadId) ||
+      payloadType !== featureType ||
+      payloadId !== featureId
+    ) {
+      return null
+    }
+
+    const existingTags = feature.rawTags && typeof feature.rawTags === 'object'
+      ? feature.rawTags
+      : {}
+    const mergedTags = { ...existingTags }
+    const isAreaFeature = classifyWktGeometryKind(feature.geometryWkt) === 'area'
+    const latestTags = latestPayload.tags && typeof latestPayload.tags === 'object'
+      ? latestPayload.tags
+      : {}
+    for (const [rawKey, rawValue] of Object.entries(latestTags)) {
+      const key = String(rawKey || '').trim()
+      const normalizedKey = key.toLowerCase()
+      const value = String(rawValue || '').trim()
+      if (!key || !value) {
+        continue
+      }
+      if (normalizedKey !== 'wikidata' && normalizedKey !== 'name' && !normalizedKey.startsWith('name:')) {
+        continue
+      }
+      mergedTags[key] = value
+    }
+
+    const latestName = String(latestPayload.name || '').trim()
+    if (latestName) {
+      mergedTags.name = latestName
+    }
+
+    const directQidFromTags = extractWikidataId(String(mergedTags.wikidata || ''))
+    const directQidFromPayload = extractWikidataId(String(latestPayload.wikidata || ''))
+    const latestReverseCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(
+      latestPayload.wikidata_reverse_candidates || latestPayload.wikidataReverseCandidates,
+    )
+    const latestNameMatchCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(
+      latestPayload.wikidata_name_match_candidates || latestPayload.wikidataNameMatchCandidates,
+    )
+    const lookupName = normalizeTextForCompare(
+      latestName ||
+      mergedTags.name ||
+      readPreferredOsmMapFeatureName(mergedTags, lang) ||
+      feature.displayLabel ||
+      '',
+    )
+    const nameAlignedIdCandidates = lookupName
+      ? latestReverseCandidates.filter((candidate) => (
+        candidate &&
+        typeof candidate === 'object' &&
+        candidate.property !== 'NAME' &&
+        normalizeTextForCompare(candidate.label) === lookupName
+      ))
+      : []
+    const nameMatchCandidates = mergeOsmMapFeatureReverseWikidataCandidates(
+      latestReverseCandidates.filter((candidate) => candidate.property === 'NAME'),
+      latestNameMatchCandidates,
+      nameAlignedIdCandidates,
+    )
+    const idReverseCandidates = latestReverseCandidates.filter((candidate) => candidate.property !== 'NAME')
+    const reverseCandidates = mergeOsmMapFeatureReverseWikidataCandidates(
+      latestReverseCandidates,
+      nameMatchCandidates,
+    )
+    const reverseQidFromPayload = isAreaFeature
+      ? extractWikidataId(String(latestPayload.wikidata_reverse_qid || latestPayload.wikidataReverseQid || ''))
+      : ''
+    const reverseQidFromCandidates = isAreaFeature && idReverseCandidates.length > 0
+      ? extractWikidataId(String(idReverseCandidates[0].id || ''))
+      : ''
+    const resolvedQid = directQidFromPayload || directQidFromTags || reverseQidFromPayload || reverseQidFromCandidates
+    if (resolvedQid) {
+      mergedTags.wikidata = resolvedQid
+    }
+
+    const payloadLatitude = readOsmMapFeatureCoordinateValue(latestPayload.lat)
+    const payloadLongitude = readOsmMapFeatureCoordinateValue(latestPayload.lon)
+    const fallbackLatitude = readOsmMapFeatureCoordinateValue(feature.latitude)
+    const fallbackLongitude = readOsmMapFeatureCoordinateValue(feature.longitude)
+    const effectiveLatitude = payloadLatitude !== null ? payloadLatitude : fallbackLatitude
+    const effectiveLongitude = payloadLongitude !== null ? payloadLongitude : fallbackLongitude
+
+    const normalizedFeature = normalizeOsmMapFeatureForQueryList(
+      {
+        type: featureType,
+        id: featureId,
+        tags: mergedTags,
+        lat: effectiveLatitude,
+        lon: effectiveLongitude,
+        geometryWkt: String(feature.geometryWkt || '').trim(),
+      },
+      {
+        clickLatitude,
+        clickLongitude,
+        sourceKind: feature.sourceKind,
+        lang,
+      },
+    )
+    if (!normalizedFeature) {
+      return null
+    }
+
+    if (feature.geometryWkt && !normalizedFeature.geometryWkt) {
+      normalizedFeature.geometryWkt = String(feature.geometryWkt || '').trim()
+    }
+    if (
+      readOsmMapFeatureCoordinateValue(normalizedFeature.latitude) === null &&
+      fallbackLatitude !== null
+    ) {
+      normalizedFeature.latitude = fallbackLatitude
+    }
+    if (
+      readOsmMapFeatureCoordinateValue(normalizedFeature.longitude) === null &&
+      fallbackLongitude !== null
+    ) {
+      normalizedFeature.longitude = fallbackLongitude
+    }
+    normalizedFeature.wikidataReverseCandidates = reverseCandidates
+    normalizedFeature.wikidataNameMatchCandidates = nameMatchCandidates
+    normalizedFeature.directQid = resolvedQid || extractWikidataId(String(feature.directQid || ''))
+    return normalizedFeature
+  }
+
+  function readSparqlBindingValue(binding, variableName) {
+    if (!binding || typeof binding !== 'object') {
+      return ''
+    }
+    const name = String(variableName || '').trim()
+    if (!name) {
+      return ''
+    }
+    const valueNode = binding[name]
+    if (!valueNode || typeof valueNode !== 'object' || typeof valueNode.value !== 'string') {
+      return ''
+    }
+    return valueNode.value.trim()
+  }
+
+  function parseOsmFeatureReferenceFromUri(value) {
+    const normalizedValue = String(value || '').trim()
+    if (!normalizedValue) {
+      return { type: '', id: null }
+    }
+    const match = normalizedValue.match(/\/(node|way|relation)\/(\d+)(?:[/?#]|$)/i)
+    if (!match) {
+      return { type: '', id: null }
+    }
+    const type = normalizeOsmMapFeatureType(match[1])
+    const id = Number.parseInt(match[2], 10)
+    if (!type || !Number.isFinite(id)) {
+      return { type: '', id: null }
+    }
+    return { type, id }
+  }
+
+  function parseLatitudeLongitudeFromWkt(value) {
+    const normalizedValue = String(value || '').trim()
+    if (!normalizedValue) {
+      return { latitude: null, longitude: null }
+    }
+    const pointMatch = normalizedValue.match(
+      /POINT(?:\s+ZM|\s+Z|\s+M)?\s*\(\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)(?:\s+[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)?\s*\)/i,
+    )
+    if (pointMatch) {
+      const longitude = Number(pointMatch[1])
+      const latitude = Number(pointMatch[2])
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        return { latitude, longitude }
+      }
+    }
+    const numericTokens = normalizedValue.match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/g)
+    if (!Array.isArray(numericTokens) || numericTokens.length < 2) {
+      return { latitude: null, longitude: null }
+    }
+    const longitude = Number(numericTokens[0])
+    const latitude = Number(numericTokens[1])
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return { latitude: null, longitude: null }
+    }
+    return { latitude, longitude }
+  }
+
+  function buildSubjectNearbyFeaturesSparqlQuery(
+    latitude,
+    longitude,
+    containerWikidataQid,
+    nearbyLimit,
+    { distanceMode = 'geof' } = {},
+  ) {
+    const latitudeValue = Number(latitude)
+    const longitudeValue = Number(longitude)
+    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) {
+      return ''
+    }
+    const normalizedDistanceMode = (
+      distanceMode === 'dist' || distanceMode === 'none'
+        ? distanceMode
+        : 'geof'
+    )
+    const normalizedContainerQid = (
+      extractWikidataId(String(containerWikidataQid || ''))
+      || SAVE_IMAGE_SUBJECT_CONTAINER_FALLBACK_QID
+    )
+    const resultLimit = Math.max(
+      1,
+      Math.min(Number.parseInt(String(nearbyLimit), 10) || SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_BASE_LIMIT, 200),
+    )
+    const pointWkt = `POINT(${longitudeValue.toFixed(7)} ${latitudeValue.toFixed(7)})`
+    const geofPrefix = normalizedDistanceMode === 'geof'
+      ? 'PREFIX geof: <http://www.opengis.net/def/function/geosparql/>'
+      : ''
+    const distanceFunctionName = normalizedDistanceMode === 'dist' ? 'dist' : 'geof:distance'
+    const containerDistanceBindClause = normalizedDistanceMode === 'none'
+      ? ''
+      : `BIND(${distanceFunctionName}(?containerLocation, "${pointWkt}"^^geo:wktLiteral) AS ?distance)`
+    const containerDistanceFilterClause = normalizedDistanceMode === 'none'
+      ? ''
+      : 'FILTER(?distance = 0)'
+    const featureDistanceBindClause = normalizedDistanceMode === 'none'
+      ? 'BIND(0 AS ?distance)'
+      : `BIND(${distanceFunctionName}(?location, "${pointWkt}"^^geo:wktLiteral) AS ?distance)`
+    const optionalTagSelectClause = SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_TAG_KEYS
+      .map((tagKey) => `?${tagKey}`)
+      .join(' ')
+    const optionalAddressSelectClause = SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_ADDRESS_BINDINGS
+      .map((entry) => `?${entry.variable}`)
+      .join(' ')
+    const optionalTagWhereClause = SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_TAG_KEYS
+      .map((tagKey) => `OPTIONAL { ?osm osmkey:${tagKey} ?${tagKey} }`)
+      .join('\n  ')
+    const optionalAddressWhereClause = SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_ADDRESS_BINDINGS
+      .map((entry) => `OPTIONAL { ?osm <${entry.predicateIri}> ?${entry.variable} }`)
+      .join('\n  ')
+    return `
+PREFIX ogc: <http://www.opengis.net/rdf#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+${geofPrefix}
+PREFIX osmkey: <https://www.openstreetmap.org/wiki/Key:>
+PREFIX osm: <https://www.openstreetmap.org/>
+PREFIX osmrel: <https://www.openstreetmap.org/relation/>
+PREFIX osm2rdf: <https://osm2rdf.cs.uni-freiburg.de/rdf#>
+
+SELECT ?osm ?location ?distance ${optionalTagSelectClause} ${optionalAddressSelectClause}
+WHERE {
+  {
+    SELECT ?osm ?location ?distance
+    WHERE {
+      {
+        SELECT ?container
+        WHERE {
+          ?p131 osmkey:wikidata "${escapeSparqlStringLiteral(normalizedContainerQid)}" .
+          ?p131 ogc:sfContains ?container .
+          ?container geo:hasGeometry/geo:asWKT ?containerLocation .
+          ?container osm2rdf:area ?area .
+          ?container osmkey:boundary "administrative" .
+          ${containerDistanceBindClause}
+          ${containerDistanceFilterClause}
+        }
+        ORDER BY ASC(?area)
+        LIMIT 1
+      }
+      ?container ogc:sfContains ?osm .
+      {
+        ?osm osm2rdf:area ?area .
+        FILTER(?area > 1000)
+      }
+      UNION
+      {
+        ?osm (osmkey:highway|osmkey:bridge) ?highwayType .
+        ?osm osmkey:name ?highwayName .
+      }
+      ?osm geo:hasGeometry/geo:asWKT ?location .
+      ${featureDistanceBindClause}
+    }
+    ORDER BY ASC(?distance)
+    LIMIT ${resultLimit}
+  }
+
+  ${optionalTagWhereClause}
+  ${optionalAddressWhereClause}
+}
+ORDER BY ASC(?distance)
+`.trim()
+  }
+
+  async function executeOsmPlanetSparqlQuery(query) {
+    const normalizedQuery = String(query || '').trim()
+    if (!normalizedQuery) {
+      return {
+        results: {
+          bindings: [],
+        },
+      }
+    }
+
+    const requestBody = new URLSearchParams()
+    requestBody.set('query', normalizedQuery)
+    requestBody.set('format', 'json')
+
+    const requestUrl = new URL(OSM_PLANET_SPARQL_ENDPOINT_URL)
+    const response = await fetch(requestUrl.toString(), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sparql-results+json, application/json;q=0.9, */*;q=0.1',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: requestBody.toString(),
+    })
+
+    if (!response.ok) {
+      let responseDetail = ''
+      try {
+        responseDetail = String(await response.text()).trim()
+      } catch (error) {
+        void error
+      }
+      const detailSuffix = responseDetail ? `: ${responseDetail.slice(0, 320)}` : ''
+      throw new Error(`Request failed with status ${response.status}${detailSuffix}`)
+    }
+
+    return response.json()
+  }
+
+  async function fetchSaveImageSubjectQueryFeatures(latitude, longitude, {
+    radiusMeters = SAVE_IMAGE_SUBJECT_OSM_RADIUS_METERS,
+    nearbyLimit = SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_BASE_LIMIT,
+    lang = null,
+    containerWikidataQid = SAVE_IMAGE_SUBJECT_CONTAINER_FALLBACK_QID,
+  } = {}) {
+    const latitudeValue = Number(latitude)
+    const longitudeValue = Number(longitude)
+    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) {
+      return {
+        nearbyFeatures: [],
+      }
+    }
+
+    void radiusMeters
+    const queryLimit = Math.max(
+      1,
+      Math.min(Number.parseInt(String(nearbyLimit), 10) || SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_BASE_LIMIT, 200),
+    )
+    const visibleLimit = Math.max(
+      1,
+      Math.min(SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_VISIBLE_LIMIT, queryLimit),
+    )
+    let bindings = []
+    let lastError = null
+    for (const distanceMode of ['geof', 'dist', 'none']) {
+      const sparql = buildSubjectNearbyFeaturesSparqlQuery(
+        latitudeValue,
+        longitudeValue,
+        containerWikidataQid,
+        queryLimit,
+        { distanceMode },
+      )
+      if (!sparql) {
+        continue
+      }
+      try {
+        const payload = await executeOsmPlanetSparqlQuery(sparql)
+        const candidateBindings =
+          payload &&
+          typeof payload === 'object' &&
+          payload.results &&
+          typeof payload.results === 'object' &&
+          Array.isArray(payload.results.bindings)
+            ? payload.results.bindings
+            : []
+        if (candidateBindings.length > 0 || distanceMode === 'none') {
+          bindings = candidateBindings
+          lastError = null
+          break
+        }
+      } catch (error) {
+        lastError = error
+      }
+    }
+    if (bindings.length < 1 && lastError) {
+      throw lastError
+    }
+
+    const applyDistanceToNearbyFeature = (feature, distanceMetersValue) => {
+      if (!feature || typeof feature !== 'object' || !Number.isFinite(Number(distanceMetersValue))) {
+        return
+      }
+      const normalizedDistanceMeters = Math.max(0, Math.round(Number(distanceMetersValue)))
+      feature.distanceMeters = normalizedDistanceMeters
+      feature.distanceSortValue = normalizedDistanceMeters / 1000
+      const displayMetaParts = [`${feature.type} ${feature.id}`, `${normalizedDistanceMeters} m`]
+      if (
+        feature.featureTypeDescription &&
+        feature.featureTypeDescription !== feature.displayLabel &&
+        !String(feature.displayLabel || '').startsWith(`${feature.featureTypeDescription} `)
+      ) {
+        displayMetaParts.unshift(feature.featureTypeDescription)
+      }
+      feature.displayMeta = displayMetaParts.join(' · ')
+    }
+
+    const nearbyFeatureByKey = new Map()
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== 'object') {
+        continue
+      }
+      const { type, id } = parseOsmFeatureReferenceFromUri(readSparqlBindingValue(binding, 'osm'))
+      if (!type || !Number.isFinite(id)) {
+        continue
+      }
+      const locationWkt = readSparqlBindingValue(binding, 'location')
+      const parsedCoordinates = parseLatitudeLongitudeFromWkt(locationWkt)
+      const tagMap = {}
+      for (const tagKey of SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_TAG_KEYS) {
+        const tagValue = readSparqlBindingValue(binding, tagKey)
+        if (!tagValue) {
+          continue
+        }
+        tagMap[tagKey] = tagValue
+      }
+      for (const addressBinding of SAVE_IMAGE_SUBJECT_OSM_OPTIONAL_ADDRESS_BINDINGS) {
+        const bindingVariable = String(addressBinding && addressBinding.variable ? addressBinding.variable : '').trim()
+        const targetTagKey = String(addressBinding && addressBinding.tagKey ? addressBinding.tagKey : '').trim()
+        if (!bindingVariable || !targetTagKey) {
+          continue
+        }
+        const tagValue = readSparqlBindingValue(binding, bindingVariable)
+        if (!tagValue) {
+          continue
+        }
+        tagMap[targetTagKey] = tagValue
+      }
+
+      const normalizedFeature = normalizeOsmMapFeatureForQueryList(
+        {
+          type,
+          id,
+          tags: tagMap,
+          lat: parsedCoordinates.latitude,
+          lon: parsedCoordinates.longitude,
+          geometryWkt: locationWkt,
+        },
+        {
+          clickLatitude: latitudeValue,
+          clickLongitude: longitudeValue,
+          sourceKind: 'nearby',
+          lang,
+        },
+      )
+      if (!normalizedFeature) {
+        continue
+      }
+
+      const dedupeKey = String(normalizedFeature.key || '').trim().toLowerCase()
+      if (!dedupeKey) {
+        continue
+      }
+
+      const calculatedDistanceKm = haversineDistanceKilometers(
+        latitudeValue,
+        longitudeValue,
+        normalizedFeature.latitude,
+        normalizedFeature.longitude,
+      )
+      const fallbackQueryDistance = Number.parseFloat(readSparqlBindingValue(binding, 'distance'))
+      const distanceMeters = Number.isFinite(calculatedDistanceKm)
+        ? Math.max(0, Math.round(calculatedDistanceKm * 1000))
+        : (
+          Number.isFinite(fallbackQueryDistance)
+            ? Math.max(0, Math.round(fallbackQueryDistance))
+            : null
+        )
+      applyDistanceToNearbyFeature(normalizedFeature, distanceMeters)
+
+      const existingFeature = nearbyFeatureByKey.get(dedupeKey)
+      if (!existingFeature || typeof existingFeature !== 'object') {
+        nearbyFeatureByKey.set(dedupeKey, normalizedFeature)
+        continue
+      }
+
+      const mergedRawTags = {
+        ...(existingFeature.rawTags && typeof existingFeature.rawTags === 'object'
+          ? existingFeature.rawTags
+          : {}),
+      }
+      const incomingRawTags = normalizedFeature.rawTags && typeof normalizedFeature.rawTags === 'object'
+        ? normalizedFeature.rawTags
+        : {}
+      for (const [rawTagKey, rawTagValue] of Object.entries(incomingRawTags)) {
+        const tagKey = String(rawTagKey || '').trim()
+        const tagValue = String(rawTagValue || '').trim()
+        if (!tagKey || !tagValue) {
+          continue
+        }
+        const currentTagValue = String(mergedRawTags[tagKey] || '').trim()
+        if (!currentTagValue) {
+          mergedRawTags[tagKey] = tagValue
+        }
+      }
+
+      const existingLatitude = readOsmMapFeatureCoordinateValue(existingFeature.latitude)
+      const existingLongitude = readOsmMapFeatureCoordinateValue(existingFeature.longitude)
+      const mergedFeatureCandidate = normalizeOsmMapFeatureForQueryList(
+        {
+          type: existingFeature.type,
+          id: existingFeature.id,
+          tags: mergedRawTags,
+          lat: existingLatitude !== null ? existingFeature.latitude : normalizedFeature.latitude,
+          lon: existingLongitude !== null ? existingFeature.longitude : normalizedFeature.longitude,
+          geometryWkt: String(existingFeature.geometryWkt || '').trim() || String(normalizedFeature.geometryWkt || '').trim(),
+        },
+        {
+          clickLatitude: latitudeValue,
+          clickLongitude: longitudeValue,
+          sourceKind: 'nearby',
+          lang,
+        },
+      )
+      const mergedFeature = mergedFeatureCandidate && typeof mergedFeatureCandidate === 'object'
+        ? {
+          ...existingFeature,
+          ...mergedFeatureCandidate,
+          rawTags: mergedRawTags,
+        }
+        : {
+          ...existingFeature,
+          rawTags: mergedRawTags,
+        }
+      const mergedDirectQid = extractWikidataId(
+        String(
+          mergedFeature.directQid ||
+          existingFeature.directQid ||
+          normalizedFeature.directQid ||
+          mergedRawTags.wikidata ||
+          '',
+        ),
+      )
+      if (mergedDirectQid) {
+        mergedFeature.directQid = mergedDirectQid
+        mergedFeature.rawTags.wikidata = mergedDirectQid
+      }
+
+      const existingDistanceMeters = Number.isFinite(Number(existingFeature.distanceMeters))
+        ? Number(existingFeature.distanceMeters)
+        : null
+      const nextDistanceMeters = Number.isFinite(Number(normalizedFeature.distanceMeters))
+        ? Number(normalizedFeature.distanceMeters)
+        : null
+      const mergedDistanceMeters = (
+        existingDistanceMeters !== null && nextDistanceMeters !== null
+          ? Math.min(existingDistanceMeters, nextDistanceMeters)
+          : (existingDistanceMeters !== null ? existingDistanceMeters : nextDistanceMeters)
+      )
+      applyDistanceToNearbyFeature(mergedFeature, mergedDistanceMeters)
+      nearbyFeatureByKey.set(dedupeKey, mergedFeature)
+    }
+
+    const nearbyFeatures = Array.from(nearbyFeatureByKey.values())
+    sortSaveImageSubjectNearbyFeaturesInPlace(nearbyFeatures)
+    const mergedNearbyFeatures = mergeSaveImageSubjectNearbyFeaturesByName(nearbyFeatures, { lang })
+
+    return {
+      nearbyFeatures: mergedNearbyFeatures.slice(0, visibleLimit),
+    }
+  }
+
+  function collectWikidataMappingCandidatesFromOsmTags(tags) {
+    const keyCandidates = new Set()
+    const tagCandidates = new Set()
+    for (const [rawKey, rawValue] of Object.entries(tags || {})) {
+      const normalizedKey = normalizeOsmTagKeyForWikidataMapping(rawKey)
+      if (!normalizedKey || shouldIgnoreOsmTagForWikidataMapping(normalizedKey)) {
+        continue
+      }
+      const normalizedValue = normalizeOsmTagValueForWikidataMapping(rawValue)
+      if (!normalizedValue) {
+        continue
+      }
+      keyCandidates.add(normalizedKey)
+      const tagPair = normalizeOsmTagPairForWikidataMapping(`${normalizedKey}=${normalizedValue}`)
+      if (tagPair) {
+        tagCandidates.add(tagPair)
+      }
+      const underscoredValue = normalizedValue.replace(/\s+/g, '_')
+      if (underscoredValue !== normalizedValue) {
+        const underscoredTag = normalizeOsmTagPairForWikidataMapping(`${normalizedKey}=${underscoredValue}`)
+        if (underscoredTag) {
+          tagCandidates.add(underscoredTag)
+        }
+      }
+    }
+    return {
+      keyCandidates: Array.from(keyCandidates),
+      tagCandidates: Array.from(tagCandidates),
+    }
+  }
+
+  function collectReverseWikidataCandidatesForFeatureSuggestion(feature, {
+    lang = null,
+    additionalReverseCandidates = [],
+    additionalNameMatchCandidates = [],
+  } = {}) {
+    const normalizedReverseCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(
+      mergeOsmMapFeatureReverseWikidataCandidates(
+        additionalReverseCandidates,
+        feature && typeof feature === 'object'
+          ? (feature.wikidataReverseCandidates || feature.wikidata_reverse_candidates)
+          : [],
+      ),
+    )
+    const normalizedNameMatchCandidates = normalizeOsmMapFeatureReverseWikidataCandidates(
+      mergeOsmMapFeatureReverseWikidataCandidates(
+        additionalNameMatchCandidates,
+        feature && typeof feature === 'object'
+          ? (feature.wikidataNameMatchCandidates || feature.wikidata_name_match_candidates)
+          : [],
+      ),
+    )
+    const allCandidates = mergeOsmMapFeatureReverseWikidataCandidates(
+      normalizedNameMatchCandidates,
+      normalizedReverseCandidates,
+    )
+    const isAreaFeature = isAreaLikeOsmMapFeature(feature)
+    const tags = feature && feature.rawTags && typeof feature.rawTags === 'object'
+      ? feature.rawTags
+      : {}
+    const featureNameRaw = String(
+      readPreferredOsmMapFeatureName(tags, lang) ||
+      (feature && typeof feature.displayLabel === 'string' ? feature.displayLabel : ''),
+    ).trim()
+    const featureNameNormalized = normalizeTextForCompare(featureNameRaw)
+
+    const includedCandidates = []
+    const excludedCandidates = []
+    for (const candidate of allCandidates) {
+      const property = String(candidate && candidate.property ? candidate.property : '').trim().toUpperCase()
+      const labelMatchesName = (
+        featureNameNormalized &&
+        normalizeTextForCompare(candidate.label) === featureNameNormalized
+      )
+      const matchValueMatchesName = (
+        featureNameNormalized &&
+        normalizeTextForCompare(candidate.matchValue) === featureNameNormalized
+      )
+      const isNameSignal = property === 'NAME' || labelMatchesName || matchValueMatchesName
+      const includeForNonArea = isNameSignal
+      const shouldInclude = isAreaFeature ? true : includeForNonArea
+      if (shouldInclude) {
+        includedCandidates.push(candidate)
+      } else {
+        excludedCandidates.push(candidate)
+      }
+    }
+
+    return {
+      featureNameRaw,
+      featureNameNormalized,
+      isAreaFeature,
+      includedCandidates,
+      excludedCandidates,
+    }
+  }
+
+  function pushWikidataCandidatePriority(priorityByQid, sourcesByQid, qidValue, priority, source) {
+    const qid = extractWikidataId(String(qidValue || ''))
+    if (!qid) {
+      return
+    }
+    const normalizedPriority = Number.isFinite(Number(priority)) ? Number(priority) : 99
+    const existingPriority = priorityByQid.get(qid)
+    if (existingPriority === undefined || normalizedPriority < existingPriority) {
+      priorityByQid.set(qid, normalizedPriority)
+    }
+    if (!sourcesByQid.has(qid)) {
+      sourcesByQid.set(qid, new Set())
+    }
+    if (source) {
+      sourcesByQid.get(qid).add(String(source))
+    }
+  }
+
+  async function fetchWikidataCandidatesForOsmMapFeature(feature, {
+    lang = null,
+    municipalityQid = '',
+    limit = SAVE_IMAGE_SUBJECT_NEARBY_WIKIDATA_MAX_ITEMS,
+  } = {}) {
+    if (!feature || typeof feature !== 'object') {
+      return []
+    }
+    const resultLimit = Math.max(
+      1,
+      Math.min(Number.parseInt(String(limit), 10) || SAVE_IMAGE_SUBJECT_NEARBY_WIKIDATA_MAX_ITEMS, 50),
+    )
+    const tags = feature.rawTags && typeof feature.rawTags === 'object'
+      ? feature.rawTags
+      : {}
+    const featureType = normalizeOsmMapFeatureType(feature.type)
+    const featureId = Number.parseInt(String(feature.id), 10)
+    const normalizedMunicipalityQid = extractWikidataId(String(municipalityQid || ''))
+    const featureNameForLookup = String(
+      readPreferredOsmMapFeatureName(tags, lang) ||
+      (typeof feature.displayLabel === 'string' ? feature.displayLabel : '') ||
+      '',
+    ).trim()
+    let fetchedReverseCandidates = []
+    let fetchedNearbyNameCandidates = []
+    let reverseLookupError = ''
+    const reverseLookupLimit = Math.min(resultLimit, SAVE_IMAGE_SUBJECT_WIKIDATA_REVERSE_LOOKUP_LIMIT)
+    const reverseLookupTargets = []
+    const seenReverseLookupTargetKeys = new Set()
+    const pushReverseLookupTarget = (targetFeature) => {
+      if (!targetFeature || typeof targetFeature !== 'object') {
+        return
+      }
+      const targetType = normalizeOsmMapFeatureType(targetFeature.type)
+      const targetId = Number.parseInt(String(targetFeature.id), 10)
+      if (!targetType || !Number.isFinite(targetId) || targetId < 1) {
+        return
+      }
+      const targetKey = `${targetType}:${targetId}`
+      if (seenReverseLookupTargetKeys.has(targetKey)) {
+        return
+      }
+      seenReverseLookupTargetKeys.add(targetKey)
+      const targetTags = targetFeature.rawTags && typeof targetFeature.rawTags === 'object'
+        ? targetFeature.rawTags
+        : {}
+      const targetName = String(
+        readPreferredOsmMapFeatureName(targetTags, lang) ||
+        (typeof targetFeature.displayLabel === 'string' ? targetFeature.displayLabel : '') ||
+        featureNameForLookup ||
+        '',
+      ).trim()
+      reverseLookupTargets.push({
+        type: targetType,
+        id: targetId,
+        name: targetName,
+        latitude: readOsmMapFeatureCoordinateValue(targetFeature.latitude),
+        longitude: readOsmMapFeatureCoordinateValue(targetFeature.longitude),
+      })
+    }
+    if (featureType && Number.isFinite(featureId) && featureId > 0) {
+      pushReverseLookupTarget(feature)
+    } else {
+      for (const mergedComponent of Array.isArray(feature.mergedComponents) ? feature.mergedComponents : []) {
+        pushReverseLookupTarget(mergedComponent)
+      }
+    }
+    if (reverseLookupTargets.length > 0) {
+      const reverseLookupResults = await Promise.all(
+        reverseLookupTargets.map(async (target) => {
+          try {
+            const payload = await fetchWikidataReverseAndNearbyNameCandidatesForOsmFeature(
+              target.type,
+              target.id,
+              {
+                name: target.name,
+                latitude: target.latitude,
+                longitude: target.longitude,
+                municipalityQid: normalizedMunicipalityQid,
+                lang,
+                limit: reverseLookupLimit,
+              },
+            )
+            return {
+              reverseCandidates: normalizeOsmMapFeatureReverseWikidataCandidates(
+                payload.reverseCandidates || payload.reverse_candidates,
+              ),
+              nearbyNameCandidates: normalizeOsmMapFeatureReverseWikidataCandidates(
+                payload.nearbyNameCandidates || payload.nearby_name_candidates,
+              ),
+              error: '',
+            }
+          } catch (error) {
+            return {
+              reverseCandidates: [],
+              nearbyNameCandidates: [],
+              error: String(
+                (error && typeof error === 'object' && 'message' in error && error.message)
+                  ? error.message
+                  : error || '',
+              ).trim(),
+            }
+          }
+        }),
+      )
+      const reverseCandidateGroups = []
+      const nearbyNameCandidateGroups = []
+      const reverseLookupErrors = []
+      for (const reverseLookupResult of reverseLookupResults) {
+        reverseCandidateGroups.push(reverseLookupResult.reverseCandidates)
+        nearbyNameCandidateGroups.push(reverseLookupResult.nearbyNameCandidates)
+        if (reverseLookupResult.error) {
+          reverseLookupErrors.push(reverseLookupResult.error)
+        }
+      }
+      fetchedReverseCandidates = mergeOsmMapFeatureReverseWikidataCandidates(...reverseCandidateGroups)
+      fetchedNearbyNameCandidates = mergeOsmMapFeatureReverseWikidataCandidates(...nearbyNameCandidateGroups)
+      if (reverseLookupErrors.length > 0) {
+        reverseLookupError = reverseLookupErrors.join(' | ')
+      }
+    }
+
+    const directQids = []
+    const seenDirectQids = new Set()
+    const pushDirectQid = (qidValue) => {
+      const directQidCandidate = extractWikidataId(String(qidValue || ''))
+      if (!directQidCandidate || seenDirectQids.has(directQidCandidate)) {
+        return
+      }
+      seenDirectQids.add(directQidCandidate)
+      directQids.push(directQidCandidate)
+    }
+    pushDirectQid(feature.directQid)
+    pushDirectQid(tags.wikidata)
+    for (const mergedDirectQid of Array.isArray(feature.mergedDirectQids) ? feature.mergedDirectQids : []) {
+      pushDirectQid(mergedDirectQid)
+    }
+    let directQid = directQids.length > 0 ? directQids[0] : ''
+    const mappingInputs = collectWikidataMappingCandidatesFromOsmTags(tags)
+    const reverseCollection = collectReverseWikidataCandidatesForFeatureSuggestion(feature, {
+      lang,
+      additionalReverseCandidates: fetchedReverseCandidates,
+      additionalNameMatchCandidates: fetchedNearbyNameCandidates,
+    })
+    const effectiveReverseCandidates = reverseCollection.includedCandidates
+    if (!directQid && reverseCollection.isAreaFeature) {
+      const firstIdBasedCandidate = effectiveReverseCandidates.find((candidate) => (
+        String(candidate && candidate.property ? candidate.property : '').trim().toUpperCase() !== 'NAME'
+      ))
+      const resolvedAreaQid = extractWikidataId(String(firstIdBasedCandidate && firstIdBasedCandidate.id ? firstIdBasedCandidate.id : ''))
+      if (resolvedAreaQid) {
+        directQid = resolvedAreaQid
+        feature.directQid = resolvedAreaQid
+        if (feature.rawTags && typeof feature.rawTags === 'object' && !extractWikidataId(String(feature.rawTags.wikidata || ''))) {
+          feature.rawTags.wikidata = resolvedAreaQid
+        }
+        if (!seenDirectQids.has(resolvedAreaQid)) {
+          seenDirectQids.add(resolvedAreaQid)
+          directQids.unshift(resolvedAreaQid)
+        }
+      }
+    }
+    const mappings = await fetchWikidataItemsForOsmTagMappings(
+      mappingInputs.keyCandidates,
+      mappingInputs.tagCandidates,
+      { lang },
+    )
+
+    const priorityByQid = new Map()
+    const sourcesByQid = new Map()
+
+    for (const directCandidateQid of directQids) {
+      pushWikidataCandidatePriority(priorityByQid, sourcesByQid, directCandidateQid, 0, 'direct')
+    }
+    const hasDirectQids = directQids.length > 0
+    for (const reverseCandidate of effectiveReverseCandidates) {
+      const reverseProperty = String(reverseCandidate.property || '').trim().toUpperCase() || 'UNKNOWN'
+      pushWikidataCandidatePriority(
+        priorityByQid,
+        sourcesByQid,
+        reverseCandidate.id,
+        hasDirectQids ? 1 : 0,
+        `reverse:${reverseProperty}`,
+      )
+    }
+    for (const tagPair of mappingInputs.tagCandidates) {
+      const mappedItems = mappings.tagMatches.get(tagPair)
+      if (!Array.isArray(mappedItems)) {
+        continue
+      }
+      for (const mappedItem of mappedItems) {
+        pushWikidataCandidatePriority(
+          priorityByQid,
+          sourcesByQid,
+          mappedItem && mappedItem.id ? mappedItem.id : '',
+          3,
+          `tag:${tagPair}`,
+        )
+      }
+    }
+    for (const tagKey of mappingInputs.keyCandidates) {
+      const mappedItems = mappings.keyMatches.get(tagKey)
+      if (!Array.isArray(mappedItems)) {
+        continue
+      }
+      for (const mappedItem of mappedItems) {
+        pushWikidataCandidatePriority(
+          priorityByQid,
+          sourcesByQid,
+          mappedItem && mappedItem.id ? mappedItem.id : '',
+          4,
+          `key:${tagKey}`,
+        )
+      }
+    }
+
+    if (priorityByQid.size === 0) {
+      logSubjectWikidataSuggestionDebug({
+        featureKey: String(feature.key || ''),
+        featureLabel: String(feature.displayLabel || ''),
+        directQid,
+        directQids,
+        municipalityQid: normalizedMunicipalityQid,
+        featureName: reverseCollection.featureNameRaw,
+        featureNameNormalized: reverseCollection.featureNameNormalized,
+        reverseIncluded: effectiveReverseCandidates,
+        reverseExcluded: reverseCollection.excludedCandidates,
+        reverseLookupError,
+        mappingKeys: mappingInputs.keyCandidates,
+        mappingTags: mappingInputs.tagCandidates,
+        ranked: [],
+      })
+      return []
+    }
+
+    const itemByQid = new Map(mappings.itemByQid)
+    const missingQids = []
+    for (const qid of priorityByQid.keys()) {
+      const current = itemByQid.get(qid)
+      if (!current || (!current.label && !current.description)) {
+        missingQids.push(qid)
+      }
+    }
+    if (missingQids.length > 0) {
+      try {
+        const summaries = await fetchWikidataItemSummariesForQids(missingQids, { lang })
+        for (const [qid, item] of summaries.entries()) {
+          if (!itemByQid.has(qid) || !(itemByQid.get(qid).label || itemByQid.get(qid).description)) {
+            itemByQid.set(qid, item)
+          }
+        }
+      } catch (error) {
+        void error
+      }
+    }
+
+    const rankedQids = Array.from(priorityByQid.keys()).sort((leftQid, rightQid) => {
+      const leftPriority = Number(priorityByQid.get(leftQid))
+      const rightPriority = Number(priorityByQid.get(rightQid))
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority
+      }
+      const leftSources = Array.from(sourcesByQid.get(leftQid) || [])
+      const rightSources = Array.from(sourcesByQid.get(rightQid) || [])
+      const leftHasReverseSource = leftSources.some((source) => source.startsWith('reverse:'))
+      const rightHasReverseSource = rightSources.some((source) => source.startsWith('reverse:'))
+      if (leftHasReverseSource !== rightHasReverseSource) {
+        return leftHasReverseSource ? -1 : 1
+      }
+      const leftItem = itemByQid.get(leftQid)
+      const rightItem = itemByQid.get(rightQid)
+      const leftLabel = leftItem && typeof leftItem.label === 'string' ? leftItem.label : leftQid
+      const rightLabel = rightItem && typeof rightItem.label === 'string' ? rightItem.label : rightQid
+      return leftLabel.localeCompare(rightLabel, 'en', { sensitivity: 'base' })
+    })
+
+    const sortedItems = rankedQids
+      .slice(0, resultLimit)
+      .map((qid) => {
+        const item = itemByQid.get(qid)
+        return {
+          id: qid,
+          label: item && typeof item.label === 'string' ? item.label : '',
+          description: item && typeof item.description === 'string' ? item.description : '',
+        }
+      })
+      .filter((item) => item && typeof item === 'object' && item.id)
+
+    logSubjectWikidataSuggestionDebug({
+      featureKey: String(feature.key || ''),
+      featureLabel: String(feature.displayLabel || ''),
+      directQid,
+      municipalityQid: normalizedMunicipalityQid,
+      featureName: reverseCollection.featureNameRaw,
+      featureNameNormalized: reverseCollection.featureNameNormalized,
+      mappingKeys: mappingInputs.keyCandidates,
+      mappingTags: mappingInputs.tagCandidates,
+      reverseLookupError,
+      reverseIncluded: effectiveReverseCandidates.map((candidate) => ({
+        id: candidate.id,
+        label: candidate.label,
+        property: candidate.property,
+        matchValue: candidate.matchValue,
+      })),
+      reverseExcluded: reverseCollection.excludedCandidates.map((candidate) => ({
+        id: candidate.id,
+        label: candidate.label,
+        property: candidate.property,
+        matchValue: candidate.matchValue,
+      })),
+      ranked: rankedQids.map((qid) => ({
+        id: qid,
+        priority: priorityByQid.get(qid),
+        sources: Array.from(sourcesByQid.get(qid) || []),
+      })),
+      selected: sortedItems.map((item) => item.id),
+    })
+
+    return sortedItems
+  }
+
+  function splitWktByTopLevelDelimiter(value, delimiter = ',') {
+    const source = String(value || '')
+    if (!source) {
+      return []
+    }
+    const parts = []
+    let depth = 0
+    let segmentStart = 0
+    for (let index = 0; index < source.length; index += 1) {
+      const character = source[index]
+      if (character === '(') {
+        depth += 1
+        continue
+      }
+      if (character === ')') {
+        depth = Math.max(0, depth - 1)
+        continue
+      }
+      if (character === delimiter && depth === 0) {
+        const segment = source.slice(segmentStart, index).trim()
+        if (segment) {
+          parts.push(segment)
+        }
+        segmentStart = index + 1
+      }
+    }
+    const tail = source.slice(segmentStart).trim()
+    if (tail) {
+      parts.push(tail)
+    }
+    return parts
+  }
+
+  function extractWktTopLevelGroups(value) {
+    const source = String(value || '')
+    if (!source) {
+      return []
+    }
+    const groups = []
+    let depth = 0
+    let groupStart = -1
+    for (let index = 0; index < source.length; index += 1) {
+      const character = source[index]
+      if (character === '(') {
+        if (depth === 0) {
+          groupStart = index + 1
+        }
+        depth += 1
+        continue
+      }
+      if (character !== ')') {
+        continue
+      }
+      depth -= 1
+      if (depth === 0 && groupStart >= 0) {
+        const group = source.slice(groupStart, index).trim()
+        if (group) {
+          groups.push(group)
+        }
+        groupStart = -1
+      } else if (depth < 0) {
+        depth = 0
+        groupStart = -1
+      }
+    }
+    return groups
+  }
+
+  function parseWktCoordinatePair(value) {
+    const tokens = String(value || '').trim().split(/\s+/)
+    if (tokens.length < 2) {
+      return null
+    }
+    const longitude = Number(tokens[0])
+    const latitude = Number(tokens[1])
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return null
+    }
+    return [latitude, longitude]
+  }
+
+  function parseWktCoordinateSequence(value) {
+    const coordinates = []
+    for (const item of splitWktByTopLevelDelimiter(value, ',')) {
+      const pair = parseWktCoordinatePair(item)
+      if (pair) {
+        coordinates.push(pair)
+      }
+    }
+    return coordinates
+  }
+
+  function readWktGeometryType(value) {
+    const rawValue = String(value || '').trim()
+    if (!rawValue) {
+      return ''
+    }
+    const sridMatch = rawValue.match(/^SRID=\d+;(.*)$/i)
+    const withoutSrid = sridMatch ? String(sridMatch[1] || '').trim() : rawValue
+    const typeMatch = withoutSrid.match(/^([A-Z]+)(?:\s+ZM|\s+Z|\s+M)?\s*\(/i)
+    if (!typeMatch) {
+      return ''
+    }
+    return String(typeMatch[1] || '').trim().toUpperCase()
+  }
+
+  function classifyWktGeometryKind(value) {
+    const geometryType = readWktGeometryType(value)
+    if (
+      geometryType === 'POINT' ||
+      geometryType === 'MULTIPOINT'
+    ) {
+      return 'point'
+    }
+    if (
+      geometryType === 'LINESTRING' ||
+      geometryType === 'MULTILINESTRING'
+    ) {
+      return 'line'
+    }
+    if (
+      geometryType === 'POLYGON' ||
+      geometryType === 'MULTIPOLYGON'
+    ) {
+      return 'area'
+    }
+    return ''
+  }
+
+  function isPointLikeOsmMapFeature(feature) {
+    if (!feature || typeof feature !== 'object') {
+      return false
+    }
+    const geometryKind = classifyWktGeometryKind(feature.geometryWkt)
+    if (geometryKind) {
+      return geometryKind === 'point'
+    }
+    return normalizeOsmMapFeatureType(feature.type) === 'node'
+  }
+
+  function isAreaLikeOsmMapFeature(feature) {
+    if (!feature || typeof feature !== 'object') {
+      return false
+    }
+    return classifyWktGeometryKind(feature.geometryWkt) === 'area'
+  }
+
+  function buildLeafletLayersFromWktGeometry(value, {
+    lineStyle = {},
+    markerStyle = {},
+  } = {}) {
+    if (typeof L === 'undefined') {
+      return []
+    }
+    const rawValue = String(value || '').trim()
+    if (!rawValue) {
+      return []
+    }
+    const sridMatch = rawValue.match(/^SRID=\d+;(.*)$/i)
+    const withoutSrid = sridMatch ? String(sridMatch[1] || '').trim() : rawValue
+    const typeMatch = withoutSrid.match(/^([A-Z]+)(?:\s+ZM|\s+Z|\s+M)?\s*\((.*)\)$/i)
+    if (!typeMatch) {
+      return []
+    }
+    const geometryType = String(typeMatch[1] || '').trim().toUpperCase()
+    const geometryBody = String(typeMatch[2] || '').trim()
+    if (!geometryBody || geometryBody.toUpperCase() === 'EMPTY') {
+      return []
+    }
+
+    const layers = []
+    if (geometryType === 'POINT') {
+      const point = parseWktCoordinatePair(geometryBody)
+      if (point) {
+        layers.push(L.circleMarker(point, markerStyle))
+      }
+      return layers
+    }
+
+    if (geometryType === 'MULTIPOINT') {
+      const pointTexts = geometryBody.includes('(')
+        ? extractWktTopLevelGroups(geometryBody)
+        : splitWktByTopLevelDelimiter(geometryBody, ',')
+      for (const pointText of pointTexts) {
+        const point = parseWktCoordinatePair(pointText)
+        if (point) {
+          layers.push(L.circleMarker(point, markerStyle))
+        }
+      }
+      return layers
+    }
+
+    if (geometryType === 'LINESTRING') {
+      const lineCoordinates = parseWktCoordinateSequence(geometryBody)
+      if (lineCoordinates.length >= 2) {
+        layers.push(L.polyline(lineCoordinates, lineStyle))
+      }
+      return layers
+    }
+
+    if (geometryType === 'MULTILINESTRING') {
+      const lineTexts = extractWktTopLevelGroups(geometryBody)
+      for (const lineText of lineTexts) {
+        const lineCoordinates = parseWktCoordinateSequence(lineText)
+        if (lineCoordinates.length >= 2) {
+          layers.push(L.polyline(lineCoordinates, lineStyle))
+        }
+      }
+      return layers
+    }
+
+    if (geometryType === 'POLYGON') {
+      const ringTexts = extractWktTopLevelGroups(geometryBody)
+      const rings = []
+      for (const ringText of ringTexts) {
+        const ring = parseWktCoordinateSequence(ringText)
+        if (ring.length >= 3) {
+          rings.push(ring)
+        }
+      }
+      if (rings.length > 0) {
+        layers.push(L.polygon(rings, lineStyle))
+      }
+      return layers
+    }
+
+    if (geometryType === 'MULTIPOLYGON') {
+      const polygonTexts = extractWktTopLevelGroups(geometryBody)
+      for (const polygonText of polygonTexts) {
+        const ringTexts = extractWktTopLevelGroups(polygonText)
+        const rings = []
+        for (const ringText of ringTexts) {
+          const ring = parseWktCoordinateSequence(ringText)
+          if (ring.length >= 3) {
+            rings.push(ring)
+          }
+        }
+        if (rings.length > 0) {
+          layers.push(L.polygon(rings, lineStyle))
+        }
+      }
+      return layers
+    }
+
+    return layers
+  }
+
+  function buildLeafletLayerFromOsmMapFeatureGeometry(feature, geometryElements, style = {}) {
+    if (!feature || typeof feature !== 'object' || typeof L === 'undefined') {
+      return null
+    }
+
+    const color = typeof style.color === 'string' && style.color ? style.color : '#f59e0b'
+    const fillColor = typeof style.fillColor === 'string' && style.fillColor ? style.fillColor : color
+    const weight = Number.isFinite(Number(style.weight)) ? Number(style.weight) : 3
+    const opacity = Number.isFinite(Number(style.opacity)) ? Number(style.opacity) : 0.95
+    const fillOpacity = Number.isFinite(Number(style.fillOpacity)) ? Number(style.fillOpacity) : 0.2
+    const markerRadius = Number.isFinite(Number(style.markerRadius)) ? Number(style.markerRadius) : 6
+
+    const baseLineStyle = {
+      color,
+      weight,
+      opacity,
+      fillColor,
+      fillOpacity,
+      interactive: false,
+    }
+    const markerStyle = {
+      radius: markerRadius,
+      color,
+      weight: Math.max(2, weight - 1),
+      fillColor,
+      fillOpacity: Math.min(1, fillOpacity + 0.35),
+      opacity: 1,
+      interactive: false,
+    }
+
+    const createLineOrPolygon = (rawGeometry) => {
+      const latLngs = []
+      for (const point of Array.isArray(rawGeometry) ? rawGeometry : []) {
+        if (!point || typeof point !== 'object') {
+          continue
+        }
+        const latitude = Number(point.lat)
+        const longitude = Number(point.lon)
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+          continue
+        }
+        latLngs.push([latitude, longitude])
+      }
+      if (latLngs.length < 2) {
+        return null
+      }
+      const first = latLngs[0]
+      const last = latLngs[latLngs.length - 1]
+      const isClosed = (
+        latLngs.length >= 4 &&
+        Math.abs(first[0] - last[0]) < 0.0000001 &&
+        Math.abs(first[1] - last[1]) < 0.0000001
+      )
+      if (isClosed) {
+        return L.polygon(latLngs, baseLineStyle)
+      }
+      return L.polyline(latLngs, baseLineStyle)
+    }
+
+    const normalizedType = normalizeOsmMapFeatureType(feature.type)
+    const normalizedId = Number.parseInt(String(feature.id), 10)
+    const featureGeometryKind = classifyWktGeometryKind(feature.geometryWkt)
+    const sourceElements = Array.isArray(geometryElements) ? geometryElements : []
+    const targetElement = sourceElements.find((element) => (
+      element &&
+      typeof element === 'object' &&
+      normalizeOsmMapFeatureType(element.type) === normalizedType &&
+      Number.parseInt(String(element.id), 10) === normalizedId
+    ))
+
+    const layers = []
+    if (targetElement) {
+      if (normalizedType === 'node') {
+        const nodeLatitude = readOsmMapFeatureCoordinateValue(targetElement.lat)
+        const nodeLongitude = readOsmMapFeatureCoordinateValue(targetElement.lon)
+        if (nodeLatitude !== null && nodeLongitude !== null) {
+          layers.push(L.circleMarker([nodeLatitude, nodeLongitude], markerStyle))
+        }
+      } else if (normalizedType === 'way') {
+        const wayLayer = createLineOrPolygon(targetElement.geometry)
+        if (wayLayer) {
+          layers.push(wayLayer)
+        }
+      } else if (normalizedType === 'relation') {
+        const relationLayer = createLineOrPolygon(targetElement.geometry)
+        if (relationLayer) {
+          layers.push(relationLayer)
+        }
+        for (const member of Array.isArray(targetElement.members) ? targetElement.members : []) {
+          const memberLayer = createLineOrPolygon(member && typeof member === 'object' ? member.geometry : null)
+          if (memberLayer) {
+            layers.push(memberLayer)
+          }
+        }
+      }
+    }
+
+    if (layers.length === 0) {
+      const wktLayers = buildLeafletLayersFromWktGeometry(feature.geometryWkt, {
+        lineStyle: baseLineStyle,
+        markerStyle,
+      })
+      for (const layer of wktLayers) {
+        layers.push(layer)
+      }
+    }
+
+    if (layers.length === 0) {
+      const allowPointFallbackMarker = (
+        featureGeometryKind === 'point' ||
+        (!featureGeometryKind && normalizedType === 'node')
+      )
+      if (!allowPointFallbackMarker) {
+        return null
+      }
+      const fallbackLatitude = readOsmMapFeatureCoordinateValue(feature.latitude)
+      const fallbackLongitude = readOsmMapFeatureCoordinateValue(feature.longitude)
+      if (fallbackLatitude !== null && fallbackLongitude !== null) {
+        layers.push(L.circleMarker([fallbackLatitude, fallbackLongitude], markerStyle))
+      }
+    }
+
+    if (layers.length === 0) {
+      return null
+    }
+    if (layers.length === 1) {
+      return layers[0]
+    }
+    return L.layerGroup(layers)
   }
 
   function extractWikidataPropertyId(value) {
@@ -1267,10 +5397,143 @@ LIMIT ${queryResultLimit}
     return request(`/wikidata/entities/${encodeURIComponent(qid)}/`, { lang })
   }
 
+  function fetchLatestOsmFeatureMetadata(featureType, featureId, lang = null, {
+    hintLatitude = null,
+    hintLongitude = null,
+    hintName = '',
+  } = {}) {
+    const normalizedType = normalizeOsmMapFeatureType(featureType)
+    const normalizedId = Number.parseInt(String(featureId), 10)
+    if (!normalizedType || !Number.isFinite(normalizedId) || normalizedId < 1) {
+      throw new Error('Invalid OSM feature reference.')
+    }
+    const parsedHintLatitude = readOsmMapFeatureCoordinateValue(hintLatitude)
+    const parsedHintLongitude = readOsmMapFeatureCoordinateValue(hintLongitude)
+    const queryParams = {}
+    if (
+      parsedHintLatitude !== null &&
+      parsedHintLatitude >= -90 &&
+      parsedHintLatitude <= 90
+    ) {
+      queryParams.lat = parsedHintLatitude
+    }
+    if (
+      parsedHintLongitude !== null &&
+      parsedHintLongitude >= -180 &&
+      parsedHintLongitude <= 180
+    ) {
+      queryParams.lon = parsedHintLongitude
+    }
+    const normalizedHintName = String(hintName || '').trim()
+    if (normalizedHintName) {
+      queryParams.name = normalizedHintName.slice(0, 200)
+    }
+    return request(
+      `/osm/features/${encodeURIComponent(normalizedType)}/${encodeURIComponent(String(normalizedId))}/latest/`,
+      {
+        lang,
+        queryParams: Object.keys(queryParams).length > 0 ? queryParams : null,
+      },
+    )
+  }
+
   function searchCommonsCategories(query, limit = AUTOCOMPLETE_RESULT_LIMIT) {
     return request('/commons/categories/', {
       queryParams: { q: query, limit }
     })
+  }
+
+  async function fetchCommonsCategoryCoordinates(categoryNames) {
+    const normalizedCategories = []
+    const seen = new Set()
+    for (const rawCategoryName of Array.isArray(categoryNames) ? categoryNames : []) {
+      const normalizedCategory = normalizeCommonsCategoryName(rawCategoryName)
+      if (!normalizedCategory) {
+        continue
+      }
+      const dedupeKey = normalizedCategory.toLowerCase()
+      if (seen.has(dedupeKey)) {
+        continue
+      }
+      seen.add(dedupeKey)
+      normalizedCategories.push(normalizedCategory)
+    }
+    if (normalizedCategories.length < 1) {
+      return new Map()
+    }
+
+    const coordinatesByCategoryKey = new Map()
+    for (
+      let start = 0;
+      start < normalizedCategories.length;
+      start += SAVE_IMAGE_SUBCATEGORY_COORDINATE_BATCH_SIZE
+    ) {
+      const categoryBatch = normalizedCategories.slice(start, start + SAVE_IMAGE_SUBCATEGORY_COORDINATE_BATCH_SIZE)
+      if (categoryBatch.length < 1) {
+        continue
+      }
+      const coordinateUrl = new URL('https://commons.wikimedia.org/w/api.php')
+      coordinateUrl.searchParams.set('action', 'query')
+      coordinateUrl.searchParams.set('prop', 'coordinates')
+      coordinateUrl.searchParams.set('titles', categoryBatch.map((item) => `Category:${item}`).join('|'))
+      coordinateUrl.searchParams.set('colimit', '1')
+      coordinateUrl.searchParams.set('coprimary', 'all')
+      coordinateUrl.searchParams.set('format', 'json')
+      coordinateUrl.searchParams.set('formatversion', '2')
+      coordinateUrl.searchParams.set('origin', '*')
+
+      const coordinateResponse = await fetch(coordinateUrl.toString(), { method: 'GET' })
+      if (!coordinateResponse.ok) {
+        continue
+      }
+
+      const coordinatePayload = await coordinateResponse.json()
+      const pages =
+        coordinatePayload &&
+        typeof coordinatePayload === 'object' &&
+        coordinatePayload.query &&
+        typeof coordinatePayload.query === 'object' &&
+        Array.isArray(coordinatePayload.query.pages)
+          ? coordinatePayload.query.pages
+          : []
+      for (const page of pages) {
+        if (!page || typeof page !== 'object') {
+          continue
+        }
+        const pageTitle = typeof page.title === 'string' ? page.title : ''
+        const categoryNameFromTitle = normalizeCommonsCategoryName(pageTitle)
+        if (!categoryNameFromTitle) {
+          continue
+        }
+        const dedupeKey = categoryNameFromTitle.toLowerCase()
+        if (coordinatesByCategoryKey.has(dedupeKey)) {
+          continue
+        }
+        const coordinateList = Array.isArray(page.coordinates) ? page.coordinates : []
+        const primaryCoordinate = coordinateList.find((candidate) => {
+          if (!candidate || typeof candidate !== 'object') {
+            return false
+          }
+          const latitude = Number.parseFloat(String(candidate.lat))
+          const longitude = Number.parseFloat(String(candidate.lon))
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+            return false
+          }
+          if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+            return false
+          }
+          return true
+        })
+        if (!primaryCoordinate) {
+          continue
+        }
+        coordinatesByCategoryKey.set(dedupeKey, {
+          latitude: Number.parseFloat(String(primaryCoordinate.lat)),
+          longitude: Number.parseFloat(String(primaryCoordinate.lon)),
+        })
+      }
+    }
+    return coordinatesByCategoryKey
   }
 
   async function fetchCommonsCategoryChildren(categoryName, limit = AUTOCOMPLETE_RESULT_LIMIT) {
@@ -1335,6 +5598,31 @@ LIMIT ${queryResultLimit}
         title: `Category:${normalizedTitle}`,
         commons_category: normalizedTitle,
       })
+    }
+
+    if (categories.length < 1) {
+      return categories
+    }
+
+    try {
+      const coordinatesByCategoryKey = await fetchCommonsCategoryCoordinates(
+        categories.map((item) => item.name),
+      )
+
+      for (const category of categories) {
+        if (!category || typeof category !== 'object') {
+          continue
+        }
+        const categoryNameValue = typeof category.name === 'string' ? category.name : ''
+        const coordinateItem = coordinatesByCategoryKey.get(categoryNameValue.toLowerCase())
+        if (!coordinateItem) {
+          continue
+        }
+        category.latitude = coordinateItem.latitude
+        category.longitude = coordinateItem.longitude
+      }
+    } catch (error) {
+      void error
     }
     return categories
   }
@@ -1647,6 +5935,17 @@ LIMIT ${queryResultLimit}
     return match ? match[1].toUpperCase() : ''
   }
 
+  function normalizeCommonsCategoryName(value) {
+    if (typeof value !== 'string') {
+      return ''
+    }
+    return value
+      .trim()
+      .replace(/^category:/i, '')
+      .trim()
+      .replace(/\s+/g, '_')
+  }
+
   function normalizeLocationUri(value) {
     if (typeof value !== 'string') {
       return ''
@@ -1705,6 +6004,28 @@ LIMIT ${queryResultLimit}
       return ''
     }
     return String(value).trim().toLowerCase()
+  }
+
+  function logSubjectWikidataSuggestionDebug(payload) {
+    if (!SUBJECT_WIKIDATA_DEBUG_LOG_ENABLED || !payload || typeof payload !== 'object') {
+      return
+    }
+    try {
+      console.info('[SUBJECT-WIKIDATA-DEBUG]', payload)
+    } catch (error) {
+      void error
+    }
+  }
+
+  function logSubjectFeatureSelectionDebug(payload) {
+    if (!SUBJECT_WIKIDATA_DEBUG_LOG_ENABLED || !payload || typeof payload !== 'object') {
+      return
+    }
+    try {
+      console.info('[SUBJECT-FEATURE-SELECT-DEBUG]', payload)
+    } catch (error) {
+      void error
+    }
   }
 
   function textValuesDiffer(manualValue, wikidataValue) {
@@ -2319,9 +6640,53 @@ LIMIT ${queryResultLimit}
       newLocation: 'Create location',
       createSubLocation: 'Create sub-location',
       saveImage: 'Save image',
-      saveImageWizardLocationStep: 'Step 1: Choose image location',
+      saveImageWizardLocationStep: 'Step 1: Choose photographer location',
+      saveImageWizardSubjectStep: 'Step 2: Image type',
+      saveImageWizardSubjectLocationStep: 'Step 3: Describe what is in the image',
       saveImageApiFormTitle: 'Save image with Wikimedia API',
       saveImageApiFormHelp: 'Use this separate form to upload a file and provide metadata before saving.',
+      saveImageSubjectPrompt: 'Is this image...',
+      saveImageSubjectTypeInterior: 'Indoor image',
+      saveImageSubjectTypeExterior: 'Outdoor image',
+      saveImageSubjectTypeAerial: 'Aerial image',
+      saveImageSubjectTypePortrait: 'Portrait photo',
+      saveImageSubjectTypeObject: 'Image of an object',
+      saveImageSubjectTypePlant: 'Image of a plant',
+      saveImageSubjectTypeGeneral: 'Other',
+      saveImageSubjectLocationRelevantHelp: 'This type needs place linking. Continue with step 3.',
+      saveImageSubjectLocationNotRelevantHelp: 'This type usually does not require place linking.',
+      saveImageSubjectLocationToolHelp: 'Click the map, choose the matching feature from the list, and then select matching Wikidata item and image point.',
+      saveImageSubjectNoMapToolHelp: 'Select matching Wikidata item and click its location in the image.',
+      saveImageSubjectLinkModeLabel: 'Add depicted item using map or without map',
+      saveImageSubjectLinkModeMap: 'Using map',
+      saveImageSubjectLinkModeImageOnly: 'Without map',
+      saveImageSubjectMapClickHelp: 'Click the map where the depicted place/object is located.',
+      saveImageSubjectMapZoomLevel: 'Map zoom level',
+      saveImageSubjectImageClickHelp: 'Click the image where that same place/object appears.',
+      saveImageSubjectImageRequiresFile: 'Select an image file to enable image-point selection.',
+      saveImageSubjectImagePointLabel: 'Image point',
+      saveImageSubjectWikidataLabel: 'Matching Wikidata item',
+      saveImageSubjectWikidataHelp: 'Search by name or choose one of the suggestions for the selected feature.',
+      saveImageSubjectDirectWikidataSearchTitle: 'Search Wikidata item',
+      saveImageSubjectPairHelp: 'Select the same place in the image and on the map.',
+      saveImageSubjectNearbyWikidataSuggestions: 'Suggested map features near the clicked point',
+      saveImageSubjectNearbyOsmTagSelectHint: 'Select a map feature first, then choose the matching Wikidata item.',
+      saveImageSubjectNearbyWikidataItemsForSelectedTag: 'Matching Wikidata items for selected map feature',
+      saveImageSubjectLinkButton: 'Add linked place',
+      saveImageSubjectLinkAdded: 'Linked places added: {count}',
+      saveImageSubjectTypeRequired: 'Choose image type.',
+      saveImageSubjectMapPointRequired: 'Select the related point on the map first.',
+      saveImageSubjectImagePointRequired: 'Select the related point in the image first.',
+      saveImageSubjectWikidataRequired: 'Select a matching Wikidata item for the linked place.',
+      saveImageSubjectLinkRequired: 'For location-relevant images, link at least one place between map, image, and Wikidata.',
+      saveImageSubjectFeatureFetchFailed: 'Could not load nearby map features right now.',
+      saveImageSubjectNearbyFeaturesTitle: 'Nearby features',
+      saveImageSubjectLoadingInfo: 'Loading info...',
+      saveImageSubjectNoNearbyFeatures: 'No nearby features found for this click.',
+      saveImageSubjectSelectedFeatureTitle: 'Selected feature details',
+      saveImageSubjectFeatureDistanceLabel: 'Distance from clicked point',
+      saveImageSubjectOpenInOsm: 'Open in OpenStreetMap',
+      saveImageSubjectSelectedFeatureWikidataSuggestions: 'Wikidata suggestions for selected feature',
       saveImageCoordinateSource: 'Coordinate source',
       saveImageCoordinateSourceMap: 'Map coordinates',
       saveImageCoordinateSourceExif: 'Image EXIF coordinates',
@@ -2337,6 +6702,7 @@ LIMIT ${queryResultLimit}
       saveImageMapPickHelpPhotographerTarget: 'Click map to update direction. Moving the map keeps heading unchanged.',
       saveImageMapPickHelpImage: 'Move the map so the center point is at image location.',
       saveImageCaption: 'Caption text',
+      saveImageDescription: 'Description text',
       saveImageFile: 'Image file',
       saveImageExifReading: 'Reading EXIF metadata from image...',
       saveImageExifDateTaken: 'Date taken (from EXIF)',
@@ -2355,6 +6721,15 @@ LIMIT ${queryResultLimit}
       saveImageCoordinatePreviewShow: 'Show photo preview',
       saveImageFileRequired: 'Select an image file first.',
       saveImageApiTargetFilename: 'Target filename on Commons',
+      saveImageFilenameBuilderTitle: 'Build filename',
+      saveImageFilenameBuilderHelp: 'Tap parts to include in filename.',
+      saveImageFilenameBuilderPartSubjects: 'Subjects',
+      saveImageFilenameBuilderPartDate: 'Date',
+      saveImageFilenameBuilderPartLocation: 'Location',
+      saveImageFilenameBuilderPartCategories: 'Categories',
+      saveImageFilenameBuilderPreview: 'Suggested filename',
+      saveImageFilenameBuilderPreviewEmpty: 'Select parts to generate filename.',
+      saveImageFilenameBuilderApply: 'Use suggestion',
       saveImageFilenameFallbackBase: 'Image',
       saveImageFilenameChecking: 'Checking filename availability...',
       saveImageFilenameAvailable: 'Filename is available on Commons.',
@@ -2366,6 +6741,7 @@ LIMIT ${queryResultLimit}
       saveImageApiAuthor: 'Author',
       saveImageApiSourceUrl: 'Source URL',
       saveImageApiDateCreated: 'Date created',
+      saveImageCommonsMetadataOnlyNote: 'This affects Commons metadata only; it does not edit image EXIF data.',
       saveImageApiLicenseTemplate: 'License template',
       saveImageApiLicenseCcBySa40: 'CC BY-SA 4.0',
       saveImageApiLicenseCcBy40: 'CC BY 4.0',
@@ -2375,6 +6751,7 @@ LIMIT ${queryResultLimit}
       saveImageCategorySuggestionsEmpty: 'No category suggestions.',
       saveImageNearbyCategorySuggestions: 'Suggested categories from nearby Wikidata and OpenStreetMap items',
       saveImageSubcategorySuggestions: 'Suggested subcategories from selected categories',
+      saveImageSubcategoryFarSuggestions: 'Suggested subcategories farther than 1 km from photographer',
       saveImageDepicts: 'Depicts (Wikidata P180)',
       saveImageDepictsHelp: 'Search depicts values and add them to the list.',
       saveImageDepictSuggestionsEmpty: 'No depicts suggestions.',
@@ -2621,9 +6998,53 @@ LIMIT ${queryResultLimit}
       newLocation: 'Skapa plats',
       createSubLocation: 'Skapa underplats',
       saveImage: 'Spara bild',
-      saveImageWizardLocationStep: 'Steg 1: Välj bildens plats',
+      saveImageWizardLocationStep: 'Steg 1: Välj fotografens plats',
+      saveImageWizardSubjectStep: 'Steg 2: Bildtyp',
+      saveImageWizardSubjectLocationStep: 'Steg 3: Beskriv vad som finns i bilden',
       saveImageApiFormTitle: 'Spara bild med Wikimedia API',
       saveImageApiFormHelp: 'Använd detta separata formulär för att ladda upp fil och ange metadata före sparning.',
+      saveImageSubjectPrompt: 'Är bilden...',
+      saveImageSubjectTypeInterior: 'Inomhusbild',
+      saveImageSubjectTypeExterior: 'Utomhusbild',
+      saveImageSubjectTypeAerial: 'Flygbild',
+      saveImageSubjectTypePortrait: 'Porträttbild',
+      saveImageSubjectTypeObject: 'Bild av ett föremål',
+      saveImageSubjectTypePlant: 'Bild av en växt',
+      saveImageSubjectTypeGeneral: 'Övrigt',
+      saveImageSubjectLocationRelevantHelp: 'Den här typen kräver platskoppling. Fortsätt till steg 3.',
+      saveImageSubjectLocationNotRelevantHelp: 'Den här typen kräver vanligtvis ingen platskoppling.',
+      saveImageSubjectLocationToolHelp: 'Klicka på kartan, välj rätt objekt i listan och välj sedan motsvarande Wikidata-objekt och punkt i bilden.',
+      saveImageSubjectNoMapToolHelp: 'Välj motsvarande Wikidata-objekt och klicka dess plats i bilden.',
+      saveImageSubjectLinkModeLabel: 'Lägg till det som syns i bilden med karta eller utan karta',
+      saveImageSubjectLinkModeMap: 'Med karta',
+      saveImageSubjectLinkModeImageOnly: 'Utan karta',
+      saveImageSubjectMapClickHelp: 'Klicka på kartan där den avbildade platsen/saken finns.',
+      saveImageSubjectMapZoomLevel: 'Kartans zoomnivå',
+      saveImageSubjectImageClickHelp: 'Klicka i bilden där samma plats/sak syns.',
+      saveImageSubjectImageRequiresFile: 'Välj en bildfil för att kunna markera punkt i bilden.',
+      saveImageSubjectImagePointLabel: 'Punkt i bild',
+      saveImageSubjectWikidataLabel: 'Motsvarande Wikidata-objekt',
+      saveImageSubjectWikidataHelp: 'Sök med namn eller välj ett förslag för det valda objektet.',
+      saveImageSubjectDirectWikidataSearchTitle: 'Sök Wikidata-objekt',
+      saveImageSubjectPairHelp: 'Välj samma plats i bilden och på kartan.',
+      saveImageSubjectNearbyWikidataSuggestions: 'Föreslagna kartobjekt nära den klickade punkten',
+      saveImageSubjectNearbyOsmTagSelectHint: 'Välj först ett kartobjekt och sedan motsvarande Wikidata-objekt.',
+      saveImageSubjectNearbyWikidataItemsForSelectedTag: 'Matchande Wikidata-objekt för valt kartobjekt',
+      saveImageSubjectLinkButton: 'Lägg till kopplad plats',
+      saveImageSubjectLinkAdded: 'Kopplade platser: {count}',
+      saveImageSubjectTypeRequired: 'Välj bildtyp.',
+      saveImageSubjectMapPointRequired: 'Välj först motsvarande punkt på kartan.',
+      saveImageSubjectImagePointRequired: 'Välj först motsvarande punkt i bilden.',
+      saveImageSubjectWikidataRequired: 'Välj ett motsvarande Wikidata-objekt för den kopplade platsen.',
+      saveImageSubjectLinkRequired: 'För platsrelevanta bilder, koppla minst en plats mellan karta, bild och Wikidata.',
+      saveImageSubjectFeatureFetchFailed: 'Kunde inte läsa in närliggande kartobjekt just nu.',
+      saveImageSubjectNearbyFeaturesTitle: 'Närliggande objekt',
+      saveImageSubjectLoadingInfo: 'Laddar information...',
+      saveImageSubjectNoNearbyFeatures: 'Inga närliggande objekt hittades för klickpunkten.',
+      saveImageSubjectSelectedFeatureTitle: 'Detaljer för valt objekt',
+      saveImageSubjectFeatureDistanceLabel: 'Avstånd från klickpunkten',
+      saveImageSubjectOpenInOsm: 'Öppna i OpenStreetMap',
+      saveImageSubjectSelectedFeatureWikidataSuggestions: 'Wikidata-förslag för valt objekt',
       saveImageCoordinateSource: 'Koordinatkälla',
       saveImageCoordinateSourceMap: 'Kartkoordinater',
       saveImageCoordinateSourceExif: 'Bildens EXIF-koordinater',
@@ -2639,6 +7060,7 @@ LIMIT ${queryResultLimit}
       saveImageMapPickHelpPhotographerTarget: 'Klicka på kartan för att uppdatera riktning. Att flytta kartan behåller samma riktning.',
       saveImageMapPickHelpImage: 'Flytta kartan så att mittpunkten är vid bildens plats.',
       saveImageCaption: 'Bildtext',
+      saveImageDescription: 'Beskrivning',
       saveImageFile: 'Bildfil',
       saveImageExifReading: 'Läser EXIF-metadata från bilden...',
       saveImageExifDateTaken: 'Fotodatum (från EXIF)',
@@ -2657,6 +7079,15 @@ LIMIT ${queryResultLimit}
       saveImageCoordinatePreviewShow: 'Visa förhandsvisning',
       saveImageFileRequired: 'Välj en bildfil först.',
       saveImageApiTargetFilename: 'Målfilnamn på Commons',
+      saveImageFilenameBuilderTitle: 'Bygg filnamn',
+      saveImageFilenameBuilderHelp: 'Tryck på delar som ska ingå i filnamnet.',
+      saveImageFilenameBuilderPartSubjects: 'Motiv',
+      saveImageFilenameBuilderPartDate: 'Datum',
+      saveImageFilenameBuilderPartLocation: 'Plats',
+      saveImageFilenameBuilderPartCategories: 'Kategorier',
+      saveImageFilenameBuilderPreview: 'Föreslaget filnamn',
+      saveImageFilenameBuilderPreviewEmpty: 'Välj delar för att skapa filnamn.',
+      saveImageFilenameBuilderApply: 'Använd förslag',
       saveImageFilenameFallbackBase: 'Bild',
       saveImageFilenameChecking: 'Kontrollerar om filnamnet är ledigt...',
       saveImageFilenameAvailable: 'Filnamnet är ledigt på Commons.',
@@ -2668,6 +7099,7 @@ LIMIT ${queryResultLimit}
       saveImageApiAuthor: 'Upphovsperson',
       saveImageApiSourceUrl: 'Käll-URL',
       saveImageApiDateCreated: 'Skapandedatum',
+      saveImageCommonsMetadataOnlyNote: 'Gäller endast metadata på Commons; bildens EXIF-data ändras inte.',
       saveImageApiLicenseTemplate: 'Licensmall',
       saveImageApiLicenseCcBySa40: 'CC BY-SA 4.0',
       saveImageApiLicenseCcBy40: 'CC BY 4.0',
@@ -2677,6 +7109,7 @@ LIMIT ${queryResultLimit}
       saveImageCategorySuggestionsEmpty: 'Inga kategoriförslag.',
       saveImageNearbyCategorySuggestions: 'Föreslagna kategorier från närliggande Wikidata- och OpenStreetMap-objekt',
       saveImageSubcategorySuggestions: 'Föreslagna underkategorier från valda kategorier',
+      saveImageSubcategoryFarSuggestions: 'Föreslagna underkategorier mer än 1 km från fotografen',
       saveImageDepicts: 'Avbildar (Wikidata P180)',
       saveImageDepictsHelp: 'Sök avbildar-värden och lägg till dem i listan.',
       saveImageDepictSuggestionsEmpty: 'Inga avbildar-förslag.',
@@ -2923,9 +7356,53 @@ LIMIT ${queryResultLimit}
       newLocation: 'Luo kohde',
       createSubLocation: 'Luo alakohde',
       saveImage: 'Tallenna kuva',
-      saveImageWizardLocationStep: 'Vaihe 1: Valitse kuvan sijainti',
+      saveImageWizardLocationStep: 'Vaihe 1: Valitse kuvaajan sijainti',
+      saveImageWizardSubjectStep: 'Vaihe 2: Kuvan tyyppi',
+      saveImageWizardSubjectLocationStep: 'Vaihe 3: Kerro mitä kuvassa on',
       saveImageApiFormTitle: 'Tallenna kuva Wikimedia API:lla',
       saveImageApiFormHelp: 'Käytä tätä erillistä lomaketta tiedoston lataamiseen ja metatietojen antamiseen ennen tallennusta.',
+      saveImageSubjectPrompt: 'Onko kuva...',
+      saveImageSubjectTypeInterior: 'Sisäkuva',
+      saveImageSubjectTypeExterior: 'Ulkokuva',
+      saveImageSubjectTypeAerial: 'Ilmakuva',
+      saveImageSubjectTypePortrait: 'Henkilökuva',
+      saveImageSubjectTypeObject: 'Kuva esineestä',
+      saveImageSubjectTypePlant: 'Kuva kasvista',
+      saveImageSubjectTypeGeneral: 'Muu',
+      saveImageSubjectLocationRelevantHelp: 'Tämä kuvatyyppi vaatii paikan linkityksen. Jatka vaiheeseen 3.',
+      saveImageSubjectLocationNotRelevantHelp: 'Tämä kuvatyyppi ei yleensä vaadi paikan linkitystä.',
+      saveImageSubjectLocationToolHelp: 'Klikkaa karttaa, valitse listasta oikea kohde ja valitse sitten sitä vastaava Wikidata-kohde sekä piste kuvasta.',
+      saveImageSubjectNoMapToolHelp: 'Valitse vastaava Wikidata-kohde ja klikkaa sen sijainti kuvasta.',
+      saveImageSubjectLinkModeLabel: 'Lisää kuvassa näkyvä asia käyttäen karttaa ja ilman karttaa',
+      saveImageSubjectLinkModeMap: 'Kartalla',
+      saveImageSubjectLinkModeImageOnly: 'Ilman karttaa',
+      saveImageSubjectMapClickHelp: 'Klikkaa karttaa kohdasta, jossa kuvassa näkyvä paikka tai kohde sijaitsee.',
+      saveImageSubjectMapZoomLevel: 'Kartan zoom-taso',
+      saveImageSubjectImageClickHelp: 'Klikkaa kuvaa kohdasta, jossa sama paikka tai kohde näkyy.',
+      saveImageSubjectImageRequiresFile: 'Valitse kuvatiedosto, jotta voit merkitä kohdan kuvasta.',
+      saveImageSubjectImagePointLabel: 'Kuvan piste',
+      saveImageSubjectWikidataLabel: 'Vastaava Wikidata-kohde',
+      saveImageSubjectWikidataHelp: 'Hae nimellä tai valitse valitulle kohteelle ehdotettu Wikidata-kohde.',
+      saveImageSubjectDirectWikidataSearchTitle: 'Etsi Wikidata-kohdetta',
+      saveImageSubjectPairHelp: 'Valitse sama paikka kuvasta ja kartasta.',
+      saveImageSubjectNearbyWikidataSuggestions: 'Klikatun pisteen lähellä olevat karttakohteet',
+      saveImageSubjectNearbyOsmTagSelectHint: 'Valitse ensin karttakohde ja sitten sitä vastaava Wikidata-kohde.',
+      saveImageSubjectNearbyWikidataItemsForSelectedTag: 'Valitun karttakohteen mahdolliset Wikidata-kohteet',
+      saveImageSubjectLinkButton: 'Lisää linkitetty paikka',
+      saveImageSubjectLinkAdded: 'Linkitettyjä paikkoja: {count}',
+      saveImageSubjectTypeRequired: 'Valitse kuvan tyyppi.',
+      saveImageSubjectMapPointRequired: 'Valitse ensin vastaava piste kartalta.',
+      saveImageSubjectImagePointRequired: 'Valitse ensin vastaava piste kuvasta.',
+      saveImageSubjectWikidataRequired: 'Valitse linkitetylle paikalle vastaava Wikidata-kohde.',
+      saveImageSubjectLinkRequired: 'Sijaintiriippuvaisissa kuvissa linkitä vähintään yksi paikka kartan, kuvan ja Wikidatan välillä.',
+      saveImageSubjectFeatureFetchFailed: 'Lähikohteiden lataaminen epäonnistui.',
+      saveImageSubjectNearbyFeaturesTitle: 'Lähellä olevat kohteet',
+      saveImageSubjectLoadingInfo: 'Ladataan tietoja...',
+      saveImageSubjectNoNearbyFeatures: 'Klikatun pisteen läheltä ei löytynyt kohteita.',
+      saveImageSubjectSelectedFeatureTitle: 'Valitun kohteen lisätiedot',
+      saveImageSubjectFeatureDistanceLabel: 'Etäisyys klikatusta pisteestä',
+      saveImageSubjectOpenInOsm: 'Avaa OpenStreetMapissa',
+      saveImageSubjectSelectedFeatureWikidataSuggestions: 'Valitun kohteen Wikidata-ehdotukset',
       saveImageCoordinateSource: 'Koordinaattien lähde',
       saveImageCoordinateSourceMap: 'Karttakoordinaatit',
       saveImageCoordinateSourceExif: 'Kuvan EXIF-koordinaatit',
@@ -2941,6 +7418,7 @@ LIMIT ${queryResultLimit}
       saveImageMapPickHelpPhotographerTarget: 'Klikkaa karttaa suunnan päivittämiseksi. Kartan liikuttaminen säilyttää suunnan samana.',
       saveImageMapPickHelpImage: 'Liikuta karttaa niin, että keskipiste on kuvan sijainnissa.',
       saveImageCaption: 'Kuvateksti',
+      saveImageDescription: 'Kuvaus',
       saveImageFile: 'Kuvatiedosto',
       saveImageExifReading: 'Luetaan kuvan EXIF-metatietoja...',
       saveImageExifDateTaken: 'Kuvauspäivä (EXIF)',
@@ -2959,6 +7437,15 @@ LIMIT ${queryResultLimit}
       saveImageCoordinatePreviewShow: 'Näytä esikatselukuva',
       saveImageFileRequired: 'Valitse ensin kuvatiedosto.',
       saveImageApiTargetFilename: 'Commonsin kohdetiedoston nimi',
+      saveImageFilenameBuilderTitle: 'Muodosta tiedostonimi',
+      saveImageFilenameBuilderHelp: 'Napauta mukaan otettavat osat.',
+      saveImageFilenameBuilderPartSubjects: 'Kohteet',
+      saveImageFilenameBuilderPartDate: 'Päivämäärä',
+      saveImageFilenameBuilderPartLocation: 'Sijainti',
+      saveImageFilenameBuilderPartCategories: 'Luokat',
+      saveImageFilenameBuilderPreview: 'Ehdotettu tiedostonimi',
+      saveImageFilenameBuilderPreviewEmpty: 'Valitse osia tiedostonimen muodostamiseen.',
+      saveImageFilenameBuilderApply: 'Käytä ehdotusta',
       saveImageFilenameFallbackBase: 'Kuva',
       saveImageFilenameChecking: 'Tarkistetaan tiedostonimen saatavuutta...',
       saveImageFilenameAvailable: 'Tiedostonimi on vapaana Commonsissa.',
@@ -2970,6 +7457,7 @@ LIMIT ${queryResultLimit}
       saveImageApiAuthor: 'Tekijä',
       saveImageApiSourceUrl: 'Lähde-URL',
       saveImageApiDateCreated: 'Luontipäivä',
+      saveImageCommonsMetadataOnlyNote: 'Tämä koskee vain Commonsin metatietoja eikä muuta kuvan EXIF-tietoja.',
       saveImageApiLicenseTemplate: 'Lisenssipohja',
       saveImageApiLicenseCcBySa40: 'CC BY-SA 4.0',
       saveImageApiLicenseCcBy40: 'CC BY 4.0',
@@ -2979,6 +7467,7 @@ LIMIT ${queryResultLimit}
       saveImageCategorySuggestionsEmpty: 'Ei luokkaehdotuksia.',
       saveImageNearbyCategorySuggestions: 'Lähialueen Wikidata- ja OpenStreetMap-kohteiden ehdotetut luokat',
       saveImageSubcategorySuggestions: 'Ehdotetut alaluokat nykyisten luokkien perusteella',
+      saveImageSubcategoryFarSuggestions: 'Ehdotetut alaluokat yli 1 km päässä kuvaajasta',
       saveImageDepicts: 'Kuvassa (Wikidata P180)',
       saveImageDepictsHelp: 'Hae P180-arvoja ja lisää ne listaan.',
       saveImageDepictSuggestionsEmpty: 'Ei P180-ehdotuksia.',
@@ -4481,6 +8970,33 @@ LIMIT {{limit}}`,
       const saveImageHeading = ref('')
       const saveImageApiCoordinateMode = ref('photographer')
       const saveImageCaption = ref('')
+      const saveImageCaptionLanguage = ref(normalizeSupportedLocale(locale.value) || 'en')
+      const saveImageDescription = ref('')
+      const saveImageDescriptionLanguage = ref(normalizeSupportedLocale(locale.value) || 'en')
+      const saveImageSubjectType = ref('')
+      const saveImageSubjectLinkMode = ref('map')
+      const saveImageSubjectMapElement = ref(null)
+      const saveImageSubjectMapLatitude = ref('')
+      const saveImageSubjectMapLongitude = ref('')
+      const saveImageSubjectMapZoomLevel = ref(null)
+      const saveImageSubjectImageXPercent = ref(null)
+      const saveImageSubjectImageYPercent = ref(null)
+      const saveImageSubjectWikidataSearch = ref('')
+      const saveImageSubjectWikidataSuggestions = ref([])
+      const saveImageSubjectWikidataLoading = ref(false)
+      const saveImageSubjectNearbyMapFeatures = ref([])
+      const saveImageSubjectMapFeaturesLoading = ref(false)
+      const saveImageSubjectMapFeaturesError = ref('')
+      const saveImageSubjectMapFeaturesLoadedLatitude = ref(null)
+      const saveImageSubjectMapFeaturesLoadedLongitude = ref(null)
+      const saveImageSubjectHoveredMapFeatureKey = ref('')
+      const saveImageSubjectSelectedMapFeatureKey = ref('')
+      const saveImageSubjectSelectedFeatureWikidataSuggestions = ref([])
+      const saveImageSubjectSelectedFeatureWikidataLoading = ref(false)
+      const saveImageSubjectSelectedWikidataItem = ref(null)
+      const saveImageSubjectDirectWikidataItem = ref(null)
+      const saveImageSubjectSelectionError = ref('')
+      const saveImageLinkedSubjects = ref([])
       const saveImageCategorySearch = ref('')
       const saveImageCategorySuggestions = ref([])
       const saveImageCategoryLoading = ref(false)
@@ -4495,6 +9011,7 @@ LIMIT {{limit}}`,
       const saveImageSelectedCategoryAncestorDedupeKeys = ref([])
       const saveImageSelectedBroadCategoryConflictDedupeKeys = ref([])
       const saveImageSubcategorySuggestions = ref([])
+      const saveImageSubcategoryFarSuggestions = ref([])
       const saveImageSubcategoryLoading = ref(false)
       const saveImageSelectedCategories = ref([])
       const saveImageCategoryExistence = ref({})
@@ -4517,6 +9034,10 @@ LIMIT {{limit}}`,
       const saveImageApiTargetFilenameChecking = ref(false)
       const saveImageApiTargetFilenameAvailable = ref(null)
       const saveImageApiTargetFilenameCheckError = ref('')
+      const saveImageFilenameBuilderUseSubjects = ref(true)
+      const saveImageFilenameBuilderUseDate = ref(true)
+      const saveImageFilenameBuilderUseLocation = ref(true)
+      const saveImageFilenameBuilderUseCategories = ref(true)
       const saveImageIsOwnPhoto = ref(true)
       const saveImageApiAuthor = ref('')
       const saveImageApiSourceUrl = ref('')
@@ -4536,7 +9057,17 @@ LIMIT {{limit}}`,
       let saveImageCoordinatePreviewMapInstance = null
       let saveImageCoordinatePreviewMarker = null
       let saveImageCoordinatePreviewHeadingLine = null
+      let saveImageSubjectMapInstance = null
+      let saveImageSubjectMapMarker = null
+      let saveImageSubjectMapMarkerIcon = null
+      let saveImageSubjectMapLinkedMarkersLayer = null
+      const saveImageSubjectMapLinkedMarkerIconByColor = new Map()
+      let saveImageSubjectMapHoverLayer = null
+      let saveImageSubjectMapSelectedLayer = null
+      let saveImageSubjectMapListViewBeforeSelection = null
+      const saveImageSubjectMapFeatureGeometryCache = new Map()
       const saveImageFallbackEntityCache = new Map()
+      const saveImageSubjectCategorySuggestionCache = new Map()
       const saveImageSubcategoryCache = new Map()
       const saveImageParentCategoryCache = new Map()
       const saveImageCategoryExistenceRequestCache = new Map()
@@ -4547,6 +9078,11 @@ LIMIT {{limit}}`,
       let saveImageSubcategoryToken = 0
       let saveImageExifReadToken = 0
       let saveImageTargetFilenameCheckToken = 0
+      let saveImageSubjectMapFeaturesToken = 0
+      let saveImageSubjectSelectedFeatureWikidataToken = 0
+      let saveImageSubjectLatestMetadataToken = 0
+      let saveImageSubjectMapHoverRenderToken = 0
+      let saveImageSubjectMapSelectedRenderToken = 0
       const isSaveImageDialogOpen = computed(() => showSaveImageApiForm.value)
       const saveImageSelectedFileName = computed(() => {
         if (!saveImageSelectedFile.value || typeof saveImageSelectedFile.value !== 'object') {
@@ -4597,6 +9133,231 @@ LIMIT {{limit}}`,
         Number.isFinite(saveImageExifHeading.value) ||
         Number.isFinite(saveImageExifElevation.value)
       ))
+      const saveImageSubjectTypeLocationRelevant = computed(
+        () => saveImageSubjectTypeIsLocationRelevant(saveImageSubjectType.value),
+      )
+      const saveImageSubjectMapHasPoint = computed(() => (
+        parseCoordinate(saveImageSubjectMapLatitude.value) !== null &&
+        parseCoordinate(saveImageSubjectMapLongitude.value) !== null
+      ))
+      const saveImageSubjectImageHasPoint = computed(() => (
+        Number.isFinite(saveImageSubjectImageXPercent.value) &&
+        Number.isFinite(saveImageSubjectImageYPercent.value)
+      ))
+      function _saveImageSubjectCurrentPointLinkedPinColor() {
+        if (saveImageSelectedSubjectMapFeature.value) {
+          return ''
+        }
+        const currentX = Number(saveImageSubjectImageXPercent.value)
+        const currentY = Number(saveImageSubjectImageYPercent.value)
+        if (!Number.isFinite(currentX) || !Number.isFinite(currentY)) {
+          return ''
+        }
+        const currentLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+        const currentLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+        const hasCurrentMapPoint = currentLatitude !== null && currentLongitude !== null
+        const coordinateEpsilon = 0.000001
+        const imagePointEpsilon = 0.0005
+
+        for (let index = saveImageLinkedSubjects.value.length - 1; index >= 0; index -= 1) {
+          const linkedItem = saveImageLinkedSubjects.value[index]
+          if (!linkedItem || typeof linkedItem !== 'object') {
+            continue
+          }
+          const linkedX = Number(linkedItem.image_x_percent)
+          const linkedY = Number(linkedItem.image_y_percent)
+          if (
+            !Number.isFinite(linkedX) ||
+            !Number.isFinite(linkedY) ||
+            Math.abs(linkedX - currentX) > imagePointEpsilon ||
+            Math.abs(linkedY - currentY) > imagePointEpsilon
+          ) {
+            continue
+          }
+          if (hasCurrentMapPoint) {
+            const linkedLatitude = parseCoordinate(linkedItem.map_latitude)
+            const linkedLongitude = parseCoordinate(linkedItem.map_longitude)
+            if (
+              linkedLatitude === null ||
+              linkedLongitude === null ||
+              Math.abs(linkedLatitude - currentLatitude) > coordinateEpsilon ||
+              Math.abs(linkedLongitude - currentLongitude) > coordinateEpsilon
+            ) {
+              continue
+            }
+          }
+          return getSaveImageSubjectLinkedPinColor(index)
+        }
+        return ''
+      }
+      const saveImageSubjectImageMarkerStyle = computed(() => {
+        if (!saveImageSubjectImageHasPoint.value) {
+          return {}
+        }
+        const linkedPinColor = _saveImageSubjectCurrentPointLinkedPinColor()
+        const markerColor = linkedPinColor || SAVE_IMAGE_SUBJECT_PIN_COLOR
+        return {
+          left: `${Number(saveImageSubjectImageXPercent.value).toFixed(2)}%`,
+          top: `${Number(saveImageSubjectImageYPercent.value).toFixed(2)}%`,
+          backgroundImage: `url('${getSaveImageSubjectPinDataUri(markerColor)}')`,
+        }
+      })
+      const saveImageSubjectAllMapFeatures = computed(() => {
+        const mergedFeatures = []
+        const seenKeys = new Set()
+        for (const feature of saveImageSubjectNearbyMapFeatures.value) {
+          if (!feature || typeof feature !== 'object') {
+            continue
+          }
+          const key = String(feature.key || '').trim().toLowerCase()
+          if (!key || seenKeys.has(key)) {
+            continue
+          }
+          seenKeys.add(key)
+          mergedFeatures.push(feature)
+        }
+        return mergedFeatures
+      })
+      const saveImageSelectedSubjectMapFeature = computed(() => {
+        const selectedKey = String(saveImageSubjectSelectedMapFeatureKey.value || '').trim().toLowerCase()
+        if (!selectedKey) {
+          return null
+        }
+        const selectedFeature = saveImageSubjectAllMapFeatures.value.find((feature) => (
+          feature &&
+          typeof feature === 'object' &&
+          String(feature.key || '').trim().toLowerCase() === selectedKey
+        ))
+        return selectedFeature || null
+      })
+      const saveImageSubjectLinkUsesMap = computed(() => (
+        String(saveImageSubjectLinkMode.value || '').trim().toLowerCase() !== 'image-only'
+      ))
+      const saveImageSubjectHasActiveSelection = computed(() => (
+        Boolean(saveImageSelectedSubjectMapFeature.value || saveImageSubjectDirectWikidataItem.value)
+      ))
+      const saveImageSubjectSelectedWikidataQid = computed(() => extractWikidataId(
+        String(
+          (saveImageSubjectSelectedWikidataItem.value && saveImageSubjectSelectedWikidataItem.value.id)
+            || saveImageSubjectWikidataSearch.value
+            || '',
+        ),
+      ))
+      const saveImageSubjectCanAddLink = computed(() => {
+        if (!saveImageSubjectImageHasPoint.value || !saveImageSubjectSelectedWikidataQid.value) {
+          return false
+        }
+        if (!saveImageSubjectLinkUsesMap.value) {
+          return true
+        }
+        return saveImageSubjectHasActiveSelection.value && saveImageSubjectMapHasPoint.value
+      })
+      const saveImageSubjectPendingLinkedSubject = computed(() => {
+        if (saveImageSubjectLinkUsesMap.value && !saveImageSubjectHasActiveSelection.value) {
+          return null
+        }
+        const mapLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+        const mapLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+        if (saveImageSubjectLinkUsesMap.value && (mapLatitude === null || mapLongitude === null)) {
+          return null
+        }
+        const imageX = Number(saveImageSubjectImageXPercent.value)
+        const imageY = Number(saveImageSubjectImageYPercent.value)
+        if (!Number.isFinite(imageX) || !Number.isFinite(imageY)) {
+          return null
+        }
+        const selectedQid = saveImageSubjectSelectedWikidataQid.value
+        if (!selectedQid) {
+          return null
+        }
+        const selectedItem = saveImageSubjectSelectedWikidataItem.value
+        const selectedLabel = selectedItem && typeof selectedItem.label === 'string'
+          ? selectedItem.label.trim()
+          : ''
+        const selectedMapFeature = saveImageSelectedSubjectMapFeature.value
+        const selectedMapFeatureKey = selectedMapFeature && typeof selectedMapFeature.key === 'string'
+          ? selectedMapFeature.key.trim()
+          : ''
+        const selectedMapFeatureType = selectedMapFeature && typeof selectedMapFeature.type === 'string'
+          ? selectedMapFeature.type.trim()
+          : ''
+        const selectedMapFeatureId = selectedMapFeature && Number.isFinite(Number(selectedMapFeature.id))
+          ? Number.parseInt(String(selectedMapFeature.id), 10)
+          : null
+        const selectedMapFeatureLabel = selectedMapFeature && typeof selectedMapFeature.displayLabel === 'string'
+          ? selectedMapFeature.displayLabel.trim()
+          : ''
+        const mapDedupPart = mapLatitude === null || mapLongitude === null
+          ? 'no-map'
+          : `${mapLatitude.toFixed(6)},${mapLongitude.toFixed(6)}`
+        const dedupeKey = [
+          selectedQid.toLowerCase(),
+          mapDedupPart,
+          imageX.toFixed(3),
+          imageY.toFixed(3),
+        ].join('|')
+        return {
+          dedupeKey,
+          id: selectedQid,
+          label: selectedLabel,
+          map_latitude: saveImageSubjectLinkUsesMap.value ? mapLatitude : null,
+          map_longitude: saveImageSubjectLinkUsesMap.value ? mapLongitude : null,
+          image_x_percent: imageX,
+          image_y_percent: imageY,
+          osm_feature_key: saveImageSubjectLinkUsesMap.value ? selectedMapFeatureKey : '',
+          osm_feature_type: saveImageSubjectLinkUsesMap.value ? selectedMapFeatureType : '',
+          osm_feature_id: saveImageSubjectLinkUsesMap.value ? selectedMapFeatureId : null,
+          osm_feature_label: saveImageSubjectLinkUsesMap.value ? selectedMapFeatureLabel : '',
+        }
+      })
+      const saveImageSubjectLinkedImageMarkers = computed(() => {
+        if (!saveImageSubjectTypeLocationRelevant.value || saveImageSubjectHasActiveSelection.value) {
+          return []
+        }
+        const markers = []
+        for (let index = 0; index < saveImageLinkedSubjects.value.length; index += 1) {
+          const linkedItem = saveImageLinkedSubjects.value[index]
+          if (!linkedItem || typeof linkedItem !== 'object') {
+            continue
+          }
+          const imageX = Number(linkedItem.image_x_percent)
+          const imageY = Number(linkedItem.image_y_percent)
+          if (!Number.isFinite(imageX) || !Number.isFinite(imageY)) {
+            continue
+          }
+          const pinColor = getSaveImageSubjectLinkedPinColor(index)
+          const markerKey = String(linkedItem.dedupeKey || '').trim() || `index-${index}`
+          markers.push({
+            key: markerKey,
+            style: {
+              left: `${Math.max(0, Math.min(100, imageX)).toFixed(2)}%`,
+              top: `${Math.max(0, Math.min(100, imageY)).toFixed(2)}%`,
+              backgroundImage: `url('${getSaveImageSubjectPinDataUri(pinColor)}')`,
+            },
+          })
+        }
+        return markers
+      })
+      const saveImageVisibleSubjectSelectedFeatureWikidataSuggestions = computed(() => {
+        const visibleSuggestions = []
+        const seenQids = new Set()
+        for (const suggestion of saveImageSubjectSelectedFeatureWikidataSuggestions.value) {
+          const normalizedItem = _normalizeSaveImageDepictItem(suggestion)
+          if (!normalizedItem) {
+            continue
+          }
+          const qid = normalizedItem.id.toLowerCase()
+          if (seenQids.has(qid) || _isSaveImageDepictSelected(normalizedItem.id)) {
+            continue
+          }
+          seenQids.add(qid)
+          visibleSuggestions.push(normalizedItem)
+          if (visibleSuggestions.length >= SAVE_IMAGE_SUBJECT_NEARBY_WIKIDATA_MAX_ITEMS) {
+            break
+          }
+        }
+        return visibleSuggestions
+      })
       const saveImageVisibleNearbyCategorySuggestions = computed(() => {
         const selectedDedupeKeys = new Set(
           saveImageSelectedCategories.value
@@ -4746,6 +9507,14 @@ LIMIT {{limit}}`,
         saveImageApiAuthor.value = ''
       }
 
+      function _normalizeSaveImageMetadataLanguage(value) {
+        const normalized = normalizeSupportedLocale(String(value || ''))
+        if (normalized) {
+          return normalized
+        }
+        return normalizeSupportedLocale(locale.value) || 'en'
+      }
+
       function _saveImageCurrentIsoDate() {
         const now = new Date()
         const year = String(now.getFullYear()).padStart(4, '0')
@@ -4778,19 +9547,181 @@ LIMIT {{limit}}`,
           .trim()
       }
 
+      function _saveImageFilenameToken(value, { replaceUnderscores = false, maxLength = 72 } = {}) {
+        let rawValue = String(value || '').trim()
+        if (!rawValue) {
+          return ''
+        }
+        if (replaceUnderscores) {
+          rawValue = rawValue.replace(/_/g, ' ')
+        }
+        const normalizedToken = _normalizeSaveImageFilenameBase(rawValue)
+        if (!normalizedToken) {
+          return ''
+        }
+        if (normalizedToken.length <= maxLength) {
+          return normalizedToken
+        }
+        return normalizedToken.slice(0, maxLength).trim()
+      }
+
+      function _saveImageFilenameBuilderSelectedSubjectLabels() {
+        const labels = []
+        const seen = new Set()
+        for (const linkedItem of Array.isArray(saveImageLinkedSubjects.value) ? saveImageLinkedSubjects.value : []) {
+          if (!linkedItem || typeof linkedItem !== 'object') {
+            continue
+          }
+          const linkedQid = extractWikidataId(String(linkedItem.id || ''))
+          const rawLabel = typeof linkedItem.label === 'string' ? linkedItem.label.trim() : ''
+          const labelCandidate = rawLabel || linkedQid
+          const normalizedLabel = _saveImageFilenameToken(labelCandidate, { maxLength: 56 })
+          if (!normalizedLabel) {
+            continue
+          }
+          const dedupeKey = normalizedLabel.toLowerCase()
+          if (seen.has(dedupeKey)) {
+            continue
+          }
+          seen.add(dedupeKey)
+          labels.push(normalizedLabel)
+          if (labels.length >= SAVE_IMAGE_FILENAME_BUILDER_MAX_SUBJECTS) {
+            break
+          }
+        }
+        return labels
+      }
+
+      function _saveImageFilenameBuilderSelectedCategoryLabels() {
+        const labels = []
+        const seen = new Set()
+        for (const categoryName of Array.isArray(saveImageSelectedCategories.value) ? saveImageSelectedCategories.value : []) {
+          const normalizedCategory = _normalizeUploadCategory(categoryName)
+          if (!normalizedCategory) {
+            continue
+          }
+          const normalizedLabel = _saveImageFilenameToken(normalizedCategory, {
+            replaceUnderscores: true,
+            maxLength: 48,
+          })
+          if (!normalizedLabel) {
+            continue
+          }
+          const dedupeKey = normalizedLabel.toLowerCase()
+          if (seen.has(dedupeKey)) {
+            continue
+          }
+          seen.add(dedupeKey)
+          labels.push(normalizedLabel)
+          if (labels.length >= SAVE_IMAGE_FILENAME_BUILDER_MAX_CATEGORIES) {
+            break
+          }
+        }
+        return labels
+      }
+
       function _buildSaveImageSuggestedTargetFilename() {
-        const locationName = (
-          location.value &&
-          typeof location.value === 'object' &&
-          typeof location.value.name === 'string'
-        )
-          ? location.value.name.trim()
-          : ''
-        const normalizedBase = _normalizeSaveImageFilenameBase(locationName)
-        const base = normalizedBase || t('saveImageFilenameFallbackBase')
-        const datePart = _saveImageFilenameDatePart()
+        const filenameParts = []
+
+        if (saveImageFilenameBuilderUseLocation.value) {
+          const locationName = (
+            location.value &&
+            typeof location.value === 'object' &&
+            typeof location.value.name === 'string'
+          )
+            ? location.value.name.trim()
+            : ''
+          const locationToken = _saveImageFilenameToken(locationName, { maxLength: 72 })
+          if (locationToken) {
+            filenameParts.push(locationToken)
+          }
+        }
+
+        if (saveImageFilenameBuilderUseSubjects.value) {
+          const subjectLabels = _saveImageFilenameBuilderSelectedSubjectLabels()
+          if (subjectLabels.length > 0) {
+            filenameParts.push(subjectLabels.join(', '))
+          }
+        }
+
+        if (saveImageFilenameBuilderUseDate.value) {
+          const datePart = _saveImageFilenameDatePart()
+          const normalizedDatePart = _saveImageFilenameToken(datePart, { maxLength: 20 })
+          if (normalizedDatePart) {
+            filenameParts.push(normalizedDatePart)
+          }
+        }
+
+        if (saveImageFilenameBuilderUseCategories.value) {
+          const categoryLabels = _saveImageFilenameBuilderSelectedCategoryLabels()
+          if (categoryLabels.length > 0) {
+            filenameParts.push(categoryLabels.join(', '))
+          }
+        }
+
+        if (filenameParts.length < 1) {
+          filenameParts.push(t('saveImageFilenameFallbackBase'))
+          filenameParts.push(_saveImageFilenameDatePart())
+        }
+
         const extension = _saveImageSelectedFileExtension()
-        return `${base} ${datePart}${extension}`.trim()
+        let filenameBase = _normalizeSaveImageFilenameBase(filenameParts.join(' - '))
+        if (!filenameBase) {
+          filenameBase = t('saveImageFilenameFallbackBase')
+        }
+        if (filenameBase.length > SAVE_IMAGE_FILENAME_BUILDER_MAX_BASE_LENGTH) {
+          filenameBase = filenameBase.slice(0, SAVE_IMAGE_FILENAME_BUILDER_MAX_BASE_LENGTH).trim()
+        }
+        const suggestedFilename = `${filenameBase}${extension}`.trim()
+        return normalizeCommonsFilenameCandidate(suggestedFilename)
+      }
+
+      const saveImageFilenameBuilderPreview = computed(() => _buildSaveImageSuggestedTargetFilename())
+
+      function isSaveImageFilenameBuilderPartEnabled(partKey) {
+        const normalizedPart = String(partKey || '').trim().toLowerCase()
+        if (normalizedPart === 'subjects') {
+          return Boolean(saveImageFilenameBuilderUseSubjects.value)
+        }
+        if (normalizedPart === 'date') {
+          return Boolean(saveImageFilenameBuilderUseDate.value)
+        }
+        if (normalizedPart === 'location') {
+          return Boolean(saveImageFilenameBuilderUseLocation.value)
+        }
+        if (normalizedPart === 'categories') {
+          return Boolean(saveImageFilenameBuilderUseCategories.value)
+        }
+        return false
+      }
+
+      function toggleSaveImageFilenameBuilderPart(partKey) {
+        const normalizedPart = String(partKey || '').trim().toLowerCase()
+        if (normalizedPart === 'subjects') {
+          saveImageFilenameBuilderUseSubjects.value = !saveImageFilenameBuilderUseSubjects.value
+          return
+        }
+        if (normalizedPart === 'date') {
+          saveImageFilenameBuilderUseDate.value = !saveImageFilenameBuilderUseDate.value
+          return
+        }
+        if (normalizedPart === 'location') {
+          saveImageFilenameBuilderUseLocation.value = !saveImageFilenameBuilderUseLocation.value
+          return
+        }
+        if (normalizedPart === 'categories') {
+          saveImageFilenameBuilderUseCategories.value = !saveImageFilenameBuilderUseCategories.value
+        }
+      }
+
+      function applySaveImageFilenameBuilderSuggestion() {
+        const suggestedFilename = _buildSaveImageSuggestedTargetFilename()
+        if (!suggestedFilename) {
+          return
+        }
+        saveImageApiTargetFilename.value = suggestedFilename
+        saveImageApiTargetFilenameTouched.value = true
+        checkSaveImageApiTargetFilenameAvailabilityDebounced()
       }
 
       function _resetSaveImageApiTargetFilenameAvailability() {
@@ -5111,16 +10042,1533 @@ LIMIT {{limit}}`,
         }, 0)
       }
 
-      function _normalizeUploadCategory(value) {
-        if (typeof value !== 'string') {
-          return ''
+      function _syncSaveImageSubjectMapZoomLevel() {
+        if (!saveImageSubjectMapInstance) {
+          saveImageSubjectMapZoomLevel.value = null
+          return
         }
-        const normalized = value
-          .trim()
-          .replace(/^category:/i, '')
-          .trim()
-          .replace(/\s+/g, '_')
-        return normalized
+        const zoomLevel = Number(saveImageSubjectMapInstance.getZoom())
+        saveImageSubjectMapZoomLevel.value = Number.isFinite(zoomLevel) ? zoomLevel : null
+      }
+
+      function destroySaveImageSubjectMap() {
+        saveImageSubjectMapHoverRenderToken += 1
+        saveImageSubjectMapSelectedRenderToken += 1
+        saveImageSubjectMapListViewBeforeSelection = null
+        saveImageSubjectMapZoomLevel.value = null
+        if (saveImageSubjectMapInstance) {
+          saveImageSubjectMapInstance.remove()
+          saveImageSubjectMapInstance = null
+          saveImageSubjectMapMarker = null
+          saveImageSubjectMapMarkerIcon = null
+          saveImageSubjectMapLinkedMarkersLayer = null
+          saveImageSubjectMapLinkedMarkerIconByColor.clear()
+          saveImageSubjectMapHoverLayer = null
+          saveImageSubjectMapSelectedLayer = null
+        }
+        saveImageSubjectMapFeatureGeometryCache.clear()
+      }
+
+      function _clearSaveImageSubjectMapFeatureHoverLayer({ bumpToken = true } = {}) {
+        if (bumpToken) {
+          saveImageSubjectMapHoverRenderToken += 1
+        }
+        if (saveImageSubjectMapInstance && saveImageSubjectMapHoverLayer) {
+          saveImageSubjectMapInstance.removeLayer(saveImageSubjectMapHoverLayer)
+        }
+        saveImageSubjectMapHoverLayer = null
+      }
+
+      function _clearSaveImageSubjectMapFeatureSelectedLayer({ bumpToken = true } = {}) {
+        if (bumpToken) {
+          saveImageSubjectMapSelectedRenderToken += 1
+        }
+        if (saveImageSubjectMapInstance && saveImageSubjectMapSelectedLayer) {
+          saveImageSubjectMapInstance.removeLayer(saveImageSubjectMapSelectedLayer)
+        }
+        saveImageSubjectMapSelectedLayer = null
+      }
+
+      function _clearSaveImageSubjectMapFeatureLayers() {
+        _clearSaveImageSubjectMapFeatureHoverLayer()
+        _clearSaveImageSubjectMapFeatureSelectedLayer()
+      }
+
+      function _clearSaveImageSubjectSelectedFeatureWikidataSuggestions() {
+        saveImageSubjectSelectedFeatureWikidataToken += 1
+        saveImageSubjectSelectedFeatureWikidataLoading.value = false
+        saveImageSubjectSelectedFeatureWikidataSuggestions.value = []
+      }
+
+      function _clearSaveImageSubjectMapFeatures() {
+        saveImageSubjectMapFeaturesToken += 1
+        saveImageSubjectLatestMetadataToken += 1
+        saveImageSubjectMapListViewBeforeSelection = null
+        saveImageSubjectMapFeaturesLoading.value = false
+        saveImageSubjectMapFeaturesError.value = ''
+        saveImageSubjectMapFeaturesLoadedLatitude.value = null
+        saveImageSubjectMapFeaturesLoadedLongitude.value = null
+        saveImageSubjectNearbyMapFeatures.value = []
+        saveImageSubjectHoveredMapFeatureKey.value = ''
+        saveImageSubjectSelectedMapFeatureKey.value = ''
+        saveImageSubjectDirectWikidataItem.value = null
+        _clearSaveImageSubjectMapFeatureLayers()
+        _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
+        _renderSaveImageSubjectLinkedMarkers()
+      }
+
+      function _prepareSaveImageSubjectMapFeatureLoadingState() {
+        saveImageSubjectMapFeaturesToken += 1
+        saveImageSubjectLatestMetadataToken += 1
+        saveImageSubjectMapListViewBeforeSelection = null
+        saveImageSubjectMapFeaturesLoading.value = true
+        saveImageSubjectMapFeaturesError.value = ''
+        saveImageSubjectMapFeaturesLoadedLatitude.value = null
+        saveImageSubjectMapFeaturesLoadedLongitude.value = null
+        saveImageSubjectNearbyMapFeatures.value = []
+        saveImageSubjectHoveredMapFeatureKey.value = ''
+        saveImageSubjectSelectedMapFeatureKey.value = ''
+        saveImageSubjectDirectWikidataItem.value = null
+        _clearSaveImageSubjectMapFeatureLayers()
+        _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
+        _renderSaveImageSubjectLinkedMarkers()
+      }
+
+      function _hasSaveImageSubjectMapFeaturesLoadedForCoordinates(latitude, longitude) {
+        const parsedLatitude = Number(latitude)
+        const parsedLongitude = Number(longitude)
+        if (!Number.isFinite(parsedLatitude) || !Number.isFinite(parsedLongitude)) {
+          return false
+        }
+        const loadedLatitude = Number(saveImageSubjectMapFeaturesLoadedLatitude.value)
+        const loadedLongitude = Number(saveImageSubjectMapFeaturesLoadedLongitude.value)
+        if (!Number.isFinite(loadedLatitude) || !Number.isFinite(loadedLongitude)) {
+          return false
+        }
+        return (
+          Math.abs(loadedLatitude - parsedLatitude) <= 0.000001 &&
+          Math.abs(loadedLongitude - parsedLongitude) <= 0.000001
+        )
+      }
+
+      function _clearSaveImageSubjectMapMarker() {
+        if (saveImageSubjectMapInstance && saveImageSubjectMapMarker) {
+          saveImageSubjectMapInstance.removeLayer(saveImageSubjectMapMarker)
+        }
+        saveImageSubjectMapMarker = null
+      }
+
+      function _clearSaveImageSubjectMapLinkedMarkersLayer() {
+        if (saveImageSubjectMapInstance && saveImageSubjectMapLinkedMarkersLayer) {
+          saveImageSubjectMapInstance.removeLayer(saveImageSubjectMapLinkedMarkersLayer)
+        }
+        saveImageSubjectMapLinkedMarkersLayer = null
+      }
+
+      function _getSaveImageSubjectMapMarkerIcon() {
+        if (saveImageSubjectMapMarkerIcon) {
+          return saveImageSubjectMapMarkerIcon
+        }
+        if (typeof L === 'undefined' || typeof L.icon !== 'function') {
+          return null
+        }
+        saveImageSubjectMapMarkerIcon = L.icon({
+          iconUrl: SAVE_IMAGE_SUBJECT_PIN_DATA_URI,
+          iconRetinaUrl: SAVE_IMAGE_SUBJECT_PIN_DATA_URI,
+          iconSize: [30, 30],
+          iconAnchor: [15, 30],
+          popupAnchor: [0, -30],
+          className: 'save-image-subject-map-pin-icon',
+        })
+        return saveImageSubjectMapMarkerIcon
+      }
+
+      function _getSaveImageSubjectMapLinkedMarkerIcon(pinColor) {
+        if (typeof L === 'undefined' || typeof L.icon !== 'function') {
+          return null
+        }
+        const normalizedColor = typeof pinColor === 'string' && pinColor.trim()
+          ? pinColor.trim()
+          : SAVE_IMAGE_SUBJECT_PIN_COLOR
+        if (saveImageSubjectMapLinkedMarkerIconByColor.has(normalizedColor)) {
+          return saveImageSubjectMapLinkedMarkerIconByColor.get(normalizedColor)
+        }
+        const iconDataUri = getSaveImageSubjectPinDataUri(normalizedColor)
+        const icon = L.icon({
+          iconUrl: iconDataUri,
+          iconRetinaUrl: iconDataUri,
+          iconSize: [30, 30],
+          iconAnchor: [15, 30],
+          popupAnchor: [0, -30],
+          className: 'save-image-subject-map-pin-icon',
+        })
+        saveImageSubjectMapLinkedMarkerIconByColor.set(normalizedColor, icon)
+        return icon
+      }
+
+      function saveImageLinkedSubjectListPinStyle(indexValue) {
+        const pinColor = getSaveImageSubjectLinkedPinColor(indexValue)
+        return {
+          backgroundImage: `url('${getSaveImageSubjectPinDataUri(pinColor)}')`,
+        }
+      }
+
+      function _renderSaveImageSubjectLinkedMarkers() {
+        _clearSaveImageSubjectMapLinkedMarkersLayer()
+        if (!saveImageSubjectMapInstance || saveImageSubjectHasActiveSelection.value) {
+          return
+        }
+        const layers = []
+        for (let index = 0; index < saveImageLinkedSubjects.value.length; index += 1) {
+          const linkedItem = saveImageLinkedSubjects.value[index]
+          if (!linkedItem || typeof linkedItem !== 'object') {
+            continue
+          }
+          const latitude = parseCoordinate(linkedItem.map_latitude)
+          const longitude = parseCoordinate(linkedItem.map_longitude)
+          if (latitude === null || longitude === null) {
+            continue
+          }
+          const markerOptions = {
+            interactive: false,
+            keyboard: false,
+          }
+          const markerIcon = _getSaveImageSubjectMapLinkedMarkerIcon(getSaveImageSubjectLinkedPinColor(index))
+          if (markerIcon) {
+            markerOptions.icon = markerIcon
+          }
+          layers.push(L.marker([latitude, longitude], markerOptions))
+        }
+        if (layers.length < 1) {
+          return
+        }
+        saveImageSubjectMapLinkedMarkersLayer = L.layerGroup(layers).addTo(saveImageSubjectMapInstance)
+      }
+
+      function _setSaveImageSubjectMapCoordinates(latitude, longitude, {
+        updateMapView = true,
+        minimumZoom = 13,
+        showMarker = true,
+      } = {}) {
+        const parsedLatitude = Number(latitude)
+        const parsedLongitude = Number(longitude)
+        if (!Number.isFinite(parsedLatitude) || !Number.isFinite(parsedLongitude)) {
+          return
+        }
+        saveImageSubjectMapLatitude.value = parsedLatitude.toFixed(6)
+        saveImageSubjectMapLongitude.value = parsedLongitude.toFixed(6)
+
+        if (!saveImageSubjectMapInstance) {
+          return
+        }
+        const point = [parsedLatitude, parsedLongitude]
+        if (showMarker) {
+          if (!saveImageSubjectMapMarker) {
+            const markerOptions = {}
+            const markerIcon = _getSaveImageSubjectMapMarkerIcon()
+            if (markerIcon) {
+              markerOptions.icon = markerIcon
+            }
+            saveImageSubjectMapMarker = L.marker(point, markerOptions).addTo(saveImageSubjectMapInstance)
+          } else {
+            saveImageSubjectMapMarker.setLatLng(point)
+          }
+        } else {
+          _clearSaveImageSubjectMapMarker()
+        }
+        if (updateMapView) {
+          saveImageSubjectMapInstance.setView(point, Math.max(saveImageSubjectMapInstance.getZoom(), minimumZoom))
+          _syncSaveImageSubjectMapZoomLevel()
+        }
+      }
+
+      function _findSaveImageSubjectMapFeatureByKey(featureKeyValue) {
+        const targetKey = String(featureKeyValue || '').trim().toLowerCase()
+        if (!targetKey) {
+          return null
+        }
+        for (const feature of saveImageSubjectAllMapFeatures.value) {
+          if (!feature || typeof feature !== 'object') {
+            continue
+          }
+          if (String(feature.key || '').trim().toLowerCase() === targetKey) {
+            return feature
+          }
+        }
+        return null
+      }
+
+      function _replaceSaveImageSubjectNearbyMapFeature(updatedFeature) {
+        if (!updatedFeature || typeof updatedFeature !== 'object') {
+          return
+        }
+        const targetKey = String(updatedFeature.key || '').trim().toLowerCase()
+        if (!targetKey) {
+          return
+        }
+        const currentFeatures = Array.isArray(saveImageSubjectNearbyMapFeatures.value)
+          ? saveImageSubjectNearbyMapFeatures.value
+          : []
+        let changed = false
+        const nextFeatures = currentFeatures.map((candidateFeature) => {
+          if (
+            candidateFeature &&
+            typeof candidateFeature === 'object' &&
+            String(candidateFeature.key || '').trim().toLowerCase() === targetKey
+          ) {
+            changed = true
+            return updatedFeature
+          }
+          return candidateFeature
+        })
+        if (changed) {
+          saveImageSubjectNearbyMapFeatures.value = nextFeatures
+        }
+      }
+
+      async function _refreshSaveImageSubjectMapFeatureFromLatestSources(feature, selectionToken) {
+        if (!feature || typeof feature !== 'object') {
+          return feature
+        }
+        const clickLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+        const clickLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+        const refreshSingleFeature = async (targetFeature) => {
+          if (!targetFeature || typeof targetFeature !== 'object') {
+            return targetFeature
+          }
+          const targetFeatureType = normalizeOsmMapFeatureType(targetFeature.type)
+          const targetFeatureId = Number.parseInt(String(targetFeature.id), 10)
+          if (!targetFeatureType || !Number.isFinite(targetFeatureId) || targetFeatureId < 1) {
+            return targetFeature
+          }
+          const targetFeatureLatitude = readOsmMapFeatureCoordinateValue(targetFeature.latitude)
+          const targetFeatureLongitude = readOsmMapFeatureCoordinateValue(targetFeature.longitude)
+          const targetFeatureTags = targetFeature.rawTags && typeof targetFeature.rawTags === 'object'
+            ? targetFeature.rawTags
+            : {}
+          const targetFeatureNameHint = (
+            readPreferredOsmMapFeatureName(targetFeatureTags, locale.value) ||
+            (typeof targetFeature.displayLabel === 'string' ? targetFeature.displayLabel.trim() : '')
+          )
+          const hintLatitude = targetFeatureLatitude !== null ? targetFeatureLatitude : clickLatitude
+          const hintLongitude = targetFeatureLongitude !== null ? targetFeatureLongitude : clickLongitude
+          const latestPayload = await fetchLatestOsmFeatureMetadata(targetFeatureType, targetFeatureId, locale.value, {
+            hintLatitude,
+            hintLongitude,
+            hintName: targetFeatureNameHint,
+          })
+          if (selectionToken !== saveImageSubjectLatestMetadataToken) {
+            return null
+          }
+          const mergedFeature = mergeOsmMapFeatureWithLatestMetadata(targetFeature, latestPayload, {
+            clickLatitude,
+            clickLongitude,
+            lang: locale.value,
+          })
+          return mergedFeature && typeof mergedFeature === 'object'
+            ? mergedFeature
+            : targetFeature
+        }
+
+        const mergedComponents = Array.isArray(feature.mergedComponents)
+          ? feature.mergedComponents.filter((entry) => entry && typeof entry === 'object')
+          : []
+        if (mergedComponents.length > 0) {
+          try {
+            const refreshedMergedComponents = await Promise.all(
+              mergedComponents.map(async (mergedComponent) => {
+                try {
+                  return await refreshSingleFeature(mergedComponent)
+                } catch (error) {
+                  void error
+                  return mergedComponent
+                }
+              }),
+            )
+            if (selectionToken !== saveImageSubjectLatestMetadataToken) {
+              return null
+            }
+            const resolvedMergedComponents = refreshedMergedComponents.map((entry, index) => (
+              entry && typeof entry === 'object'
+                ? entry
+                : mergedComponents[index]
+            ))
+            const updatedFeature = {
+              ...feature,
+              mergedComponents: resolvedMergedComponents,
+              mergedFeatureCount: resolvedMergedComponents.length,
+            }
+            const mergedDirectQids = []
+            const seenMergedDirectQids = new Set()
+            for (const mergedComponent of resolvedMergedComponents) {
+              if (!mergedComponent || typeof mergedComponent !== 'object') {
+                continue
+              }
+              const directQid = extractWikidataId(
+                String(
+                  mergedComponent.directQid ||
+                  (mergedComponent.rawTags && mergedComponent.rawTags.wikidata
+                    ? mergedComponent.rawTags.wikidata
+                    : '') ||
+                  '',
+                ),
+              )
+              if (!directQid || seenMergedDirectQids.has(directQid)) {
+                continue
+              }
+              seenMergedDirectQids.add(directQid)
+              mergedDirectQids.push(directQid)
+            }
+            updatedFeature.mergedDirectQids = mergedDirectQids
+
+            const baseRawTags = updatedFeature.rawTags && typeof updatedFeature.rawTags === 'object'
+              ? { ...updatedFeature.rawTags }
+              : {}
+            const resolvedDirectQid = extractWikidataId(String(updatedFeature.directQid || '')) || (mergedDirectQids[0] || '')
+            if (resolvedDirectQid) {
+              updatedFeature.directQid = resolvedDirectQid
+              baseRawTags.wikidata = resolvedDirectQid
+            }
+            updatedFeature.rawTags = baseRawTags
+            _replaceSaveImageSubjectNearbyMapFeature(updatedFeature)
+            return updatedFeature
+          } catch (error) {
+            if (selectionToken !== saveImageSubjectLatestMetadataToken) {
+              return null
+            }
+            return feature
+          }
+        }
+
+        const featureType = normalizeOsmMapFeatureType(feature.type)
+        const featureId = Number.parseInt(String(feature.id), 10)
+        if (!featureType || !Number.isFinite(featureId) || featureId < 1) {
+          return feature
+        }
+        const featureLatitude = readOsmMapFeatureCoordinateValue(feature.latitude)
+        const featureLongitude = readOsmMapFeatureCoordinateValue(feature.longitude)
+        const featureTags = feature.rawTags && typeof feature.rawTags === 'object'
+          ? feature.rawTags
+          : {}
+        const featureNameHint = (
+          readPreferredOsmMapFeatureName(featureTags, locale.value) ||
+          (typeof feature.displayLabel === 'string' ? feature.displayLabel.trim() : '')
+        )
+        const hintLatitude = featureLatitude !== null ? featureLatitude : clickLatitude
+        const hintLongitude = featureLongitude !== null ? featureLongitude : clickLongitude
+        try {
+          const latestPayload = await fetchLatestOsmFeatureMetadata(featureType, featureId, locale.value, {
+            hintLatitude,
+            hintLongitude,
+            hintName: featureNameHint,
+          })
+          if (selectionToken !== saveImageSubjectLatestMetadataToken) {
+            return null
+          }
+          const mergedFeature = mergeOsmMapFeatureWithLatestMetadata(feature, latestPayload, {
+            clickLatitude,
+            clickLongitude,
+            lang: locale.value,
+          })
+          if (!mergedFeature) {
+            return feature
+          }
+          _replaceSaveImageSubjectNearbyMapFeature(mergedFeature)
+          return mergedFeature
+        } catch (error) {
+          if (selectionToken !== saveImageSubjectLatestMetadataToken) {
+            return null
+          }
+          return feature
+        }
+      }
+
+      async function _renderSaveImageSubjectMapFeatureLayer(feature, { mode = 'hover' } = {}) {
+        const targetMode = mode === 'selected' ? 'selected' : 'hover'
+        const renderToken = targetMode === 'selected'
+          ? ++saveImageSubjectMapSelectedRenderToken
+          : ++saveImageSubjectMapHoverRenderToken
+        if (targetMode === 'selected') {
+          _clearSaveImageSubjectMapFeatureSelectedLayer({ bumpToken: false })
+        } else {
+          _clearSaveImageSubjectMapFeatureHoverLayer({ bumpToken: false })
+        }
+        if (!saveImageSubjectMapInstance || !feature || typeof feature !== 'object') {
+          return
+        }
+        const featureKey = String(feature.key || '').trim().toLowerCase()
+        if (!featureKey) {
+          return
+        }
+        let geometryElements = null
+        if (saveImageSubjectMapFeatureGeometryCache.has(featureKey)) {
+          geometryElements = saveImageSubjectMapFeatureGeometryCache.get(featureKey)
+        } else {
+          geometryElements = []
+          saveImageSubjectMapFeatureGeometryCache.set(featureKey, geometryElements)
+        }
+        if (
+          (targetMode === 'selected' && renderToken !== saveImageSubjectMapSelectedRenderToken) ||
+          (targetMode === 'hover' && renderToken !== saveImageSubjectMapHoverRenderToken)
+        ) {
+          return
+        }
+        const featureLayerStyle = targetMode === 'selected'
+          ? {
+            color: '#0ea5e9',
+            fillColor: '#38bdf8',
+            weight: 4,
+            opacity: 0.95,
+            fillOpacity: 0.24,
+            markerRadius: 7,
+          }
+          : {
+            color: '#f59e0b',
+            fillColor: '#fbbf24',
+            weight: 3,
+            opacity: 0.92,
+            fillOpacity: 0.2,
+            markerRadius: 6,
+          }
+        let layer = null
+        const mergedComponents = Array.isArray(feature.mergedComponents)
+          ? feature.mergedComponents.filter((entry) => entry && typeof entry === 'object')
+          : []
+        if (mergedComponents.length > 0) {
+          const mergedLayers = []
+          for (const mergedComponent of mergedComponents) {
+            const mergedLayer = buildLeafletLayerFromOsmMapFeatureGeometry(
+              mergedComponent,
+              [],
+              featureLayerStyle,
+            )
+            if (mergedLayer) {
+              mergedLayers.push(mergedLayer)
+            }
+          }
+          if (mergedLayers.length === 1) {
+            layer = mergedLayers[0]
+          } else if (mergedLayers.length > 1) {
+            layer = L.layerGroup(mergedLayers)
+          }
+        }
+        if (!layer) {
+          layer = buildLeafletLayerFromOsmMapFeatureGeometry(
+            feature,
+            geometryElements,
+            featureLayerStyle,
+          )
+        }
+        if (!layer) {
+          return
+        }
+        layer.addTo(saveImageSubjectMapInstance)
+        if (typeof layer.bringToFront === 'function') {
+          layer.bringToFront()
+        }
+        if (targetMode === 'selected') {
+          saveImageSubjectMapSelectedLayer = layer
+          return
+        }
+        saveImageSubjectMapHoverLayer = layer
+      }
+
+      function _zoomSaveImageSubjectMapToFeature(feature) {
+        if (!saveImageSubjectMapInstance || !feature || typeof feature !== 'object') {
+          return
+        }
+        const selectedLayer = saveImageSubjectMapSelectedLayer
+        if (selectedLayer && typeof selectedLayer.getBounds === 'function') {
+          const bounds = selectedLayer.getBounds()
+          if (bounds && typeof bounds.isValid === 'function' && bounds.isValid()) {
+            saveImageSubjectMapInstance.fitBounds(bounds.pad(0.2), { maxZoom: 17 })
+            _syncSaveImageSubjectMapZoomLevel()
+            return
+          }
+        }
+        if (selectedLayer && typeof selectedLayer.getLatLng === 'function') {
+          const latLng = selectedLayer.getLatLng()
+          if (
+            latLng &&
+            Number.isFinite(Number(latLng.lat)) &&
+            Number.isFinite(Number(latLng.lng))
+          ) {
+            const targetZoom = Math.max(saveImageSubjectMapInstance.getZoom(), 17)
+            saveImageSubjectMapInstance.setView([Number(latLng.lat), Number(latLng.lng)], targetZoom)
+            _syncSaveImageSubjectMapZoomLevel()
+            return
+          }
+        }
+        const fallbackLatitude = readOsmMapFeatureCoordinateValue(feature.latitude)
+        const fallbackLongitude = readOsmMapFeatureCoordinateValue(feature.longitude)
+        if (fallbackLatitude !== null && fallbackLongitude !== null) {
+          const targetZoom = Math.max(saveImageSubjectMapInstance.getZoom(), 17)
+          saveImageSubjectMapInstance.setView([fallbackLatitude, fallbackLongitude], targetZoom)
+          _syncSaveImageSubjectMapZoomLevel()
+        }
+      }
+
+      async function _loadSaveImageSubjectSelectedFeatureWikidataSuggestions(feature) {
+        const currentToken = ++saveImageSubjectSelectedFeatureWikidataToken
+        saveImageSubjectSelectedFeatureWikidataLoading.value = true
+        saveImageSubjectSelectedFeatureWikidataSuggestions.value = []
+        try {
+          const imageMunicipalityQid = (
+            location.value && typeof location.value === 'object'
+              ? extractWikidataId(String(location.value.municipality_p131 || ''))
+              : ''
+          )
+          const items = await fetchWikidataCandidatesForOsmMapFeature(feature, {
+            lang: locale.value,
+            municipalityQid: imageMunicipalityQid,
+            limit: SAVE_IMAGE_SUBJECT_NEARBY_WIKIDATA_MAX_ITEMS,
+          })
+          if (currentToken !== saveImageSubjectSelectedFeatureWikidataToken) {
+            return
+          }
+          saveImageSubjectSelectedFeatureWikidataSuggestions.value = Array.isArray(items) ? items : []
+        } catch (error) {
+          if (currentToken !== saveImageSubjectSelectedFeatureWikidataToken) {
+            return
+          }
+          saveImageSubjectSelectedFeatureWikidataSuggestions.value = []
+        } finally {
+          if (currentToken === saveImageSubjectSelectedFeatureWikidataToken) {
+            saveImageSubjectSelectedFeatureWikidataLoading.value = false
+          }
+        }
+      }
+
+      async function selectSaveImageSubjectMapFeature(
+        feature,
+        {
+          updateMapView = true,
+          refreshLatest = false,
+          resetPointPair = false,
+        } = {},
+      ) {
+        if (!feature || typeof feature !== 'object') {
+          return
+        }
+        const featureKey = String(feature.key || '').trim()
+        if (!featureKey) {
+          return
+        }
+        const hadSelectedFeature = saveImageSubjectHasActiveSelection.value
+        const previousSelectedFeatureKey = String(saveImageSubjectSelectedMapFeatureKey.value || '').trim().toLowerCase()
+        const normalizedFeatureKey = featureKey.toLowerCase()
+        if (resetPointPair && previousSelectedFeatureKey !== normalizedFeatureKey) {
+          saveImageSubjectMapLatitude.value = ''
+          saveImageSubjectMapLongitude.value = ''
+          saveImageSubjectImageXPercent.value = null
+          saveImageSubjectImageYPercent.value = null
+          _clearSaveImageSubjectMapMarker()
+        }
+        if (updateMapView && !hadSelectedFeature && saveImageSubjectMapInstance) {
+          const viewCenter = saveImageSubjectMapInstance.getCenter()
+          const viewZoom = saveImageSubjectMapInstance.getZoom()
+          if (
+            viewCenter &&
+            Number.isFinite(Number(viewCenter.lat)) &&
+            Number.isFinite(Number(viewCenter.lng)) &&
+            Number.isFinite(Number(viewZoom))
+          ) {
+            saveImageSubjectMapListViewBeforeSelection = {
+              lat: Number(viewCenter.lat),
+              lng: Number(viewCenter.lng),
+              zoom: Number(viewZoom),
+            }
+          } else {
+            saveImageSubjectMapListViewBeforeSelection = null
+          }
+        }
+        const selectionToken = ++saveImageSubjectLatestMetadataToken
+        saveImageSubjectSelectionError.value = ''
+        saveImageSubjectDirectWikidataItem.value = null
+        saveImageSubjectSelectedMapFeatureKey.value = featureKey
+        saveImageSubjectHoveredMapFeatureKey.value = ''
+        _clearSaveImageSubjectMapFeatureHoverLayer()
+        _renderSaveImageSubjectLinkedMarkers()
+        let selectedFeature = feature
+        await _renderSaveImageSubjectMapFeatureLayer(selectedFeature, { mode: 'selected' })
+        if (updateMapView) {
+          _zoomSaveImageSubjectMapToFeature(selectedFeature)
+        }
+
+        if (refreshLatest) {
+          const refreshedFeature = await _refreshSaveImageSubjectMapFeatureFromLatestSources(selectedFeature, selectionToken)
+          if (selectionToken !== saveImageSubjectLatestMetadataToken) {
+            return
+          }
+          if (refreshedFeature && typeof refreshedFeature === 'object') {
+            selectedFeature = refreshedFeature
+            await _renderSaveImageSubjectMapFeatureLayer(selectedFeature, { mode: 'selected' })
+            if (updateMapView) {
+              _zoomSaveImageSubjectMapToFeature(selectedFeature)
+            }
+          }
+        }
+
+        if (selectionToken !== saveImageSubjectLatestMetadataToken) {
+          return
+        }
+        const selectionDebugQids = []
+        const seenSelectionDebugQids = new Set()
+        const pushSelectionDebugQid = (qidValue) => {
+          const qid = extractWikidataId(String(qidValue || ''))
+          if (!qid || seenSelectionDebugQids.has(qid)) {
+            return
+          }
+          seenSelectionDebugQids.add(qid)
+          selectionDebugQids.push(qid)
+        }
+        pushSelectionDebugQid(selectedFeature.directQid)
+        pushSelectionDebugQid(
+          selectedFeature.rawTags && selectedFeature.rawTags.wikidata
+            ? selectedFeature.rawTags.wikidata
+            : '',
+        )
+        for (const mergedDirectQid of Array.isArray(selectedFeature.mergedDirectQids) ? selectedFeature.mergedDirectQids : []) {
+          pushSelectionDebugQid(mergedDirectQid)
+        }
+        const mergedComponentWikidata = []
+        for (const mergedComponent of Array.isArray(selectedFeature.mergedComponents) ? selectedFeature.mergedComponents : []) {
+          if (!mergedComponent || typeof mergedComponent !== 'object') {
+            continue
+          }
+          const componentQid = extractWikidataId(
+            String(
+              mergedComponent.directQid ||
+              (mergedComponent.rawTags && mergedComponent.rawTags.wikidata ? mergedComponent.rawTags.wikidata : '') ||
+              '',
+            ),
+          )
+          if (componentQid) {
+            mergedComponentWikidata.push(componentQid)
+            pushSelectionDebugQid(componentQid)
+          }
+        }
+        logSubjectFeatureSelectionDebug({
+          featureKey: String(selectedFeature.key || ''),
+          featureLabel: String(selectedFeature.displayLabel || ''),
+          featureType: String(selectedFeature.type || ''),
+          featureId: Number.isFinite(Number(selectedFeature.id)) ? Number(selectedFeature.id) : null,
+          directQid: extractWikidataId(String(selectedFeature.directQid || '')),
+          rawWikidata: String(
+            selectedFeature.rawTags && selectedFeature.rawTags.wikidata
+              ? selectedFeature.rawTags.wikidata
+              : '',
+          ),
+          mergedDirectQids: Array.isArray(selectedFeature.mergedDirectQids) ? selectedFeature.mergedDirectQids : [],
+          mergedFeatureCount: Number.isFinite(Number(selectedFeature.mergedFeatureCount))
+            ? Number(selectedFeature.mergedFeatureCount)
+            : 0,
+          mergedComponentWikidata,
+          allDetectedQids: selectionDebugQids,
+        })
+        await _loadSaveImageSubjectSelectedFeatureWikidataSuggestions(selectedFeature)
+        const directQid = extractWikidataId(
+          String(
+            selectedFeature.directQid ||
+            (selectedFeature.rawTags && selectedFeature.rawTags.wikidata ? selectedFeature.rawTags.wikidata : '') ||
+            '',
+          )
+        )
+        if (directQid) {
+          const currentQid = extractWikidataId(String(saveImageSubjectWikidataSearch.value || ''))
+          const currentSelection = _normalizeSaveImageDepictItem(saveImageSubjectSelectedWikidataItem.value)
+          const hasCurrentLabel = Boolean(
+            currentSelection &&
+            currentSelection.id === directQid &&
+            currentSelection.label,
+          )
+          if (!currentQid || currentQid !== directQid || !hasCurrentLabel) {
+            const resolvedDirectItem = _resolveSaveImageSubjectWikidataItem({
+              id: directQid,
+              label: '',
+              description: '',
+            })
+            if (resolvedDirectItem) {
+              saveImageSubjectSelectedWikidataItem.value = resolvedDirectItem
+              saveImageSubjectWikidataSearch.value = saveImageDepictDisplayLabel(resolvedDirectItem)
+            } else {
+              saveImageSubjectWikidataSearch.value = directQid
+              saveImageSubjectSelectedWikidataItem.value = {
+                id: directQid,
+                label: '',
+                description: '',
+              }
+            }
+          }
+        }
+      }
+
+      function showSaveImageSubjectNearbyFeatureList() {
+        saveImageSubjectSelectionError.value = ''
+        saveImageSubjectSelectedMapFeatureKey.value = ''
+        saveImageSubjectHoveredMapFeatureKey.value = ''
+        saveImageSubjectDirectWikidataItem.value = null
+        _clearSaveImageSubjectMapFeatureLayers()
+        _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
+        clearSaveImageSubjectWikidataSelection()
+        if (
+          saveImageSubjectMapInstance &&
+          saveImageSubjectMapListViewBeforeSelection &&
+          Number.isFinite(Number(saveImageSubjectMapListViewBeforeSelection.lat)) &&
+          Number.isFinite(Number(saveImageSubjectMapListViewBeforeSelection.lng)) &&
+          Number.isFinite(Number(saveImageSubjectMapListViewBeforeSelection.zoom))
+        ) {
+          saveImageSubjectMapInstance.setView(
+            [
+              Number(saveImageSubjectMapListViewBeforeSelection.lat),
+              Number(saveImageSubjectMapListViewBeforeSelection.lng),
+            ],
+            Number(saveImageSubjectMapListViewBeforeSelection.zoom),
+          )
+        }
+        saveImageSubjectMapListViewBeforeSelection = null
+        _renderSaveImageSubjectLinkedMarkers()
+      }
+
+      function isSaveImageSubjectMapFeatureSelected(feature) {
+        if (!feature || typeof feature !== 'object') {
+          return false
+        }
+        return String(saveImageSubjectSelectedMapFeatureKey.value || '').trim().toLowerCase() === String(feature.key || '').trim().toLowerCase()
+      }
+
+      function isSaveImageSubjectMapFeatureHovered(feature) {
+        if (!feature || typeof feature !== 'object') {
+          return false
+        }
+        return String(saveImageSubjectHoveredMapFeatureKey.value || '').trim().toLowerCase() === String(feature.key || '').trim().toLowerCase()
+      }
+
+      function onSaveImageSubjectMapFeatureMouseEnter(feature) {
+        if (!feature || typeof feature !== 'object') {
+          return
+        }
+        const featureKey = String(feature.key || '').trim()
+        if (!featureKey) {
+          return
+        }
+        saveImageSubjectHoveredMapFeatureKey.value = featureKey
+        if (isSaveImageSubjectMapFeatureSelected(feature)) {
+          _clearSaveImageSubjectMapFeatureHoverLayer()
+          return
+        }
+        void _renderSaveImageSubjectMapFeatureLayer(feature, { mode: 'hover' })
+      }
+
+      function onSaveImageSubjectMapFeatureMouseLeave(feature) {
+        const featureKey = String(feature && feature.key ? feature.key : '').trim().toLowerCase()
+        if (
+          !featureKey ||
+          String(saveImageSubjectHoveredMapFeatureKey.value || '').trim().toLowerCase() !== featureKey
+        ) {
+          return
+        }
+        saveImageSubjectHoveredMapFeatureKey.value = ''
+        _clearSaveImageSubjectMapFeatureHoverLayer()
+      }
+
+      function formatSaveImageSubjectMapFeatureCoordinates(feature) {
+        if (!feature || typeof feature !== 'object') {
+          return t('noValue')
+        }
+        return formatCoordinatePair(
+          feature.latitude,
+          feature.longitude,
+          locale.value,
+          6,
+          t('noValue'),
+        )
+      }
+
+      function formatSaveImageSubjectMapFeatureDistance(feature) {
+        if (!feature || typeof feature !== 'object' || !Number.isFinite(Number(feature.distanceMeters))) {
+          return t('noValue')
+        }
+        return `${new Intl.NumberFormat(locale.value).format(Number(feature.distanceMeters))} m`
+      }
+
+      async function _loadSaveImageSubjectMapFeatures(latitude, longitude) {
+        const parsedLatitude = Number(latitude)
+        const parsedLongitude = Number(longitude)
+        if (
+          !Number.isFinite(parsedLatitude) ||
+          !Number.isFinite(parsedLongitude) ||
+          !showSaveImageApiForm.value ||
+          !saveImageSubjectTypeLocationRelevant.value
+        ) {
+          _clearSaveImageSubjectMapFeatures()
+          return
+        }
+
+        const currentToken = ++saveImageSubjectMapFeaturesToken
+        saveImageSubjectMapFeaturesLoading.value = true
+        saveImageSubjectMapFeaturesError.value = ''
+        try {
+          const containerWikidataQid = (
+            location.value && typeof location.value === 'object'
+              ? extractWikidataId(String(location.value.municipality_p131 || ''))
+              : ''
+          ) || SAVE_IMAGE_SUBJECT_CONTAINER_FALLBACK_QID
+          const featureGroups = await fetchSaveImageSubjectQueryFeatures(parsedLatitude, parsedLongitude, {
+            radiusMeters: SAVE_IMAGE_SUBJECT_OSM_RADIUS_METERS,
+            nearbyLimit: SAVE_IMAGE_SUBJECT_NEARBY_MAP_FEATURE_BASE_LIMIT,
+            lang: locale.value,
+            containerWikidataQid,
+          })
+          if (
+            currentToken !== saveImageSubjectMapFeaturesToken ||
+            !showSaveImageApiForm.value ||
+            !saveImageSubjectTypeLocationRelevant.value
+          ) {
+            return
+          }
+          const nearbyFeatures = Array.isArray(featureGroups && featureGroups.nearbyFeatures)
+            ? featureGroups.nearbyFeatures
+            : []
+          saveImageSubjectMapFeaturesLoadedLatitude.value = parsedLatitude
+          saveImageSubjectMapFeaturesLoadedLongitude.value = parsedLongitude
+          saveImageSubjectNearbyMapFeatures.value = nearbyFeatures
+          const allFeatures = []
+          const seenFeatureKeys = new Set()
+          for (const feature of nearbyFeatures) {
+            if (!feature || typeof feature !== 'object') {
+              continue
+            }
+            const featureKey = String(feature.key || '').trim().toLowerCase()
+            if (!featureKey || seenFeatureKeys.has(featureKey)) {
+              continue
+            }
+            seenFeatureKeys.add(featureKey)
+            allFeatures.push(feature)
+          }
+          if (allFeatures.length < 1) {
+            saveImageSubjectSelectedMapFeatureKey.value = ''
+            _clearSaveImageSubjectMapFeatureLayers()
+            _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
+            _renderSaveImageSubjectLinkedMarkers()
+            return
+          }
+          const selectedFeatureKey = String(saveImageSubjectSelectedMapFeatureKey.value || '').trim().toLowerCase()
+          const selectedFeature = selectedFeatureKey
+            ? allFeatures.find((feature) => String(feature.key || '').trim().toLowerCase() === selectedFeatureKey)
+            : null
+          if (selectedFeature) {
+            await selectSaveImageSubjectMapFeature(selectedFeature, { updateMapView: false })
+            return
+          }
+          saveImageSubjectSelectedMapFeatureKey.value = ''
+          _clearSaveImageSubjectMapFeatureLayers()
+          _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
+          _renderSaveImageSubjectLinkedMarkers()
+        } catch (error) {
+          if (currentToken !== saveImageSubjectMapFeaturesToken) {
+            return
+          }
+          saveImageSubjectMapFeaturesLoadedLatitude.value = null
+          saveImageSubjectMapFeaturesLoadedLongitude.value = null
+          saveImageSubjectNearbyMapFeatures.value = []
+          saveImageSubjectSelectedMapFeatureKey.value = ''
+          saveImageSubjectMapFeaturesError.value = t('saveImageSubjectFeatureFetchFailed')
+          _clearSaveImageSubjectMapFeatureLayers()
+          _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
+          _renderSaveImageSubjectLinkedMarkers()
+        } finally {
+          if (currentToken === saveImageSubjectMapFeaturesToken) {
+            saveImageSubjectMapFeaturesLoading.value = false
+          }
+        }
+      }
+
+      const refreshSaveImageSubjectMapFeaturesDebounced = debounce((latitude, longitude) => {
+        void _loadSaveImageSubjectMapFeatures(latitude, longitude)
+      }, 250)
+
+      function ensureSaveImageSubjectMap() {
+        if (
+          !showSaveImageApiForm.value ||
+          !saveImageSubjectTypeLocationRelevant.value ||
+          !saveImageSubjectMapElement.value
+        ) {
+          destroySaveImageSubjectMap()
+          return
+        }
+        const selectedLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+        const selectedLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+        const currentLatitude = parseCoordinate(saveImageLatitude.value)
+        const currentLongitude = parseCoordinate(saveImageLongitude.value)
+        const hasSubjectPoint = selectedLatitude !== null && selectedLongitude !== null
+        const hasCurrentCoordinates = currentLatitude !== null && currentLongitude !== null
+        const center = hasSubjectPoint
+          ? [selectedLatitude, selectedLongitude]
+          : (hasCurrentCoordinates ? [currentLatitude, currentLongitude] : [60.1699, 24.9384])
+        const initialZoom = Number.isFinite(saveImageCoordinatePickerLastZoom)
+          ? saveImageCoordinatePickerLastZoom
+          : (hasCurrentCoordinates ? 14 : 6)
+
+        if (!saveImageSubjectMapInstance) {
+          saveImageSubjectMapInstance = L.map(saveImageSubjectMapElement.value, {
+            scrollWheelZoom: 'center',
+            doubleClickZoom: true,
+            touchZoom: 'center',
+          }).setView(center, initialZoom)
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors',
+          }).addTo(saveImageSubjectMapInstance)
+          saveImageSubjectMapInstance.on('click', (event) => {
+            if (!event || !event.latlng) {
+              return
+            }
+            _setSaveImageSubjectMapCoordinates(event.latlng.lat, event.latlng.lng, { updateMapView: false })
+            saveImageSubjectSelectionError.value = ''
+            if (saveImageSubjectHasActiveSelection.value) {
+              return
+            }
+            _prepareSaveImageSubjectMapFeatureLoadingState()
+            refreshSaveImageSubjectMapFeaturesDebounced(event.latlng.lat, event.latlng.lng)
+          })
+          saveImageSubjectMapInstance.on('zoomend', () => {
+            _syncSaveImageSubjectMapZoomLevel()
+          })
+        }
+
+        if (hasSubjectPoint) {
+          _setSaveImageSubjectMapCoordinates(selectedLatitude, selectedLongitude, {
+            updateMapView: false,
+            showMarker: true,
+          })
+          const mapCenter = saveImageSubjectMapInstance.getCenter()
+          const centerMatches = mapCenter && (
+            Math.abs(mapCenter.lat - selectedLatitude) < 0.000001 &&
+            Math.abs(mapCenter.lng - selectedLongitude) < 0.000001
+          )
+          if (!centerMatches) {
+            saveImageSubjectMapInstance.setView(center, Math.max(saveImageSubjectMapInstance.getZoom(), 14))
+            _syncSaveImageSubjectMapZoomLevel()
+          }
+        } else {
+          if (saveImageSubjectMapMarker) {
+            saveImageSubjectMapInstance.removeLayer(saveImageSubjectMapMarker)
+            saveImageSubjectMapMarker = null
+          }
+          saveImageSubjectMapInstance.setView(center, initialZoom)
+          _syncSaveImageSubjectMapZoomLevel()
+        }
+
+        if (saveImageSelectedSubjectMapFeature.value) {
+          void _renderSaveImageSubjectMapFeatureLayer(saveImageSelectedSubjectMapFeature.value, { mode: 'selected' })
+        } else {
+          _clearSaveImageSubjectMapFeatureSelectedLayer()
+        }
+        _renderSaveImageSubjectLinkedMarkers()
+        _syncSaveImageSubjectMapZoomLevel()
+
+        window.setTimeout(() => {
+          if (saveImageSubjectMapInstance) {
+            saveImageSubjectMapInstance.invalidateSize()
+            _syncSaveImageSubjectMapZoomLevel()
+          }
+        }, 0)
+      }
+
+      function onSaveImageSubjectTypeChange() {
+        saveImageSubjectSelectionError.value = ''
+        const normalizedType = normalizeSaveImageSubjectType(saveImageSubjectType.value)
+        saveImageSubjectType.value = normalizedType
+        saveImageSubjectLinkMode.value = preferredSaveImageSubjectLinkMode(normalizedType)
+        if (saveImageSubjectTypeLocationRelevant.value) {
+          if (saveImageSubjectLinkUsesMap.value && !saveImageSubjectMapHasPoint.value) {
+            const latitude = parseCoordinate(saveImageLatitude.value)
+            const longitude = parseCoordinate(saveImageLongitude.value)
+            if (latitude !== null && longitude !== null) {
+              saveImageSubjectMapLatitude.value = latitude.toFixed(6)
+              saveImageSubjectMapLongitude.value = longitude.toFixed(6)
+            }
+          }
+          if (!saveImageSubjectLinkUsesMap.value) {
+            destroySaveImageSubjectMap()
+            _clearSaveImageSubjectMapFeatures()
+            return
+          }
+          const subjectLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+          const subjectLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+          if (subjectLatitude !== null && subjectLongitude !== null) {
+            _prepareSaveImageSubjectMapFeatureLoadingState()
+            refreshSaveImageSubjectMapFeaturesDebounced(subjectLatitude, subjectLongitude)
+          } else {
+            _clearSaveImageSubjectMapFeatures()
+          }
+          void nextTick().then(() => {
+            ensureSaveImageSubjectMap()
+          })
+          return
+        }
+        destroySaveImageSubjectMap()
+        _clearSaveImageSubjectMapFeatures()
+      }
+
+      function onSaveImageSubjectLinkModeChange() {
+        saveImageSubjectSelectionError.value = ''
+        if (!saveImageSubjectTypeLocationRelevant.value) {
+          return
+        }
+        if (!saveImageSubjectLinkUsesMap.value) {
+          destroySaveImageSubjectMap()
+          return
+        }
+        const subjectLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+        const subjectLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+        if (subjectLatitude !== null && subjectLongitude !== null) {
+          if (!_hasSaveImageSubjectMapFeaturesLoadedForCoordinates(subjectLatitude, subjectLongitude)) {
+            _prepareSaveImageSubjectMapFeatureLoadingState()
+            refreshSaveImageSubjectMapFeaturesDebounced(subjectLatitude, subjectLongitude)
+          }
+        }
+        void nextTick().then(() => {
+          ensureSaveImageSubjectMap()
+        })
+      }
+
+      function onSaveImageSubjectImagePreviewClick(event) {
+        if (!event || !event.currentTarget || !saveImagePreviewUrl.value) {
+          return
+        }
+        const bounds = event.currentTarget.getBoundingClientRect
+          ? event.currentTarget.getBoundingClientRect()
+          : null
+        if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width <= 0 || bounds.height <= 0) {
+          return
+        }
+        const clickX = Number(event.clientX)
+        const clickY = Number(event.clientY)
+        if (!Number.isFinite(clickX) || !Number.isFinite(clickY)) {
+          return
+        }
+        const xPercent = ((clickX - bounds.left) / bounds.width) * 100
+        const yPercent = ((clickY - bounds.top) / bounds.height) * 100
+        saveImageSubjectImageXPercent.value = Math.max(0, Math.min(100, xPercent))
+        saveImageSubjectImageYPercent.value = Math.max(0, Math.min(100, yPercent))
+        saveImageSubjectSelectionError.value = ''
+      }
+
+      function _resolveSaveImageSubjectWikidataItem(item) {
+        const normalizedItem = _normalizeSaveImageDepictItem(item)
+        if (!normalizedItem) {
+          return null
+        }
+        let resolvedLabel = normalizedItem.label
+        let resolvedDescription = normalizedItem.description
+        const targetQid = normalizedItem.id
+
+        const tryApplyCandidate = (candidate) => {
+          const normalizedCandidate = _normalizeSaveImageDepictItem(candidate)
+          if (!normalizedCandidate || normalizedCandidate.id !== targetQid) {
+            return
+          }
+          if (!resolvedLabel && normalizedCandidate.label) {
+            resolvedLabel = normalizedCandidate.label
+          }
+          if (!resolvedDescription && normalizedCandidate.description) {
+            resolvedDescription = normalizedCandidate.description
+          }
+        }
+
+        tryApplyCandidate(saveImageSubjectSelectedWikidataItem.value)
+        tryApplyCandidate(saveImageSubjectDirectWikidataItem.value)
+        for (const sourceCollection of [
+          saveImageSubjectSelectedFeatureWikidataSuggestions.value,
+          saveImageSubjectWikidataSuggestions.value,
+          saveImageNearbyDepictSuggestions.value,
+          saveImageSelectedDepicts.value,
+        ]) {
+          for (const candidate of Array.isArray(sourceCollection) ? sourceCollection : []) {
+            tryApplyCandidate(candidate)
+            if (resolvedLabel && resolvedDescription) {
+              break
+            }
+          }
+          if (resolvedLabel && resolvedDescription) {
+            break
+          }
+        }
+
+        const selectedFeature = saveImageSelectedSubjectMapFeature.value
+        if (selectedFeature && typeof selectedFeature === 'object') {
+          const selectedFeatureDirectQids = new Set()
+          const pushSelectedFeatureDirectQid = (candidateValue) => {
+            const candidateQid = extractWikidataId(String(candidateValue || ''))
+            if (candidateQid) {
+              selectedFeatureDirectQids.add(candidateQid)
+            }
+          }
+          pushSelectedFeatureDirectQid(selectedFeature.directQid)
+          pushSelectedFeatureDirectQid(
+            selectedFeature.rawTags && selectedFeature.rawTags.wikidata
+              ? selectedFeature.rawTags.wikidata
+              : '',
+          )
+          for (const mergedDirectQid of Array.isArray(selectedFeature.mergedDirectQids) ? selectedFeature.mergedDirectQids : []) {
+            pushSelectedFeatureDirectQid(mergedDirectQid)
+          }
+          if (!resolvedLabel && selectedFeatureDirectQids.has(targetQid)) {
+            const fallbackFeatureLabel = typeof selectedFeature.displayLabel === 'string'
+              ? selectedFeature.displayLabel.trim()
+              : ''
+            if (
+              fallbackFeatureLabel &&
+              fallbackFeatureLabel.toLowerCase() !== targetQid.toLowerCase()
+            ) {
+              resolvedLabel = fallbackFeatureLabel
+            }
+          }
+          if (!resolvedLabel || !resolvedDescription) {
+            for (const reverseCandidate of [
+              ...(Array.isArray(selectedFeature.wikidataReverseCandidates) ? selectedFeature.wikidataReverseCandidates : []),
+              ...(Array.isArray(selectedFeature.wikidataNameMatchCandidates) ? selectedFeature.wikidataNameMatchCandidates : []),
+            ]) {
+              const normalizedReverseCandidate = _normalizeSaveImageDepictItem(reverseCandidate)
+              if (!normalizedReverseCandidate || normalizedReverseCandidate.id !== targetQid) {
+                continue
+              }
+              if (!resolvedLabel && normalizedReverseCandidate.label) {
+                resolvedLabel = normalizedReverseCandidate.label
+              }
+              if (!resolvedDescription && normalizedReverseCandidate.description) {
+                resolvedDescription = normalizedReverseCandidate.description
+              }
+              if (resolvedLabel && resolvedDescription) {
+                break
+              }
+            }
+          }
+        }
+
+        return {
+          id: targetQid,
+          label: resolvedLabel,
+          description: resolvedDescription,
+        }
+      }
+
+      function _setSaveImageSubjectWikidataSelection(item) {
+        const resolvedItem = _resolveSaveImageSubjectWikidataItem(item)
+        if (!resolvedItem) {
+          saveImageSubjectSelectedWikidataItem.value = null
+          return null
+        }
+        saveImageSubjectSelectedWikidataItem.value = resolvedItem
+        return resolvedItem
+      }
+
+      const searchSaveImageSubjectWikidataDebounced = debounce(async (searchTerm) => {
+        saveImageSubjectWikidataLoading.value = true
+        try {
+          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
+          const suggestions = Array.isArray(items) ? items : []
+          const uniqueSuggestions = []
+          const seen = new Set()
+          for (const suggestion of suggestions) {
+            const normalizedSuggestion = _saveImageDepictFromWikidataSuggestion(suggestion)
+            if (!normalizedSuggestion) {
+              continue
+            }
+            const dedupeKey = normalizedSuggestion.id.toLowerCase()
+            if (seen.has(dedupeKey)) {
+              continue
+            }
+            seen.add(dedupeKey)
+            uniqueSuggestions.push(normalizedSuggestion)
+          }
+          saveImageSubjectWikidataSuggestions.value = uniqueSuggestions
+        } catch (error) {
+          saveImageSubjectWikidataSuggestions.value = []
+        } finally {
+          saveImageSubjectWikidataLoading.value = false
+        }
+      }, 250)
+
+      function onSaveImageSubjectWikidataInput() {
+        saveImageSubjectSelectionError.value = ''
+        const query = saveImageSubjectWikidataSearch.value.trim()
+        saveImageSubjectSelectedWikidataItem.value = null
+        if (!query) {
+          saveImageSubjectWikidataSuggestions.value = []
+          saveImageSubjectWikidataLoading.value = false
+          return
+        }
+        searchSaveImageSubjectWikidataDebounced(query)
+      }
+
+      function onSaveImageSubjectWikidataFocus() {
+        if (saveImageSubjectWikidataSearch.value.trim()) {
+          onSaveImageSubjectWikidataInput()
+        }
+      }
+
+      function hideSaveImageSubjectWikidataSuggestionsSoon() {
+        window.setTimeout(() => {
+          saveImageSubjectWikidataSuggestions.value = []
+        }, 140)
+      }
+
+      function onSaveImageSubjectWikidataKeydown(event) {
+        if (!event || event.key !== 'Enter') {
+          return
+        }
+        event.preventDefault()
+        addSaveImageSubjectLink()
+      }
+
+      function selectSaveImageSubjectWikidataSuggestion(item) {
+        const selectedItem = _setSaveImageSubjectWikidataSelection(item)
+        if (!selectedItem) {
+          return
+        }
+        const qid = selectedItem.id
+        if (!saveImageSelectedSubjectMapFeature.value) {
+          saveImageSubjectDirectWikidataItem.value = selectedItem
+        }
+        saveImageSubjectWikidataSearch.value = saveImageDepictDisplayLabel(selectedItem)
+        saveImageSubjectWikidataSuggestions.value = []
+        saveImageSubjectWikidataLoading.value = false
+      }
+
+      function isSaveImageSubjectWikidataSuggestionSelected(item) {
+        const candidateQid = extractWikidataId(
+          String(
+            item && typeof item === 'object'
+              ? (item.id || item.qid || '')
+              : '',
+          ),
+        )
+        if (!candidateQid) {
+          return false
+        }
+        return candidateQid === saveImageSubjectSelectedWikidataQid.value
+      }
+
+      function selectSaveImageSubjectDirectWikidataSuggestion(item, { resetPointPair = true } = {}) {
+        const normalizedItem = _normalizeSaveImageDepictItem(item)
+        if (!normalizedItem) {
+          return
+        }
+        const hadSelectedFeature = saveImageSubjectHasActiveSelection.value
+        if (!hadSelectedFeature && saveImageSubjectMapInstance) {
+          const viewCenter = saveImageSubjectMapInstance.getCenter()
+          const viewZoom = saveImageSubjectMapInstance.getZoom()
+          if (
+            viewCenter &&
+            Number.isFinite(Number(viewCenter.lat)) &&
+            Number.isFinite(Number(viewCenter.lng)) &&
+            Number.isFinite(Number(viewZoom))
+          ) {
+            saveImageSubjectMapListViewBeforeSelection = {
+              lat: Number(viewCenter.lat),
+              lng: Number(viewCenter.lng),
+              zoom: Number(viewZoom),
+            }
+          } else {
+            saveImageSubjectMapListViewBeforeSelection = null
+          }
+        }
+        if (resetPointPair) {
+          saveImageSubjectMapLatitude.value = ''
+          saveImageSubjectMapLongitude.value = ''
+          saveImageSubjectImageXPercent.value = null
+          saveImageSubjectImageYPercent.value = null
+          _clearSaveImageSubjectMapMarker()
+        }
+        saveImageSubjectSelectionError.value = ''
+        saveImageSubjectSelectedMapFeatureKey.value = ''
+        saveImageSubjectHoveredMapFeatureKey.value = ''
+        _clearSaveImageSubjectMapFeatureLayers()
+        _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
+        const selectedItem = _setSaveImageSubjectWikidataSelection(normalizedItem)
+        if (!selectedItem) {
+          return
+        }
+        saveImageSubjectDirectWikidataItem.value = selectedItem
+        saveImageSubjectWikidataSearch.value = saveImageDepictDisplayLabel(selectedItem)
+        saveImageSubjectWikidataSuggestions.value = []
+        saveImageSubjectWikidataLoading.value = false
+        _renderSaveImageSubjectLinkedMarkers()
+      }
+
+      function clearSaveImageSubjectWikidataSelection() {
+        saveImageSubjectSelectionError.value = ''
+        saveImageSubjectSelectedWikidataItem.value = null
+        saveImageSubjectWikidataSearch.value = ''
+        saveImageSubjectWikidataSuggestions.value = []
+        saveImageSubjectWikidataLoading.value = false
+        if (!saveImageSelectedSubjectMapFeature.value) {
+          saveImageSubjectDirectWikidataItem.value = null
+        }
+      }
+
+      function addSaveImageSubjectLink() {
+        saveImageSubjectSelectionError.value = ''
+        if (!saveImageSubjectTypeLocationRelevant.value) {
+          return
+        }
+        const requiresMapPoint = saveImageSubjectLinkUsesMap.value
+        const mapLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+        const mapLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+        if (requiresMapPoint && (mapLatitude === null || mapLongitude === null)) {
+          saveImageSubjectSelectionError.value = t('saveImageSubjectMapPointRequired')
+          return
+        }
+        if (!saveImageSubjectImageHasPoint.value) {
+          saveImageSubjectSelectionError.value = t('saveImageSubjectImagePointRequired')
+          return
+        }
+        const selectedItem = saveImageSubjectSelectedWikidataItem.value
+        const selectedQid = extractWikidataId(
+          String(selectedItem && selectedItem.id ? selectedItem.id : saveImageSubjectWikidataSearch.value)
+        )
+        if (!selectedQid) {
+          saveImageSubjectSelectionError.value = t('saveImageSubjectWikidataRequired')
+          return
+        }
+        const selectedLabel = selectedItem && typeof selectedItem.label === 'string'
+          ? selectedItem.label.trim()
+          : ''
+        const selectedDescription = selectedItem && typeof selectedItem.description === 'string'
+          ? selectedItem.description.trim()
+          : ''
+        _addSaveImageDepict({ id: selectedQid, label: selectedLabel, description: selectedDescription })
+
+        const imageX = Number(saveImageSubjectImageXPercent.value)
+        const imageY = Number(saveImageSubjectImageYPercent.value)
+        const selectedMapFeature = saveImageSelectedSubjectMapFeature.value
+        const selectedMapFeatureKey = selectedMapFeature && typeof selectedMapFeature.key === 'string'
+          ? selectedMapFeature.key.trim()
+          : ''
+        const selectedMapFeatureType = selectedMapFeature && typeof selectedMapFeature.type === 'string'
+          ? selectedMapFeature.type.trim()
+          : ''
+        const selectedMapFeatureId = selectedMapFeature && Number.isFinite(Number(selectedMapFeature.id))
+          ? Number.parseInt(String(selectedMapFeature.id), 10)
+          : null
+        const selectedMapFeatureLabel = selectedMapFeature && typeof selectedMapFeature.displayLabel === 'string'
+          ? selectedMapFeature.displayLabel.trim()
+          : ''
+        const mapDedupPart = requiresMapPoint && mapLatitude !== null && mapLongitude !== null
+          ? `${mapLatitude.toFixed(6)},${mapLongitude.toFixed(6)}`
+          : 'no-map'
+        const dedupeKey = [
+          selectedQid.toLowerCase(),
+          mapDedupPart,
+          imageX.toFixed(3),
+          imageY.toFixed(3),
+        ].join('|')
+        const hasDuplicate = saveImageLinkedSubjects.value.some((entry) => (
+          entry &&
+          typeof entry === 'object' &&
+          String(entry.dedupeKey || '').toLowerCase() === dedupeKey
+        ))
+        let linkedSubjectAdded = false
+        if (!hasDuplicate) {
+          saveImageLinkedSubjects.value = [
+            ...saveImageLinkedSubjects.value,
+            {
+              dedupeKey,
+              id: selectedQid,
+              label: selectedLabel,
+              map_latitude: requiresMapPoint ? mapLatitude : null,
+              map_longitude: requiresMapPoint ? mapLongitude : null,
+              image_x_percent: imageX,
+              image_y_percent: imageY,
+              osm_feature_key: requiresMapPoint ? selectedMapFeatureKey : '',
+              osm_feature_type: requiresMapPoint ? selectedMapFeatureType : '',
+              osm_feature_id: requiresMapPoint ? selectedMapFeatureId : null,
+              osm_feature_label: requiresMapPoint ? selectedMapFeatureLabel : '',
+            },
+          ]
+          linkedSubjectAdded = true
+        }
+        saveImageSubjectWikidataSearch.value = saveImageDepictDisplayLabel({
+          id: selectedQid,
+          label: selectedLabel,
+          description: selectedDescription,
+        })
+        saveImageSubjectWikidataSuggestions.value = []
+        if (linkedSubjectAdded) {
+          refreshSaveImageNearbyCategorySuggestionsDebounced()
+          if (requiresMapPoint) {
+            showSaveImageSubjectNearbyFeatureList()
+            return
+          }
+          clearSaveImageSubjectWikidataSelection()
+          saveImageSubjectImageXPercent.value = null
+          saveImageSubjectImageYPercent.value = null
+          return
+        }
+        _renderSaveImageSubjectLinkedMarkers()
+      }
+
+      function selectSaveImageSubjectFeatureWikidataSuggestion(item) {
+        selectSaveImageSubjectWikidataSuggestion(item)
+      }
+
+      function formatSaveImageLinkedSubjectCoordinates(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        return formatCoordinatePair(
+          item.map_latitude,
+          item.map_longitude,
+          locale.value,
+          6,
+          t('noValue'),
+        )
+      }
+
+      function formatSaveImageLinkedSubjectImagePoint(item) {
+        if (!item || typeof item !== 'object') {
+          return t('noValue')
+        }
+        const x = Number(item.image_x_percent)
+        const y = Number(item.image_y_percent)
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          return t('noValue')
+        }
+        const numberFormat = new Intl.NumberFormat(locale.value, {
+          minimumFractionDigits: 1,
+          maximumFractionDigits: 1,
+        })
+        return `${numberFormat.format(Math.max(0, Math.min(100, x)))}%, ${numberFormat.format(Math.max(0, Math.min(100, y)))}%`
+      }
+
+      function removeSaveImageLinkedSubject(item) {
+        if (!item || typeof item !== 'object') {
+          return
+        }
+        const removeKey = typeof item.dedupeKey === 'string' ? item.dedupeKey : ''
+        const removeId = extractWikidataId(String(item.id || ''))
+        saveImageLinkedSubjects.value = saveImageLinkedSubjects.value.filter((entry) => {
+          if (!entry || typeof entry !== 'object') {
+            return false
+          }
+          if (removeKey && String(entry.dedupeKey || '') === removeKey) {
+            return false
+          }
+          if (!removeKey && removeId && extractWikidataId(String(entry.id || '')) === removeId) {
+            return false
+          }
+          return true
+        })
+        saveImageSubjectSelectionError.value = ''
+        _renderSaveImageSubjectLinkedMarkers()
+        refreshSaveImageNearbyCategorySuggestionsDebounced()
+      }
+
+      function _normalizeUploadCategory(value) {
+        return normalizeCommonsCategoryName(value)
       }
 
       function _normalizeSaveImageDepictItem(item) {
@@ -5666,6 +12114,20 @@ LIMIT {{limit}}`,
         saveImageApiUploading.value = false
         saveImageHeading.value = ''
         saveImageApiCoordinateMode.value = 'photographer'
+        saveImageSubjectType.value = ''
+        saveImageSubjectLinkMode.value = 'map'
+        saveImageSubjectMapLatitude.value = ''
+        saveImageSubjectMapLongitude.value = ''
+        saveImageSubjectImageXPercent.value = null
+        saveImageSubjectImageYPercent.value = null
+        saveImageSubjectWikidataSearch.value = ''
+        saveImageSubjectWikidataSuggestions.value = []
+        saveImageSubjectWikidataLoading.value = false
+        _clearSaveImageSubjectMapFeatures()
+        saveImageSubjectSelectedWikidataItem.value = null
+        saveImageSubjectSelectionError.value = ''
+        saveImageLinkedSubjects.value = []
+        destroySaveImageSubjectMap()
         saveImageCategorySearch.value = ''
         saveImageCategorySuggestions.value = []
         saveImageCategoryLoading.value = false
@@ -5679,6 +12141,7 @@ LIMIT {{limit}}`,
         saveImageNearbyDepictLoading.value = false
         saveImageNearbyDepictToken += 1
         saveImageSubcategorySuggestions.value = []
+        saveImageSubcategoryFarSuggestions.value = []
         saveImageSubcategoryLoading.value = false
         saveImageSubcategoryToken += 1
         _clearSaveImageSelectedCategoryAncestors()
@@ -5713,6 +12176,10 @@ LIMIT {{limit}}`,
         saveImageApiTargetFilename.value = ''
         saveImageApiTargetFilenameTouched.value = false
         _resetSaveImageApiTargetFilenameAvailability()
+        saveImageFilenameBuilderUseSubjects.value = true
+        saveImageFilenameBuilderUseDate.value = true
+        saveImageFilenameBuilderUseLocation.value = true
+        saveImageFilenameBuilderUseCategories.value = true
         saveImageIsOwnPhoto.value = true
         saveImageApiAuthor.value = ''
         saveImageApiSourceUrl.value = ''
@@ -5721,6 +12188,9 @@ LIMIT {{limit}}`,
         saveImageApiElevationMeters.value = ''
         saveImageElevationFromExif.value = false
         saveImageIncludeElevation.value = false
+        saveImageCaptionLanguage.value = _normalizeSaveImageMetadataLanguage(locale.value)
+        saveImageDescription.value = ''
+        saveImageDescriptionLanguage.value = _normalizeSaveImageMetadataLanguage(locale.value)
         _syncSaveImageAuthorFromOwnershipSelection()
         if (saveImageFileInputElement.value) {
           saveImageFileInputElement.value.value = ''
@@ -5808,6 +12278,379 @@ LIMIT {{limit}}`,
         return saveImageSelectedCategories.value.some(
           (existingCategory) => String(existingCategory || '').toLowerCase() === dedupeKey,
         )
+      }
+
+      function _selectedSaveImageLinkedSubjectQids() {
+        const qids = []
+        const seenQids = new Set()
+        for (const linkedItem of Array.isArray(saveImageLinkedSubjects.value) ? saveImageLinkedSubjects.value : []) {
+          const qid = extractWikidataId(
+            String(
+              linkedItem && typeof linkedItem === 'object'
+                ? linkedItem.id || ''
+                : '',
+            ),
+          )
+          if (!qid || seenQids.has(qid)) {
+            continue
+          }
+          seenQids.add(qid)
+          qids.push(qid)
+          if (qids.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_QIDS) {
+            break
+          }
+        }
+        return qids
+      }
+
+      function _saveImageCategorySuggestionYear() {
+        const rawDateValue = typeof saveImageApiDateCreated.value === 'string'
+          ? saveImageApiDateCreated.value.trim()
+          : ''
+        if (!rawDateValue) {
+          return ''
+        }
+
+        const parsedDate = parseWikidataDateParts(rawDateValue)
+        if (parsedDate && Number.isFinite(parsedDate.year) && parsedDate.year >= 1) {
+          return String(parsedDate.year)
+        }
+
+        const yearMatch = rawDateValue.match(/^([+-]?\d{1,6})/)
+        if (!yearMatch || !yearMatch[1]) {
+          return ''
+        }
+        const parsedYear = Number.parseInt(yearMatch[1], 10)
+        if (!Number.isFinite(parsedYear) || parsedYear < 1) {
+          return ''
+        }
+        return String(parsedYear)
+      }
+
+      function _saveImageCategorySuggestionLocationPlaceLabels() {
+        if (!location.value || typeof location.value !== 'object') {
+          return []
+        }
+
+        const labels = []
+        const seenLabelKeys = new Set()
+        const pushLabel = (rawLabel) => {
+          const label = typeof rawLabel === 'string' ? rawLabel.trim() : ''
+          if (!label) {
+            return false
+          }
+          if (/^https?:\/\//i.test(label) || /^wd:Q\d+$/i.test(label)) {
+            return false
+          }
+          const maybeQid = extractWikidataId(label)
+          if (maybeQid && maybeQid.toLowerCase() === label.toLowerCase()) {
+            return false
+          }
+          const dedupeKey = label.toLowerCase()
+          if (seenLabelKeys.has(dedupeKey)) {
+            return false
+          }
+          seenLabelKeys.add(dedupeKey)
+          labels.push(label)
+          return true
+        }
+
+        pushLabel(location.value.municipality_p131_label)
+        pushLabel(location.value.location_p276_label)
+
+        const locationP706 = location.value.location_p706
+        if (Array.isArray(locationP706)) {
+          for (const entry of locationP706) {
+            if (entry && typeof entry === 'object') {
+              pushLabel(entry.label || entry.name)
+            } else {
+              pushLabel(entry)
+            }
+            if (labels.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES) {
+              break
+            }
+          }
+        } else if (locationP706 && typeof locationP706 === 'object') {
+          pushLabel(locationP706.label || locationP706.name)
+        } else {
+          pushLabel(locationP706)
+        }
+
+        const geographicEntities = Array.isArray(location.value.geographic_entities)
+          ? location.value.geographic_entities
+          : []
+        for (const entry of geographicEntities) {
+          if (entry && typeof entry === 'object') {
+            pushLabel(entry.label || entry.name)
+          } else {
+            pushLabel(entry)
+          }
+          if (labels.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES) {
+            break
+          }
+        }
+
+        return labels.slice(0, SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES)
+      }
+
+      function _buildSaveImageSubjectCategorySuggestionCacheKey(subjectQids, yearValue, placeLabels = []) {
+        const normalizedQids = []
+        const seenQids = new Set()
+        for (const rawQid of Array.isArray(subjectQids) ? subjectQids : []) {
+          const qid = extractWikidataId(String(rawQid || ''))
+          if (!qid || seenQids.has(qid)) {
+            continue
+          }
+          seenQids.add(qid)
+          normalizedQids.push(qid)
+        }
+        if (normalizedQids.length < 1) {
+          return ''
+        }
+        normalizedQids.sort()
+        const normalizedLocale = normalizeSupportedLocale(locale.value) || 'en'
+        const normalizedYear = String(yearValue || '').trim() || '-'
+        const normalizedPlaces = []
+        const seenPlaces = new Set()
+        for (const rawPlaceLabel of Array.isArray(placeLabels) ? placeLabels : []) {
+          const normalizedPlaceLabel = String(rawPlaceLabel || '').trim()
+          if (!normalizedPlaceLabel) {
+            continue
+          }
+          const dedupeKey = normalizedPlaceLabel.toLowerCase()
+          if (seenPlaces.has(dedupeKey)) {
+            continue
+          }
+          seenPlaces.add(dedupeKey)
+          normalizedPlaces.push(normalizedPlaceLabel)
+        }
+        normalizedPlaces.sort((left, right) => left.localeCompare(right, 'en', { sensitivity: 'base' }))
+        const normalizedPlaceSegment = normalizedPlaces.length > 0 ? normalizedPlaces.join('|') : '-'
+        return `${normalizedLocale}|${normalizedYear}|${normalizedQids.join(',')}|${normalizedPlaceSegment}`
+      }
+
+      function _readSaveImageSubjectCategorySuggestionCache(cacheKey) {
+        const normalizedKey = String(cacheKey || '').trim()
+        if (!normalizedKey || !saveImageSubjectCategorySuggestionCache.has(normalizedKey)) {
+          return null
+        }
+        const cached = saveImageSubjectCategorySuggestionCache.get(normalizedKey)
+        if (!Array.isArray(cached)) {
+          saveImageSubjectCategorySuggestionCache.delete(normalizedKey)
+          return null
+        }
+        saveImageSubjectCategorySuggestionCache.delete(normalizedKey)
+        saveImageSubjectCategorySuggestionCache.set(normalizedKey, cached)
+        return cached.slice()
+      }
+
+      function _writeSaveImageSubjectCategorySuggestionCache(cacheKey, categories) {
+        const normalizedKey = String(cacheKey || '').trim()
+        if (!normalizedKey) {
+          return
+        }
+        const normalizedCategories = []
+        const seenKeys = new Set()
+        for (const candidateCategory of Array.isArray(categories) ? categories : []) {
+          const normalizedCategory = _normalizeUploadCategory(String(candidateCategory || ''))
+          if (!normalizedCategory) {
+            continue
+          }
+          const dedupeKey = normalizedCategory.toLowerCase()
+          if (seenKeys.has(dedupeKey)) {
+            continue
+          }
+          seenKeys.add(dedupeKey)
+          normalizedCategories.push(normalizedCategory)
+        }
+        if (saveImageSubjectCategorySuggestionCache.has(normalizedKey)) {
+          saveImageSubjectCategorySuggestionCache.delete(normalizedKey)
+        }
+        saveImageSubjectCategorySuggestionCache.set(normalizedKey, normalizedCategories)
+        while (saveImageSubjectCategorySuggestionCache.size > SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_CACHE_MAX_ITEMS) {
+          const oldestKey = saveImageSubjectCategorySuggestionCache.keys().next().value
+          if (!oldestKey) {
+            break
+          }
+          saveImageSubjectCategorySuggestionCache.delete(oldestKey)
+        }
+      }
+
+      async function _loadSaveImageLinkedSubjectCategorySuggestions() {
+        const selectedQids = _selectedSaveImageLinkedSubjectQids()
+        if (selectedQids.length < 1) {
+          return []
+        }
+        const suggestionYear = _saveImageCategorySuggestionYear()
+        const locationPlaceLabels = _saveImageCategorySuggestionLocationPlaceLabels()
+        const cacheKey = _buildSaveImageSubjectCategorySuggestionCacheKey(
+          selectedQids,
+          suggestionYear,
+          locationPlaceLabels,
+        )
+        const cachedSuggestions = _readSaveImageSubjectCategorySuggestionCache(cacheKey)
+        if (Array.isArray(cachedSuggestions)) {
+          return cachedSuggestions
+        }
+
+        const contextPayload = await fetchWikidataCategoryContextForQids(selectedQids, {
+          lang: locale.value,
+        })
+        const subjectCategories = []
+        const seenSubjectCategoryKeys = new Set()
+        for (const rawCategory of (
+          contextPayload &&
+          typeof contextPayload === 'object' &&
+          Array.isArray(contextPayload.subjectCategories)
+            ? contextPayload.subjectCategories
+            : []
+        )) {
+          const normalizedCategory = _normalizeUploadCategory(String(rawCategory || ''))
+          if (!normalizedCategory) {
+            continue
+          }
+          const dedupeKey = normalizedCategory.toLowerCase()
+          if (seenSubjectCategoryKeys.has(dedupeKey)) {
+            continue
+          }
+          seenSubjectCategoryKeys.add(dedupeKey)
+          subjectCategories.push(normalizedCategory)
+          if (subjectCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_P373) {
+            break
+          }
+        }
+
+        const placeLabels = []
+        const seenPlaceLabelKeys = new Set()
+        const pushPlaceLabel = (rawPlaceLabel) => {
+          const placeLabel = String(rawPlaceLabel || '').trim()
+          if (!placeLabel) {
+            return false
+          }
+          const maybeQid = extractWikidataId(placeLabel)
+          if (maybeQid && maybeQid.toLowerCase() === placeLabel.toLowerCase()) {
+            return false
+          }
+          const dedupeKey = placeLabel.toLowerCase()
+          if (seenPlaceLabelKeys.has(dedupeKey)) {
+            return false
+          }
+          seenPlaceLabelKeys.add(dedupeKey)
+          placeLabels.push(placeLabel)
+          return true
+        }
+        for (const placeLabel of locationPlaceLabels) {
+          pushPlaceLabel(placeLabel)
+          if (placeLabels.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES) {
+            break
+          }
+        }
+        if (placeLabels.length < SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES) {
+          for (const place of (
+            contextPayload &&
+            typeof contextPayload === 'object' &&
+            Array.isArray(contextPayload.places)
+              ? contextPayload.places
+              : []
+          )) {
+            pushPlaceLabel(
+              place && typeof place === 'object'
+                ? place.label || ''
+                : '',
+            )
+            if (placeLabels.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_PLACES) {
+              break
+            }
+          }
+        }
+
+        const candidateCategories = []
+        const seenCandidateKeys = new Set()
+        const pushCandidateCategory = (rawCategory) => {
+          if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+            return false
+          }
+          const normalizedCategory = _normalizeUploadCategory(String(rawCategory || ''))
+          if (!normalizedCategory) {
+            return false
+          }
+          const dedupeKey = normalizedCategory.toLowerCase()
+          if (seenCandidateKeys.has(dedupeKey)) {
+            return false
+          }
+          seenCandidateKeys.add(dedupeKey)
+          candidateCategories.push(normalizedCategory)
+          return true
+        }
+
+        for (const subjectCategory of subjectCategories) {
+          const subjectCategoryDisplay = subjectCategory.replace(/_/g, ' ')
+          for (const placeLabel of placeLabels) {
+            pushCandidateCategory(`${subjectCategoryDisplay} in ${placeLabel}`)
+            if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+              break
+            }
+          }
+          if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+            break
+          }
+        }
+
+        for (const subjectCategory of subjectCategories) {
+          if (!pushCandidateCategory(subjectCategory)) {
+            continue
+          }
+        }
+
+        if (suggestionYear) {
+          for (const placeLabel of placeLabels) {
+            pushCandidateCategory(`${suggestionYear} in ${placeLabel}`)
+            if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+              break
+            }
+          }
+        }
+
+        if (suggestionYear) {
+          for (const subjectCategory of subjectCategories) {
+            const subjectCategoryDisplay = subjectCategory.replace(/_/g, ' ')
+            pushCandidateCategory(`${subjectCategoryDisplay} in ${suggestionYear}`)
+            if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+              break
+            }
+            pushCandidateCategory(`${subjectCategoryDisplay} photographed in ${suggestionYear}`)
+            if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+              break
+            }
+          }
+        }
+
+        if (candidateCategories.length < 1) {
+          _writeSaveImageSubjectCategorySuggestionCache(cacheKey, [])
+          return []
+        }
+
+        const existenceByDedupeKey = await fetchCommonsCategoryExistenceMap(candidateCategories)
+        const existingCategories = []
+        for (const candidateCategory of candidateCategories) {
+          const dedupeKey = candidateCategory.toLowerCase()
+          if (existenceByDedupeKey.get(dedupeKey) !== true) {
+            continue
+          }
+          existingCategories.push(candidateCategory)
+        }
+        if (SUBJECT_WIKIDATA_DEBUG_LOG_ENABLED) {
+          console.log('[SUBJECT-CATEGORY-SUGGESTIONS-DEBUG]', {
+            selectedQids,
+            locationPlaceLabels,
+            placeLabels,
+            subjectCategories,
+            candidateCategories,
+            existingCategories,
+          })
+        }
+        _writeSaveImageSubjectCategorySuggestionCache(cacheKey, existingCategories)
+        return existingCategories
       }
 
       async function _fetchCommonsCategoryExists(categoryName) {
@@ -6105,11 +12948,13 @@ LIMIT {{limit}}`,
         saveImageNearbyDepictLoading.value = true
         try {
           const [
+            linkedSubjectCategoryResult,
             wikidataNearbyCategoryResult,
             osmNearbyCategoryResult,
             wikidataNearbyDepictResult,
             osmNearbyDepictResult,
           ] = await Promise.allSettled([
+            _loadSaveImageLinkedSubjectCategorySuggestions(),
             fetchNearbyWikidataCommonsCategories(parsedLatitude, parsedLongitude, {
               radiusMeters: SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS,
               limit: SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS,
@@ -6143,6 +12988,13 @@ LIMIT {{limit}}`,
               ? wikidataNearbyCategoryResult.value
               : []
           )
+          const linkedSubjectCategoryItems = (
+            linkedSubjectCategoryResult.status === 'fulfilled' && Array.isArray(linkedSubjectCategoryResult.value)
+              ? linkedSubjectCategoryResult.value
+              : []
+          ).map((categoryName) => ({
+            category: _normalizeUploadCategory(String(categoryName || '')),
+          })).filter((item) => item.category)
           const osmNearbyCategoryItems = (
             osmNearbyCategoryResult.status === 'fulfilled' && Array.isArray(osmNearbyCategoryResult.value)
               ? osmNearbyCategoryResult.value
@@ -6160,7 +13012,7 @@ LIMIT {{limit}}`,
           )
 
           const combinedNearbyCategoryItems = []
-          const categorySourceItems = [wikidataNearbyCategoryItems, osmNearbyCategoryItems]
+          const categorySourceItems = [linkedSubjectCategoryItems, wikidataNearbyCategoryItems, osmNearbyCategoryItems]
           let sourceIndex = 0
           while (combinedNearbyCategoryItems.length < SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS) {
             let addedAtLeastOne = false
@@ -6406,6 +13258,7 @@ LIMIT {{limit}}`,
           : []
         if (selectedCategories.length === 0) {
           saveImageSubcategorySuggestions.value = []
+          saveImageSubcategoryFarSuggestions.value = []
           saveImageSubcategoryLoading.value = false
           return
         }
@@ -6422,8 +13275,9 @@ LIMIT {{limit}}`,
         const selectedDedupeKeys = new Set(
           selectedCategories.map((categoryName) => _normalizeUploadCategory(categoryName).toLowerCase()).filter(Boolean),
         )
-        const suggestions = []
-        const seen = new Set()
+        const nearSuggestions = []
+        const farSuggestions = []
+        const suggestionByDedupeKey = new Map()
         for (const children of childrenByParent) {
           for (const child of children) {
             const categoryName = _categoryFromCommonsSubcategory(child)
@@ -6431,15 +13285,21 @@ LIMIT {{limit}}`,
               continue
             }
             const dedupeKey = categoryName.toLowerCase()
-            if (selectedDedupeKeys.has(dedupeKey) || seen.has(dedupeKey)) {
+            if (selectedDedupeKeys.has(dedupeKey)) {
               continue
             }
-            seen.add(dedupeKey)
-            suggestions.push(categoryName)
+            if (!suggestionByDedupeKey.has(dedupeKey)) {
+              suggestionByDedupeKey.set(dedupeKey, categoryName)
+            }
           }
         }
 
-        saveImageSubcategorySuggestions.value = suggestions
+        for (const categoryName of suggestionByDedupeKey.values()) {
+          nearSuggestions.push(categoryName)
+        }
+
+        saveImageSubcategorySuggestions.value = nearSuggestions
+        saveImageSubcategoryFarSuggestions.value = farSuggestions
         saveImageSubcategoryLoading.value = false
       }
 
@@ -6575,6 +13435,10 @@ LIMIT {{limit}}`,
         saveImageSelectedDepicts.value = saveImageSelectedDepicts.value.filter(
           (entry) => extractWikidataId(String(entry && entry.id ? entry.id : '')) !== qid,
         )
+        saveImageLinkedSubjects.value = saveImageLinkedSubjects.value.filter(
+          (entry) => extractWikidataId(String(entry && entry.id ? entry.id : '')) !== qid,
+        )
+        _renderSaveImageSubjectLinkedMarkers()
       }
 
       const searchSaveImageDepictsDebounced = debounce(async (searchTerm) => {
@@ -6668,6 +13532,9 @@ LIMIT {{limit}}`,
         const fileList = event && event.target && event.target.files ? event.target.files : null
         const nextFile = fileList && fileList.length > 0 ? fileList[0] : null
         saveImageSelectedFile.value = nextFile
+        saveImageSubjectImageXPercent.value = null
+        saveImageSubjectImageYPercent.value = null
+        saveImageSubjectSelectionError.value = ''
         saveImageError.value = ''
         saveImageUploadResult.value = null
         saveImageExifReadToken += 1
@@ -6841,6 +13708,19 @@ LIMIT {{limit}}`,
         saveImageUploadResult.value = null
         saveImageHeading.value = ''
         saveImageApiCoordinateMode.value = 'photographer'
+        saveImageSubjectType.value = ''
+        saveImageSubjectLinkMode.value = 'map'
+        saveImageSubjectMapLatitude.value = ''
+        saveImageSubjectMapLongitude.value = ''
+        saveImageSubjectImageXPercent.value = null
+        saveImageSubjectImageYPercent.value = null
+        saveImageSubjectWikidataSearch.value = ''
+        saveImageSubjectWikidataSuggestions.value = []
+        saveImageSubjectWikidataLoading.value = false
+        _clearSaveImageSubjectMapFeatures()
+        saveImageSubjectSelectedWikidataItem.value = null
+        saveImageSubjectSelectionError.value = ''
+        saveImageLinkedSubjects.value = []
         saveImageSelectedFile.value = null
         saveImageExifReadToken += 1
         saveImageExifMetadataLoading.value = false
@@ -6854,6 +13734,10 @@ LIMIT {{limit}}`,
         saveImageApiTargetFilename.value = ''
         saveImageApiTargetFilenameTouched.value = false
         _resetSaveImageApiTargetFilenameAvailability()
+        saveImageFilenameBuilderUseSubjects.value = true
+        saveImageFilenameBuilderUseDate.value = true
+        saveImageFilenameBuilderUseLocation.value = true
+        saveImageFilenameBuilderUseCategories.value = true
         saveImageIsOwnPhoto.value = true
         saveImageApiAuthor.value = ''
         saveImageApiSourceUrl.value = ''
@@ -6862,6 +13746,10 @@ LIMIT {{limit}}`,
         saveImageApiElevationMeters.value = ''
         saveImageElevationFromExif.value = false
         saveImageIncludeElevation.value = false
+        saveImageCaption.value = ''
+        saveImageCaptionLanguage.value = _normalizeSaveImageMetadataLanguage(locale.value)
+        saveImageDescription.value = ''
+        saveImageDescriptionLanguage.value = _normalizeSaveImageMetadataLanguage(locale.value)
         if (saveImageFileInputElement.value) {
           saveImageFileInputElement.value.value = ''
         }
@@ -6879,9 +13767,11 @@ LIMIT {{limit}}`,
         saveImageSelectedDepicts.value = []
         _clearSaveImageSelectedCategoryAncestors()
         saveImageSubcategorySuggestions.value = []
+        saveImageSubcategoryFarSuggestions.value = []
         saveImageSubcategoryLoading.value = false
         destroySaveImageWizardMap()
         destroySaveImageCoordinatePreviewMap()
+        destroySaveImageSubjectMap()
       }
 
       function closeSaveImageApiForm() {
@@ -6898,6 +13788,15 @@ LIMIT {{limit}}`,
         }
         if (!authStatusLoading.value && !authAuthenticated.value) {
           saveImageError.value = t('authRequiredForWikidataWrites')
+          return
+        }
+        const normalizedSubjectType = normalizeSaveImageSubjectType(saveImageSubjectType.value)
+        if (!normalizedSubjectType) {
+          saveImageError.value = t('saveImageSubjectTypeRequired')
+          return
+        }
+        if (saveImageSubjectTypeIsLocationRelevant(normalizedSubjectType) && saveImageLinkedSubjects.value.length < 1) {
+          saveImageError.value = t('saveImageSubjectLinkRequired')
           return
         }
 
@@ -6917,12 +13816,19 @@ LIMIT {{limit}}`,
         const uploadFormData = new FormData()
         uploadFormData.append('file', saveImageSelectedFile.value)
         uploadFormData.append('coordinate_source', 'map')
-        uploadFormData.append('caption_language', normalizeSupportedLocale(locale.value) || 'en')
+        const captionLanguage = _normalizeSaveImageMetadataLanguage(saveImageCaptionLanguage.value)
+        const descriptionLanguage = _normalizeSaveImageMetadataLanguage(saveImageDescriptionLanguage.value)
+        uploadFormData.append('caption_language', captionLanguage)
+        uploadFormData.append('description_language', descriptionLanguage)
         uploadFormData.append('license_template', String(saveImageApiLicenseTemplate.value || 'Cc-by-sa-4.0'))
 
         const caption = typeof saveImageCaption.value === 'string' ? saveImageCaption.value.trim() : ''
         if (caption) {
           uploadFormData.append('caption', caption)
+        }
+        const description = typeof saveImageDescription.value === 'string' ? saveImageDescription.value.trim() : ''
+        if (description) {
+          uploadFormData.append('description', description)
         }
 
         const targetFilename = normalizeCommonsFilenameCandidate(saveImageApiTargetFilename.value)
@@ -7925,8 +14831,10 @@ LIMIT {{limit}}`,
           const previousOpen = Array.isArray(previousValues) ? Boolean(previousValues[0]) : false
           if (!isOpen) {
             destroySaveImageWizardMap()
+            destroySaveImageSubjectMap()
             _clearSaveImageNearbyCategorySuggestions()
             _clearSaveImageNearbyDepictSuggestions()
+            _clearSaveImageSubjectMapFeatures()
             return
           }
           refreshSaveImageNearbyCategorySuggestionsDebounced()
@@ -7955,13 +14863,32 @@ LIMIT {{limit}}`,
       )
       watch(
         [
+          () => showSaveImageApiForm.value,
+          () => saveImageSubjectTypeLocationRelevant.value,
+          () => saveImageSubjectMapElement.value,
+        ],
+        async ([isOpen, isLocationRelevant]) => {
+          if (!isOpen || !isLocationRelevant) {
+            destroySaveImageSubjectMap()
+            _clearSaveImageSubjectMapFeatures()
+            return
+          }
+          await nextTick()
+          ensureSaveImageSubjectMap()
+        }
+      )
+      watch(
+        [
           () => isSaveImageDialogOpen.value,
           () => saveImageSelectedCategories.value.map((categoryName) => String(categoryName || '').toLowerCase()).join('|'),
+          () => saveImageLatitude.value,
+          () => saveImageLongitude.value,
         ],
         ([isOpen]) => {
           if (!isOpen) {
             saveImageSubcategoryToken += 1
             saveImageSubcategorySuggestions.value = []
+            saveImageSubcategoryFarSuggestions.value = []
             saveImageSubcategoryLoading.value = false
             _clearSaveImageSelectedCategoryAncestors()
             return
@@ -8003,15 +14930,84 @@ LIMIT {{limit}}`,
         }
       )
       watch(
+        [
+          () => isSaveImageDialogOpen.value,
+          () => (
+            Array.isArray(saveImageLinkedSubjects.value)
+              ? saveImageLinkedSubjects.value
+              : []
+          ).map((linkedItem) => extractWikidataId(
+            String(
+              linkedItem && typeof linkedItem === 'object'
+                ? linkedItem.id || ''
+                : '',
+            ),
+          )).filter(Boolean).sort().join('|'),
+          () => (
+            location.value && typeof location.value === 'object'
+              ? [
+                String(location.value.municipality_p131_label || '').trim(),
+                String(location.value.location_p276_label || '').trim(),
+                String(location.value.name || '').trim(),
+              ].filter(Boolean).join('|')
+              : ''
+          ),
+        ],
+        ([isOpen]) => {
+          if (!isOpen) {
+            return
+          }
+          refreshSaveImageNearbyCategorySuggestionsDebounced()
+        },
+      )
+      watch(
         () => saveImageApiDateCreated.value,
         () => {
           _applySuggestedSaveImageTargetFilenameIfAllowed()
+          if (!isSaveImageDialogOpen.value) {
+            return
+          }
+          refreshSaveImageNearbyCategorySuggestionsDebounced()
         }
+      )
+      watch(
+        [
+          () => (
+            Array.isArray(saveImageSelectedCategories.value)
+              ? saveImageSelectedCategories.value
+              : []
+          ).map((categoryName) => _normalizeUploadCategory(categoryName).toLowerCase()).filter(Boolean).join('|'),
+          () => (
+            Array.isArray(saveImageLinkedSubjects.value)
+              ? saveImageLinkedSubjects.value
+              : []
+          ).map((linkedItem) => {
+            if (!linkedItem || typeof linkedItem !== 'object') {
+              return ''
+            }
+            const qid = extractWikidataId(String(linkedItem.id || ''))
+            const label = typeof linkedItem.label === 'string' ? linkedItem.label.trim().toLowerCase() : ''
+            return `${qid}|${label}`
+          }).filter(Boolean).join('|'),
+          () => (
+            location.value &&
+            typeof location.value === 'object' &&
+            typeof location.value.name === 'string'
+          ) ? location.value.name.trim() : '',
+          () => saveImageFilenameBuilderUseSubjects.value,
+          () => saveImageFilenameBuilderUseDate.value,
+          () => saveImageFilenameBuilderUseLocation.value,
+          () => saveImageFilenameBuilderUseCategories.value,
+        ],
+        () => {
+          _applySuggestedSaveImageTargetFilenameIfAllowed()
+        },
       )
       onBeforeUnmount(() => {
         destroyDetailMap()
         destroySaveImageWizardMap()
         destroySaveImageCoordinatePreviewMap()
+        destroySaveImageSubjectMap()
         if (saveImagePreviewUrl.value && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
           URL.revokeObjectURL(saveImagePreviewUrl.value)
           saveImagePreviewUrl.value = ''
@@ -8048,6 +15044,45 @@ LIMIT {{limit}}`,
         saveImageMapPickHelpText,
         saveImageHeadingDisplay,
         saveImageCaption,
+        saveImageCaptionLanguage,
+        saveImageDescription,
+        saveImageDescriptionLanguage,
+        saveImageSubjectType,
+        saveImageSubjectLinkMode,
+        saveImageSubjectLinkUsesMap,
+        saveImageSubjectTypeLocationRelevant,
+        saveImageSubjectMapElement,
+        saveImageSubjectMapLatitude,
+        saveImageSubjectMapLongitude,
+        saveImageSubjectMapHasPoint,
+        saveImageSubjectMapZoomLevel,
+        saveImageSubjectImageXPercent,
+        saveImageSubjectImageYPercent,
+        saveImageSubjectImageHasPoint,
+        saveImageSubjectImageMarkerStyle,
+        saveImageSubjectLinkedImageMarkers,
+        saveImageSubjectWikidataSearch,
+        saveImageSubjectWikidataSuggestions,
+        saveImageSubjectWikidataLoading,
+        saveImageSubjectSelectedWikidataItem,
+        saveImageSubjectSelectedWikidataQid,
+        saveImageSubjectDirectWikidataItem,
+        saveImageSubjectCanAddLink,
+        saveImageSubjectPendingLinkedSubject,
+        saveImageSubjectNearbyMapFeatures,
+        saveImageSubjectMapFeaturesLoading,
+        saveImageSubjectMapFeaturesError,
+        saveImageSelectedSubjectMapFeature,
+        saveImageSubjectHasActiveSelection,
+        saveImageVisibleSubjectSelectedFeatureWikidataSuggestions,
+        saveImageSubjectSelectedFeatureWikidataLoading,
+        formatSaveImageSubjectMapFeatureCoordinates,
+        formatSaveImageSubjectMapFeatureDistance,
+        formatSaveImageLinkedSubjectCoordinates,
+        formatSaveImageLinkedSubjectImagePoint,
+        saveImageLinkedSubjectListPinStyle,
+        saveImageSubjectSelectionError,
+        saveImageLinkedSubjects,
         saveImageFileInputElement,
         saveImageSelectedFileName,
         saveImagePreviewUrl,
@@ -8068,6 +15103,7 @@ LIMIT {{limit}}`,
         saveImageApiUploading,
         saveImageUploadResult,
         saveImageApiTargetFilename,
+        saveImageFilenameBuilderPreview,
         saveImageApiTargetFilenameChecking,
         saveImageApiTargetFilenameAvailable,
         saveImageApiTargetFilenameCheckError,
@@ -8091,6 +15127,7 @@ LIMIT {{limit}}`,
         saveImageVisibleNearbyDepictSuggestions,
         saveImageNearbyDepictLoading,
         saveImageSubcategorySuggestions,
+        saveImageSubcategoryFarSuggestions,
         saveImageSubcategoryLoading,
         saveImageSelectedCategories,
         saveImageSelectedDepicts,
@@ -8103,11 +15140,34 @@ LIMIT {{limit}}`,
         onSaveImageMapElementReady,
         closeSaveImageApiForm,
         onSaveImageOwnPhotoChange,
+        onSaveImageSubjectTypeChange,
+        onSaveImageSubjectLinkModeChange,
+        onSaveImageSubjectImagePreviewClick,
+        onSaveImageSubjectWikidataInput,
+        onSaveImageSubjectWikidataFocus,
+        onSaveImageSubjectWikidataKeydown,
+        hideSaveImageSubjectWikidataSuggestionsSoon,
+        selectSaveImageSubjectWikidataSuggestion,
+        selectSaveImageSubjectDirectWikidataSuggestion,
+        isSaveImageSubjectWikidataSuggestionSelected,
+        clearSaveImageSubjectWikidataSelection,
+        selectSaveImageSubjectMapFeature,
+        showSaveImageSubjectNearbyFeatureList,
+        isSaveImageSubjectMapFeatureSelected,
+        isSaveImageSubjectMapFeatureHovered,
+        onSaveImageSubjectMapFeatureMouseEnter,
+        onSaveImageSubjectMapFeatureMouseLeave,
+        selectSaveImageSubjectFeatureWikidataSuggestion,
+        addSaveImageSubjectLink,
+        removeSaveImageLinkedSubject,
         onSaveImageApiCoordinateModeChange,
         setSaveImageApiCoordinateMode,
         onSaveImageMapCenterIconClick,
         onSaveImageApiTargetFilenameInput,
         onSaveImageApiTargetFilenameBlur,
+        isSaveImageFilenameBuilderPartEnabled,
+        toggleSaveImageFilenameBuilderPart,
+        applySaveImageFilenameBuilderSuggestion,
         resetSaveImageCoordinatesToExif,
         resetSaveImageCoordinatesToWikidata,
         saveImageViaMediaWikiApi,
@@ -8606,6 +15666,23 @@ LIMIT {{limit}}`,
                   </div>
                 </div>
 
+                <div class="form-field">
+                  <span>{{ t('saveImageApiDateCreated') }}</span>
+                  <input v-model="saveImageApiDateCreated" type="text" maxlength="32" placeholder="YYYY-MM-DD" />
+                  <p class="dialog-help">
+                    {{ t('saveImageCommonsMetadataOnlyNote') }}
+                  </p>
+                  <template v-if="saveImageHasElevationValue">
+                    <p class="dialog-help">
+                      {{ t('saveImageElevation') }}: {{ saveImageElevationDisplay }}
+                    </p>
+                    <label class="checkbox-field save-image-elevation-opt-in">
+                      <input v-model="saveImageIncludeElevation" type="checkbox" />
+                      <span>{{ t('saveImageElevationUse') }}</span>
+                    </label>
+                  </template>
+                </div>
+
                 <div class="wizard-section">
                   <h3>{{ t('saveImageWizardLocationStep') }}</h3>
                   <p v-if="saveImageMapPickHelpText" class="dialog-help">{{ saveImageMapPickHelpText }}</p>
@@ -8629,13 +15706,6 @@ LIMIT {{limit}}`,
                         | {{ t('saveImageHeading') }}: {{ saveImageHeadingDisplay }}
                       </template>
                     </p>
-                    <p v-if="saveImageHasElevationValue" class="dialog-help">
-                      {{ t('saveImageElevation') }}: {{ saveImageElevationDisplay }}
-                    </p>
-                    <label v-if="saveImageHasElevationValue" class="checkbox-field save-image-elevation-opt-in">
-                      <input v-model="saveImageIncludeElevation" type="checkbox" />
-                      <span>{{ t('saveImageElevationUse') }}</span>
-                    </label>
                   </div>
                   <div class="save-image-coordinate-picker-actions">
                     <button type="button" class="primary-btn" @click="openSaveImageCoordinatePickerDialog">
@@ -8664,33 +15734,516 @@ LIMIT {{limit}}`,
                   </div>
                 </div>
 
-                <label class="form-field">
-                  <span>{{ t('saveImageApiTargetFilename') }}</span>
-                  <input
-                    v-model="saveImageApiTargetFilename"
-                    type="text"
-                    maxlength="255"
-                    @input="onSaveImageApiTargetFilenameInput"
-                    @blur="onSaveImageApiTargetFilenameBlur"
-                  />
-                  <p v-if="saveImageApiTargetFilenameChecking" class="dialog-help">
-                    {{ t('saveImageFilenameChecking') }}
+                <div class="wizard-section">
+                  <h3>{{ t('saveImageWizardSubjectStep') }}</h3>
+                  <p class="dialog-help">{{ t('saveImageSubjectPrompt') }}</p>
+                  <div class="save-image-subject-type-grid" role="radiogroup" :aria-label="t('saveImageSubjectPrompt')">
+                    <label class="save-image-subject-type-option" :class="{ active: saveImageSubjectType === 'interior' }">
+                      <input v-model="saveImageSubjectType" type="radio" value="interior" @change="onSaveImageSubjectTypeChange" />
+                      <span>{{ t('saveImageSubjectTypeInterior') }}</span>
+                    </label>
+                    <label class="save-image-subject-type-option" :class="{ active: saveImageSubjectType === 'exterior' }">
+                      <input v-model="saveImageSubjectType" type="radio" value="exterior" @change="onSaveImageSubjectTypeChange" />
+                      <span>{{ t('saveImageSubjectTypeExterior') }}</span>
+                    </label>
+                    <label class="save-image-subject-type-option" :class="{ active: saveImageSubjectType === 'aerial' }">
+                      <input v-model="saveImageSubjectType" type="radio" value="aerial" @change="onSaveImageSubjectTypeChange" />
+                      <span>{{ t('saveImageSubjectTypeAerial') }}</span>
+                    </label>
+                    <label class="save-image-subject-type-option" :class="{ active: saveImageSubjectType === 'portrait' }">
+                      <input v-model="saveImageSubjectType" type="radio" value="portrait" @change="onSaveImageSubjectTypeChange" />
+                      <span>{{ t('saveImageSubjectTypePortrait') }}</span>
+                    </label>
+                    <label class="save-image-subject-type-option" :class="{ active: saveImageSubjectType === 'general' }">
+                      <input v-model="saveImageSubjectType" type="radio" value="general" @change="onSaveImageSubjectTypeChange" />
+                      <span>{{ t('saveImageSubjectTypeGeneral') }}</span>
+                    </label>
+                  </div>
+                  <p v-if="saveImageSubjectTypeLocationRelevant" class="dialog-help">
+                    {{ t('saveImageSubjectLocationRelevantHelp') }}
                   </p>
-                  <p v-else-if="saveImageApiTargetFilenameAvailable === false" class="dialog-help warning" role="status" aria-live="polite">
-                    {{ t('saveImageFilenameTakenWarning') }}
+                  <p v-else-if="saveImageSubjectType" class="dialog-help">
+                    {{ t('saveImageSubjectLocationNotRelevantHelp') }}
                   </p>
-                  <p v-else-if="saveImageApiTargetFilenameAvailable === true" class="dialog-help success" role="status" aria-live="polite">
-                    {{ t('saveImageFilenameAvailable') }}
-                  </p>
-                  <p v-else-if="saveImageApiTargetFilenameCheckError" class="dialog-help warning" role="status" aria-live="polite">
-                    {{ saveImageApiTargetFilenameCheckError }}
-                  </p>
-                </label>
+                </div>
 
-                <label class="form-field">
-                  <span>{{ t('saveImageCaption') }}</span>
-                  <input v-model="saveImageCaption" type="text" maxlength="255" />
-                </label>
+                <div v-if="saveImageSubjectTypeLocationRelevant" class="wizard-section">
+                  <h3>{{ t('saveImageWizardSubjectLocationStep') }}</h3>
+                  <div v-if="saveImageLinkedSubjects.length > 0" class="save-image-linked-subjects save-image-linked-subjects-step3-start">
+                    <p class="dialog-help success">
+                      {{ t('saveImageSubjectLinkAdded', { count: saveImageLinkedSubjects.length }) }}
+                    </p>
+                    <ul class="save-image-linked-subject-list">
+                      <li
+                        v-for="(linkedItem, index) in saveImageLinkedSubjects"
+                        :key="'linked-subject-' + linkedItem.dedupeKey + '-' + index"
+                        class="save-image-linked-subject-row"
+                      >
+                        <div class="save-image-linked-subject-title-row">
+                          <span
+                            class="save-image-linked-subject-pin"
+                            :style="saveImageLinkedSubjectListPinStyle(index)"
+                            aria-hidden="true"
+                          ></span>
+                          <a
+                            :href="saveImageDepictHref(linkedItem)"
+                            target="_blank"
+                            rel="noreferrer"
+                            class="save-image-linked-subject-title"
+                          >
+                            {{ saveImageDepictDisplayLabel(linkedItem) }}
+                          </a>
+                        </div>
+                        <p class="save-image-linked-subject-meta">
+                          {{ t('coordinates') }}: {{ formatSaveImageLinkedSubjectCoordinates(linkedItem) }}
+                        </p>
+                        <p class="save-image-linked-subject-meta">
+                          {{ t('saveImageSubjectImagePointLabel') }}: {{ formatSaveImageLinkedSubjectImagePoint(linkedItem) }}
+                        </p>
+                        <button
+                          type="button"
+                          class="secondary-btn"
+                          :aria-label="t('removeCategory')"
+                          @click="removeSaveImageLinkedSubject(linkedItem)"
+                        >
+                          {{ t('removeCategory') }}
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div class="form-field save-image-subject-link-mode-field">
+                    <span>{{ t('saveImageSubjectLinkModeLabel') }}</span>
+                    <div class="toggle-switch" role="radiogroup" :aria-label="t('saveImageSubjectLinkModeLabel')">
+                      <label class="toggle-option" :class="{ active: saveImageSubjectLinkMode === 'map' }">
+                        <input v-model="saveImageSubjectLinkMode" type="radio" value="map" @change="onSaveImageSubjectLinkModeChange" />
+                        <span>{{ t('saveImageSubjectLinkModeMap') }}</span>
+                      </label>
+                      <label class="toggle-option" :class="{ active: saveImageSubjectLinkMode === 'image-only' }">
+                        <input v-model="saveImageSubjectLinkMode" type="radio" value="image-only" @change="onSaveImageSubjectLinkModeChange" />
+                        <span>{{ t('saveImageSubjectLinkModeImageOnly') }}</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <p v-if="saveImageSubjectLinkUsesMap" class="dialog-help">{{ t('saveImageSubjectLocationToolHelp') }}</p>
+                  <p v-else class="dialog-help">{{ t('saveImageSubjectNoMapToolHelp') }}</p>
+
+                  <div v-if="saveImageSubjectPendingLinkedSubject" class="save-image-subject-accept-actions">
+                    <div class="save-image-linked-subject-row save-image-linked-subject-row-preview">
+                      <div class="save-image-linked-subject-title-row">
+                        <span
+                          class="save-image-linked-subject-pin"
+                          :style="saveImageLinkedSubjectListPinStyle(saveImageLinkedSubjects.length)"
+                          aria-hidden="true"
+                        ></span>
+                        <a
+                          :href="saveImageDepictHref(saveImageSubjectPendingLinkedSubject)"
+                          target="_blank"
+                          rel="noreferrer"
+                          class="save-image-linked-subject-title"
+                        >
+                          {{ saveImageDepictDisplayLabel(saveImageSubjectPendingLinkedSubject) }}
+                        </a>
+                      </div>
+                      <p class="save-image-linked-subject-meta">
+                        {{ t('coordinates') }}: {{ formatSaveImageLinkedSubjectCoordinates(saveImageSubjectPendingLinkedSubject) }}
+                      </p>
+                      <p class="save-image-linked-subject-meta">
+                        {{ t('saveImageSubjectImagePointLabel') }}: {{ formatSaveImageLinkedSubjectImagePoint(saveImageSubjectPendingLinkedSubject) }}
+                      </p>
+                      <div class="save-image-subject-accept-action-row">
+                        <button
+                          type="button"
+                          class="primary-btn"
+                          :disabled="!saveImageSubjectCanAddLink"
+                          @click="addSaveImageSubjectLink"
+                        >
+                          {{ t('saveImageSubjectLinkButton') }}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-if="saveImageSubjectLinkUsesMap" class="save-image-subject-query-layout">
+                    <div class="save-image-subject-query-sidebar">
+                      <p class="dialog-help">{{ t('saveImageSubjectMapClickHelp') }}</p>
+                      <p v-if="saveImageSubjectMapZoomLevel !== null" class="dialog-help">
+                        {{ t('saveImageSubjectMapZoomLevel') }}: {{ saveImageSubjectMapZoomLevel }}
+                      </p>
+                      <div
+                        v-if="!saveImageSubjectHasActiveSelection"
+                        class="save-image-subject-feature-list-section"
+                        :aria-busy="saveImageSubjectMapFeaturesLoading ? 'true' : 'false'"
+                      >
+                        <div class="save-image-subject-direct-wikidata-search">
+                          <h4>{{ t('saveImageSubjectDirectWikidataSearchTitle') }}</h4>
+                          <div class="save-image-subject-wikidata-entry">
+                            <input
+                              v-model="saveImageSubjectWikidataSearch"
+                              type="text"
+                              :aria-label="t('saveImageSubjectDirectWikidataSearchTitle')"
+                              :placeholder="t('wikidataItemPlaceholder')"
+                              @input="onSaveImageSubjectWikidataInput"
+                              @focus="onSaveImageSubjectWikidataFocus"
+                              @blur="hideSaveImageSubjectWikidataSuggestionsSoon"
+                            />
+                          </div>
+                          <ul v-if="saveImageSubjectWikidataSuggestions.length > 0" class="save-image-subject-feature-list save-image-subject-wikidata-autocomplete">
+                            <li v-for="item in saveImageSubjectWikidataSuggestions" :key="'subject-list-direct-wikidata-' + item.id">
+                              <button
+                                type="button"
+                                class="save-image-subject-feature-row-btn save-image-subject-wikidata-suggestion-btn"
+                                :class="{ active: isSaveImageSubjectWikidataSuggestionSelected(item) }"
+                                @mousedown.prevent.stop
+                                @click.stop="selectSaveImageSubjectDirectWikidataSuggestion(item)"
+                              >
+                                <span class="save-image-subject-feature-title save-image-subject-wikidata-option-label">
+                                  {{ saveImageDepictDisplayLabel(item) }}
+                                </span>
+                                <span
+                                  v-if="item.description"
+                                  class="save-image-subject-feature-meta save-image-subject-wikidata-option-description"
+                                >
+                                  {{ item.description }}
+                                </span>
+                              </button>
+                            </li>
+                          </ul>
+                          <div
+                            v-if="saveImageSubjectWikidataLoading"
+                            class="loading-indicator loading-indicator-compact"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            <span class="loading-indicator-text">{{ t('searching') }}</span>
+                          </div>
+                        </div>
+                        <h4>{{ t('saveImageSubjectNearbyFeaturesTitle') }}</h4>
+                        <div
+                          v-if="saveImageSubjectMapFeaturesLoading"
+                          class="loading-indicator loading-indicator-prominent"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          <span class="loading-indicator-text">{{ t('saveImageSubjectLoadingInfo') }}</span>
+                        </div>
+                        <ul
+                          v-if="saveImageSubjectMapFeaturesLoading"
+                          class="save-image-subject-feature-list save-image-subject-feature-list-loading"
+                          aria-hidden="true"
+                        >
+                          <li v-for="loadingRow in 4" :key="'subject-nearby-feature-loading-' + loadingRow">
+                            <span class="save-image-subject-feature-loading-row"></span>
+                          </li>
+                        </ul>
+                        <p v-else-if="saveImageSubjectMapFeaturesError" class="dialog-help warning">
+                          {{ saveImageSubjectMapFeaturesError }}
+                        </p>
+                        <ul v-else-if="saveImageSubjectNearbyMapFeatures.length > 0" class="save-image-subject-feature-list">
+                          <li
+                            v-for="feature in saveImageSubjectNearbyMapFeatures"
+                            :key="'subject-nearby-feature-' + feature.key"
+                          >
+                            <button
+                              type="button"
+                              class="save-image-subject-feature-row-btn"
+                              :class="{
+                                active: isSaveImageSubjectMapFeatureSelected(feature),
+                                hovered: isSaveImageSubjectMapFeatureHovered(feature),
+                              }"
+                              @mouseenter="onSaveImageSubjectMapFeatureMouseEnter(feature)"
+                              @mouseleave="onSaveImageSubjectMapFeatureMouseLeave(feature)"
+                              @focus="onSaveImageSubjectMapFeatureMouseEnter(feature)"
+                              @blur="onSaveImageSubjectMapFeatureMouseLeave(feature)"
+                              @click="selectSaveImageSubjectMapFeature(feature, { refreshLatest: true, resetPointPair: true })"
+                            >
+                              <span class="save-image-subject-feature-title">{{ feature.displayLabel }}</span>
+                              <span class="save-image-subject-feature-meta">{{ feature.displayMeta }}</span>
+                            </button>
+                          </li>
+                        </ul>
+                        <p v-else class="dialog-help">{{ t('saveImageSubjectNoNearbyFeatures') }}</p>
+                      </div>
+                      <div v-if="saveImageSubjectHasActiveSelection" class="save-image-subject-feature-details">
+                        <div class="save-image-subject-feature-details-header">
+                          <h4>{{ t('saveImageSubjectSelectedFeatureTitle') }}</h4>
+                          <div class="save-image-subject-feature-details-actions">
+                            <button type="button" class="secondary-btn" @click="showSaveImageSubjectNearbyFeatureList">
+                              {{ t('backToList') }}
+                            </button>
+                          </div>
+                        </div>
+                        <p class="save-image-subject-feature-details-name">
+                          {{
+                            saveImageSelectedSubjectMapFeature
+                              ? saveImageSelectedSubjectMapFeature.displayLabel
+                              : saveImageDepictDisplayLabel(saveImageSubjectDirectWikidataItem)
+                          }}
+                        </p>
+                        <p
+                          class="dialog-help save-image-subject-pair-help"
+                          :class="{ 'save-image-subject-pair-help-pending': !(saveImageSubjectMapHasPoint && saveImageSubjectImageHasPoint) }"
+                        >
+                          {{ t('saveImageSubjectPairHelp') }}
+                        </p>
+                        <div class="save-image-subject-feature-links">
+                          <a
+                            v-if="saveImageSelectedSubjectMapFeature && saveImageSelectedSubjectMapFeature.osmUrl"
+                            :href="saveImageSelectedSubjectMapFeature.osmUrl"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {{ t('saveImageSubjectOpenInOsm') }}
+                          </a>
+                          <a
+                            v-if="(saveImageSelectedSubjectMapFeature && saveImageSelectedSubjectMapFeature.directQid) || (saveImageSubjectDirectWikidataItem && saveImageSubjectDirectWikidataItem.id)"
+                            :href="'https://www.wikidata.org/wiki/' + ((saveImageSelectedSubjectMapFeature && saveImageSelectedSubjectMapFeature.directQid) || (saveImageSubjectDirectWikidataItem && saveImageSubjectDirectWikidataItem.id))"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {{ (saveImageSelectedSubjectMapFeature && saveImageSelectedSubjectMapFeature.directQid) || (saveImageSubjectDirectWikidataItem && saveImageSubjectDirectWikidataItem.id) }}
+                          </a>
+                        </div>
+                        <div
+                          class="save-image-subject-feature-wikidata"
+                          :aria-busy="(saveImageSubjectSelectedFeatureWikidataLoading || saveImageSubjectWikidataLoading) ? 'true' : 'false'"
+                        >
+                          <h5 class="save-image-subject-wikidata-title">{{ t('saveImageSubjectWikidataLabel') }}</h5>
+                          <p class="dialog-help save-image-subject-wikidata-help">{{ t('saveImageSubjectWikidataHelp') }}</p>
+                          <div class="save-image-subject-wikidata-entry">
+                            <input
+                              v-model="saveImageSubjectWikidataSearch"
+                              type="text"
+                              :aria-label="t('saveImageSubjectWikidataLabel')"
+                              :placeholder="t('wikidataItemPlaceholder')"
+                              @input="onSaveImageSubjectWikidataInput"
+                              @focus="onSaveImageSubjectWikidataFocus"
+                              @blur="hideSaveImageSubjectWikidataSuggestionsSoon"
+                              @keydown="onSaveImageSubjectWikidataKeydown"
+                            />
+                          </div>
+                          <ul v-if="saveImageSubjectWikidataSuggestions.length > 0" class="save-image-subject-feature-list save-image-subject-wikidata-autocomplete">
+                            <li v-for="item in saveImageSubjectWikidataSuggestions" :key="'subject-wikidata-' + item.id">
+                              <button
+                                type="button"
+                                class="save-image-subject-feature-row-btn save-image-subject-wikidata-suggestion-btn"
+                                :class="{ active: isSaveImageSubjectWikidataSuggestionSelected(item) }"
+                                @mousedown.prevent.stop
+                                @click.stop="selectSaveImageSubjectWikidataSuggestion(item)"
+                              >
+                                <span class="save-image-subject-feature-title save-image-subject-wikidata-option-label">
+                                  {{ saveImageDepictDisplayLabel(item) }}
+                                </span>
+                                <span
+                                  v-if="item.description"
+                                  class="save-image-subject-feature-meta save-image-subject-wikidata-option-description"
+                                >
+                                  {{ item.description }}
+                                </span>
+                              </button>
+                            </li>
+                          </ul>
+                          <div
+                            v-if="saveImageSubjectWikidataLoading"
+                            class="loading-indicator loading-indicator-compact"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            <span class="loading-indicator-text">{{ t('searching') }}</span>
+                          </div>
+                          <div
+                            v-if="saveImageSelectedSubjectMapFeature && saveImageVisibleSubjectSelectedFeatureWikidataSuggestions.length > 0"
+                            class="save-image-subcategory-suggestions"
+                          >
+                            <p class="dialog-help">{{ t('saveImageSubjectSelectedFeatureWikidataSuggestions') }}</p>
+                            <ul class="save-image-subject-feature-list save-image-subject-wikidata-suggestion-list">
+                              <li
+                                v-for="suggestion in saveImageVisibleSubjectSelectedFeatureWikidataSuggestions"
+                                :key="'subject-feature-wikidata-' + suggestion.id"
+                              >
+                                <button
+                                  type="button"
+                                  class="save-image-subject-feature-row-btn save-image-subject-wikidata-suggestion-btn"
+                                  :class="{ active: isSaveImageSubjectWikidataSuggestionSelected(suggestion) }"
+                                  @click="selectSaveImageSubjectFeatureWikidataSuggestion(suggestion)"
+                                >
+                                  <span class="save-image-subject-feature-title save-image-subject-wikidata-option-label">
+                                    {{ saveImageDepictDisplayLabel(suggestion) }}
+                                  </span>
+                                  <span
+                                    v-if="suggestion.description"
+                                    class="save-image-subject-feature-meta save-image-subject-wikidata-option-description"
+                                  >
+                                    {{ suggestion.description }}
+                                  </span>
+                                </button>
+                              </li>
+                            </ul>
+                          </div>
+                          <div
+                            v-else-if="saveImageSelectedSubjectMapFeature && saveImageSubjectSelectedFeatureWikidataLoading"
+                            class="loading-indicator loading-indicator-compact"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            <span class="loading-indicator-text">{{ t('searching') }}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="save-image-subject-query-map-wrap">
+                      <div
+                        ref="saveImageSubjectMapElement"
+                        class="map-canvas coords-inline-map save-image-subject-map"
+                        :aria-label="t('locationOnMap')"
+                      ></div>
+                      <div class="save-image-subject-image-pane">
+                        <p class="dialog-help">{{ t('saveImageSubjectImageClickHelp') }}</p>
+                        <p
+                          v-if="saveImageSubjectHasActiveSelection && saveImageSubjectMapHasPoint"
+                          class="dialog-help save-image-subject-map-point-coordinates"
+                        >
+                          {{ t('coordinates') }}: {{ saveImageSubjectMapLatitude }}, {{ saveImageSubjectMapLongitude }}
+                        </p>
+                        <div v-if="saveImagePreviewUrl" class="save-image-subject-image-picker">
+                          <img
+                            class="save-image-subject-image"
+                            :src="saveImagePreviewUrl"
+                            :alt="saveImageSelectedFileName || t('image')"
+                            @click="onSaveImageSubjectImagePreviewClick"
+                          />
+                          <span
+                            v-for="marker in saveImageSubjectLinkedImageMarkers"
+                            :key="'save-image-subject-linked-marker-' + marker.key"
+                            class="save-image-subject-image-marker save-image-subject-linked-image-marker"
+                            :style="marker.style"
+                          ></span>
+                          <span
+                            v-if="saveImageSubjectImageHasPoint"
+                            class="save-image-subject-image-marker"
+                            :style="saveImageSubjectImageMarkerStyle"
+                          ></span>
+                        </div>
+                        <p v-else class="dialog-help warning">{{ t('saveImageSubjectImageRequiresFile') }}</p>
+                        <p v-if="saveImageSubjectImageHasPoint" class="dialog-help">
+                          {{ t('saveImageSubjectImagePointLabel') }}:
+                          {{ saveImageSubjectImageXPercent.toFixed(1) }}%, {{ saveImageSubjectImageYPercent.toFixed(1) }}%
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-else class="save-image-subject-no-map-layout">
+                    <div class="save-image-subject-feature-details save-image-subject-no-map-wikidata">
+                      <h4>{{ t('saveImageSubjectWikidataLabel') }}</h4>
+                      <p class="dialog-help save-image-subject-wikidata-help">{{ t('saveImageSubjectWikidataHelp') }}</p>
+                      <div class="save-image-subject-wikidata-entry">
+                        <input
+                          v-model="saveImageSubjectWikidataSearch"
+                          type="text"
+                          :aria-label="t('saveImageSubjectWikidataLabel')"
+                          :placeholder="t('wikidataItemPlaceholder')"
+                          @input="onSaveImageSubjectWikidataInput"
+                          @focus="onSaveImageSubjectWikidataFocus"
+                          @blur="hideSaveImageSubjectWikidataSuggestionsSoon"
+                          @keydown="onSaveImageSubjectWikidataKeydown"
+                        />
+                      </div>
+                      <ul v-if="saveImageSubjectWikidataSuggestions.length > 0" class="save-image-subject-feature-list save-image-subject-wikidata-autocomplete">
+                        <li v-for="item in saveImageSubjectWikidataSuggestions" :key="'subject-image-only-wikidata-' + item.id">
+                          <button
+                            type="button"
+                            class="save-image-subject-feature-row-btn save-image-subject-wikidata-suggestion-btn"
+                            :class="{ active: isSaveImageSubjectWikidataSuggestionSelected(item) }"
+                            @mousedown.prevent.stop
+                            @click.stop="selectSaveImageSubjectWikidataSuggestion(item)"
+                          >
+                            <span class="save-image-subject-feature-title save-image-subject-wikidata-option-label">
+                              {{ saveImageDepictDisplayLabel(item) }}
+                            </span>
+                            <span
+                              v-if="item.description"
+                              class="save-image-subject-feature-meta save-image-subject-wikidata-option-description"
+                            >
+                              {{ item.description }}
+                            </span>
+                          </button>
+                        </li>
+                      </ul>
+                      <div
+                        v-if="saveImageSubjectWikidataLoading"
+                        class="loading-indicator loading-indicator-compact"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <span class="loading-indicator-text">{{ t('searching') }}</span>
+                      </div>
+                      <div v-if="saveImageVisibleNearbyDepictSuggestions.length > 0" class="save-image-subcategory-suggestions">
+                        <p class="dialog-help">{{ t('saveImageNearbyDepictSuggestions') }}</p>
+                        <ul class="save-image-subject-feature-list save-image-subject-wikidata-suggestion-list">
+                          <li v-for="depictItem in saveImageVisibleNearbyDepictSuggestions" :key="'subject-image-only-nearby-depict-' + depictItem.id">
+                            <button
+                              type="button"
+                              class="save-image-subject-feature-row-btn save-image-subject-wikidata-suggestion-btn"
+                              :class="{ active: isSaveImageSubjectWikidataSuggestionSelected(depictItem) }"
+                              @click="selectSaveImageSubjectWikidataSuggestion(depictItem)"
+                            >
+                              <span class="save-image-subject-feature-title save-image-subject-wikidata-option-label">
+                                {{ saveImageDepictDisplayLabel(depictItem) }}
+                              </span>
+                              <span
+                                v-if="depictItem.description"
+                                class="save-image-subject-feature-meta save-image-subject-wikidata-option-description"
+                              >
+                                {{ depictItem.description }}
+                              </span>
+                            </button>
+                          </li>
+                        </ul>
+                      </div>
+                      <div
+                        v-else-if="saveImageNearbyDepictLoading"
+                        class="loading-indicator loading-indicator-compact"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <span class="loading-indicator-text">{{ t('searching') }}</span>
+                      </div>
+                    </div>
+                    <div class="save-image-subject-image-pane">
+                      <p class="dialog-help">{{ t('saveImageSubjectImageClickHelp') }}</p>
+                      <div v-if="saveImagePreviewUrl" class="save-image-subject-image-picker">
+                        <img
+                          class="save-image-subject-image"
+                          :src="saveImagePreviewUrl"
+                          :alt="saveImageSelectedFileName || t('image')"
+                          @click="onSaveImageSubjectImagePreviewClick"
+                        />
+                        <span
+                          v-for="marker in saveImageSubjectLinkedImageMarkers"
+                          :key="'save-image-subject-linked-marker-image-only-' + marker.key"
+                          class="save-image-subject-image-marker save-image-subject-linked-image-marker"
+                          :style="marker.style"
+                        ></span>
+                        <span
+                          v-if="saveImageSubjectImageHasPoint"
+                          class="save-image-subject-image-marker"
+                          :style="saveImageSubjectImageMarkerStyle"
+                        ></span>
+                      </div>
+                      <p v-else class="dialog-help warning">{{ t('saveImageSubjectImageRequiresFile') }}</p>
+                      <p v-if="saveImageSubjectImageHasPoint" class="dialog-help">
+                        {{ t('saveImageSubjectImagePointLabel') }}:
+                        {{ saveImageSubjectImageXPercent.toFixed(1) }}%, {{ saveImageSubjectImageYPercent.toFixed(1) }}%
+                      </p>
+                    </div>
+                  </div>
+
+                  <p v-if="saveImageSubjectSelectionError" class="status error" role="alert">
+                    {{ saveImageSubjectSelectionError }}
+                  </p>
+                </div>
 
                 <label class="form-field">
                   <span>{{ t('saveImageApiAuthor') }}</span>
@@ -8700,20 +16253,6 @@ LIMIT {{limit}}`,
                 <label v-if="saveImageShowSourceUrl" class="form-field">
                   <span>{{ t('saveImageApiSourceUrl') }}</span>
                   <input v-model="saveImageApiSourceUrl" type="url" maxlength="500" />
-                </label>
-
-                <label class="form-field">
-                  <span>{{ t('saveImageApiDateCreated') }}</span>
-                  <input v-model="saveImageApiDateCreated" type="text" maxlength="32" placeholder="YYYY-MM-DD" />
-                </label>
-
-                <label class="form-field">
-                  <span>{{ t('saveImageApiLicenseTemplate') }}</span>
-                  <select v-model="saveImageApiLicenseTemplate">
-                    <option value="Cc-by-sa-4.0">{{ t('saveImageApiLicenseCcBySa40') }}</option>
-                    <option value="Cc-by-4.0">{{ t('saveImageApiLicenseCcBy40') }}</option>
-                    <option value="Cc-zero">{{ t('saveImageApiLicenseCcZero') }}</option>
-                  </select>
                 </label>
 
                 <div class="form-field">
@@ -8798,6 +16337,16 @@ LIMIT {{limit}}`,
                       </li>
                     </ul>
                   </div>
+                  <div v-if="saveImageSubcategoryFarSuggestions.length > 0" class="save-image-subcategory-suggestions">
+                    <p class="dialog-help">{{ t('saveImageSubcategoryFarSuggestions') }}</p>
+                    <ul class="category-chip-list">
+                      <li v-for="category in saveImageSubcategoryFarSuggestions" :key="'subcategory-far-' + category">
+                        <button type="button" class="subcategory-suggestion-btn" @click="selectSaveImageSubcategorySuggestion(category)">
+                          + {{ displayUploadCategory(category) }}
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
                   <p
                     v-else-if="saveImageSubcategoryLoading && saveImageSelectedCategories.length > 0"
                     class="dialog-help"
@@ -8823,87 +16372,121 @@ LIMIT {{limit}}`,
                   <p class="dialog-help">{{ t('saveImageCategoriesHelp') }}</p>
                 </div>
 
-                <div class="form-field">
-                  <span>{{ t('saveImageDepicts') }}</span>
-                  <ul v-if="saveImageSelectedDepicts.length > 0" class="category-chip-list">
-                    <li
-                      v-for="depictItem in saveImageSelectedDepicts"
-                      :key="'depict-' + depictItem.id"
-                      class="category-chip"
-                    >
-                      <a
-                        :href="saveImageDepictHref(depictItem)"
-                        target="_blank"
-                        rel="noreferrer"
-                        class="category-chip-link"
-                      >
-                        {{ saveImageDepictDisplayLabel(depictItem) }}
-                      </a>
-                      <button
-                        type="button"
-                        class="chip-remove"
-                        :aria-label="t('removeCategory')"
-                        @click="removeSaveImageDepict(depictItem)"
-                      >
-                        ×
-                      </button>
-                    </li>
-                  </ul>
-                  <div class="save-image-category-entry">
+                <div class="wizard-section">
+                  <label class="form-field">
+                    <span>{{ t('saveImageApiTargetFilename') }}</span>
                     <input
-                      v-model="saveImageDepictSearch"
+                      v-model="saveImageApiTargetFilename"
                       type="text"
-                      :placeholder="t('wikidataItemPlaceholder')"
-                      @input="onSaveImageDepictInput"
-                      @focus="onSaveImageDepictFocus"
-                      @blur="hideSaveImageDepictSuggestionsSoon"
-                      @keydown="onSaveImageDepictKeydown"
+                      maxlength="255"
+                      @input="onSaveImageApiTargetFilenameInput"
+                      @blur="onSaveImageApiTargetFilenameBlur"
                     />
-                    <button
-                      type="button"
-                      class="secondary-btn"
-                      :disabled="!saveImageDepictSearch.trim()"
-                      @click.stop="addSaveImageDepictsFromInput"
-                    >
-                      {{ t('addCategory') }}
-                    </button>
-                  </div>
-                  <ul v-if="saveImageDepictSuggestions.length > 0" class="autocomplete-list">
-                    <li v-for="depictItem in saveImageDepictSuggestions" :key="'depict-suggestion-' + depictItem.id">
+                    <p v-if="saveImageApiTargetFilenameChecking" class="dialog-help">
+                      {{ t('saveImageFilenameChecking') }}
+                    </p>
+                    <p v-else-if="saveImageApiTargetFilenameAvailable === false" class="dialog-help warning" role="status" aria-live="polite">
+                      {{ t('saveImageFilenameTakenWarning') }}
+                    </p>
+                    <p v-else-if="saveImageApiTargetFilenameAvailable === true" class="dialog-help success" role="status" aria-live="polite">
+                      {{ t('saveImageFilenameAvailable') }}
+                    </p>
+                    <p v-else-if="saveImageApiTargetFilenameCheckError" class="dialog-help warning" role="status" aria-live="polite">
+                      {{ saveImageApiTargetFilenameCheckError }}
+                    </p>
+                  </label>
+
+                  <div class="save-image-filename-builder">
+                    <p class="save-image-filename-builder-title">{{ t('saveImageFilenameBuilderTitle') }}</p>
+                    <p class="dialog-help">{{ t('saveImageFilenameBuilderHelp') }}</p>
+                    <div class="save-image-filename-builder-toggles">
                       <button
                         type="button"
-                        class="autocomplete-option"
-                        @mousedown.prevent.stop
-                        @click.stop="selectSaveImageDepictSuggestion(depictItem)"
+                        class="save-image-filename-part-btn"
+                        :class="{ active: isSaveImageFilenameBuilderPartEnabled('subjects') }"
+                        @click="toggleSaveImageFilenameBuilderPart('subjects')"
                       >
-                        {{ saveImageDepictDisplayLabel(depictItem) }}
+                        {{ t('saveImageFilenameBuilderPartSubjects') }}
                       </button>
-                    </li>
-                  </ul>
-                  <p v-if="saveImageDepictLoading" class="dialog-help">{{ t('searching') }}</p>
-                  <p
-                    v-else-if="saveImageDepictSearch.trim() && !saveImageDepictLoading && saveImageDepictSuggestions.length === 0"
-                    class="autocomplete-empty"
-                  >
-                    {{ t('saveImageDepictSuggestionsEmpty') }}
-                  </p>
-                  <div v-if="saveImageVisibleNearbyDepictSuggestions.length > 0" class="save-image-subcategory-suggestions">
-                    <p class="dialog-help">{{ t('saveImageNearbyDepictSuggestions') }}</p>
-                    <ul class="category-chip-list">
-                      <li v-for="depictItem in saveImageVisibleNearbyDepictSuggestions" :key="'nearby-depict-' + depictItem.id">
-                        <button type="button" class="subcategory-suggestion-btn" @click="selectSaveImageNearbyDepictSuggestion(depictItem)">
-                          + {{ saveImageDepictDisplayLabel(depictItem) }}
-                        </button>
-                      </li>
-                    </ul>
+                      <button
+                        type="button"
+                        class="save-image-filename-part-btn"
+                        :class="{ active: isSaveImageFilenameBuilderPartEnabled('date') }"
+                        @click="toggleSaveImageFilenameBuilderPart('date')"
+                      >
+                        {{ t('saveImageFilenameBuilderPartDate') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="save-image-filename-part-btn"
+                        :class="{ active: isSaveImageFilenameBuilderPartEnabled('location') }"
+                        @click="toggleSaveImageFilenameBuilderPart('location')"
+                      >
+                        {{ t('saveImageFilenameBuilderPartLocation') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="save-image-filename-part-btn"
+                        :class="{ active: isSaveImageFilenameBuilderPartEnabled('categories') }"
+                        @click="toggleSaveImageFilenameBuilderPart('categories')"
+                      >
+                        {{ t('saveImageFilenameBuilderPartCategories') }}
+                      </button>
+                    </div>
+                    <p class="save-image-filename-builder-preview-label">{{ t('saveImageFilenameBuilderPreview') }}</p>
+                    <p class="save-image-filename-builder-preview">
+                      {{ saveImageFilenameBuilderPreview || t('saveImageFilenameBuilderPreviewEmpty') }}
+                    </p>
+                    <div class="save-image-filename-builder-actions">
+                      <button
+                        type="button"
+                        class="secondary-btn"
+                        :disabled="!saveImageFilenameBuilderPreview"
+                        @click="applySaveImageFilenameBuilderSuggestion"
+                      >
+                        {{ t('saveImageFilenameBuilderApply') }}
+                      </button>
+                    </div>
                   </div>
-                  <p
-                    v-else-if="saveImageNearbyDepictLoading"
-                    class="dialog-help"
-                  >
-                    {{ t('searching') }}
-                  </p>
-                  <p class="dialog-help">{{ t('saveImageDepictsHelp') }}</p>
+
+                  <div class="form-row form-row-language">
+                    <label class="form-field">
+                      <span>{{ t('saveImageCaption') }}</span>
+                      <input v-model="saveImageCaption" type="text" maxlength="500" />
+                    </label>
+                    <label class="form-field form-field-language">
+                      <span>{{ t('language') }}</span>
+                      <select v-model="saveImageCaptionLanguage">
+                        <option value="fi">{{ t('languageGroupFi') }} (fi)</option>
+                        <option value="sv">{{ t('languageGroupSv') }} (sv)</option>
+                        <option value="en">{{ t('languageGroupEn') }} (en)</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div class="form-row form-row-language">
+                    <label class="form-field">
+                      <span>{{ t('saveImageDescription') }}</span>
+                      <textarea v-model="saveImageDescription" maxlength="500" rows="2"></textarea>
+                    </label>
+                    <label class="form-field form-field-language">
+                      <span>{{ t('language') }}</span>
+                      <select v-model="saveImageDescriptionLanguage">
+                        <option value="fi">{{ t('languageGroupFi') }} (fi)</option>
+                        <option value="sv">{{ t('languageGroupSv') }} (sv)</option>
+                        <option value="en">{{ t('languageGroupEn') }} (en)</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <label class="form-field">
+                    <span>{{ t('saveImageApiLicenseTemplate') }}</span>
+                    <select v-model="saveImageApiLicenseTemplate">
+                      <option value="Cc-by-sa-4.0">{{ t('saveImageApiLicenseCcBySa40') }}</option>
+                      <option value="Cc-by-4.0">{{ t('saveImageApiLicenseCcBy40') }}</option>
+                      <option value="Cc-zero">{{ t('saveImageApiLicenseCcZero') }}</option>
+                    </select>
+                  </label>
                 </div>
 
                 <p v-if="saveImageError" class="status error" role="alert">{{ saveImageError }}</p>
@@ -9057,8 +16640,8 @@ LIMIT {{limit}}`,
       const formDatasourceType = ref('sparql')
       const customEndpointPresetId = '__custom__'
       const defaultPreset =
-        PREDEFINED_ENDPOINTS.find((item) => item.id === 'wikidata') ||
         PREDEFINED_ENDPOINTS.find((item) => item.url === configuredSparqlDefaultEndpoint) ||
+        PREDEFINED_ENDPOINTS.find((item) => item.id === 'wikidata') ||
         PREDEFINED_ENDPOINTS[0] ||
         null
       const formSparqlEndpoint = ref(defaultPreset ? defaultPreset.url : configuredSparqlDefaultEndpoint)

@@ -41,6 +41,7 @@ class LocationApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="app"')
         self.assertContains(response, 'window.APP_CONFIG')
+        self.assertContains(response, 'sparqlOsmEndpoint')
 
     @patch('locations.views.fetch_locations')
     def test_location_list(self, fetch_locations_mock):
@@ -219,6 +220,107 @@ class LocationApiTests(APITestCase):
         )
         fetch_wikidata_entity_mock.assert_called_once_with('Q1757', lang='fi')
 
+    @patch('locations.views.fetch_latest_osm_feature_metadata')
+    def test_osm_feature_latest_endpoint(self, fetch_latest_osm_feature_metadata_mock):
+        fetch_latest_osm_feature_metadata_mock.return_value = {
+            'type': 'way',
+            'id': 12345,
+            'name': 'Example Street',
+            'wikidata': '',
+            'lat': None,
+            'lon': None,
+            'tags': {
+                'name': 'Example Street',
+                'highway': 'residential',
+            },
+        }
+
+        response = self.client.get(
+            reverse('osm-feature-latest', kwargs={'feature_type': 'way', 'feature_id': 12345}),
+            {'lang': 'fi'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['id'], 12345)
+        self.assertEqual(response.data['name'], 'Example Street')
+        fetch_latest_osm_feature_metadata_mock.assert_called_once_with(
+            'way',
+            12345,
+            lang='fi',
+            hint_latitude=None,
+            hint_longitude=None,
+            hint_name=None,
+        )
+
+    @patch('locations.views.fetch_latest_osm_feature_metadata')
+    def test_osm_feature_latest_endpoint_passes_coordinate_hints(self, fetch_latest_osm_feature_metadata_mock):
+        fetch_latest_osm_feature_metadata_mock.return_value = {
+            'type': 'way',
+            'id': 12345,
+            'name': '',
+            'wikidata': '',
+            'lat': None,
+            'lon': None,
+            'tags': {},
+        }
+
+        response = self.client.get(
+            reverse('osm-feature-latest', kwargs={'feature_type': 'way', 'feature_id': 12345}),
+            {'lat': '60.187813', 'lon': '24.983468', 'name': 'Tukkutorinkuja'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        fetch_latest_osm_feature_metadata_mock.assert_called_once_with(
+            'way',
+            12345,
+            lang='en',
+            hint_latitude=60.187813,
+            hint_longitude=24.983468,
+            hint_name='Tukkutorinkuja',
+        )
+
+    def test_osm_feature_latest_endpoint_rejects_invalid_type(self):
+        response = self.client.get(
+            reverse('osm-feature-latest', kwargs={'feature_type': 'invalid', 'feature_id': 123}),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('detail', response.data)
+
+    def test_osm_feature_latest_endpoint_rejects_invalid_latitude(self):
+        response = self.client.get(
+            reverse('osm-feature-latest', kwargs={'feature_type': 'way', 'feature_id': 123}),
+            {'lat': 'not-a-number'},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('detail', response.data)
+
+    @patch('locations.views.fetch_latest_osm_feature_metadata')
+    def test_osm_feature_latest_endpoint_returns_404_when_not_found(self, fetch_latest_osm_feature_metadata_mock):
+        fetch_latest_osm_feature_metadata_mock.return_value = None
+
+        response = self.client.get(
+            reverse('osm-feature-latest', kwargs={'feature_type': 'relation', 'feature_id': 999999999}),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn('detail', response.data)
+
+    @patch('locations.views.fetch_latest_osm_feature_metadata')
+    def test_osm_feature_latest_endpoint_returns_502_for_external_error(
+        self,
+        fetch_latest_osm_feature_metadata_mock,
+    ):
+        fetch_latest_osm_feature_metadata_mock.side_effect = ExternalServiceError('upstream failure')
+
+        response = self.client.get(
+            reverse('osm-feature-latest', kwargs={'feature_type': 'way', 'feature_id': 12345}),
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('detail', response.data)
+
     @patch('locations.views.fetch_citoid_metadata')
     def test_citoid_metadata_endpoint(self, fetch_citoid_metadata_mock):
         fetch_citoid_metadata_mock.return_value = {
@@ -297,6 +399,8 @@ class LocationApiTests(APITestCase):
                 'file': image_file,
                 'caption': 'Test caption',
                 'caption_language': 'fi',
+                'description': 'Test description',
+                'description_language': 'en',
                 'target_filename': 'Example_renamed.jpg',
                 'author': 'Example Photographer',
                 'source_url': 'https://example.org/source-photo',
@@ -321,6 +425,8 @@ class LocationApiTests(APITestCase):
         call_args = upload_image_to_commons_mock.call_args
         self.assertEqual(call_args.kwargs['caption'], 'Test caption')
         self.assertEqual(call_args.kwargs['caption_language'], 'fi')
+        self.assertEqual(call_args.kwargs['description'], 'Test description')
+        self.assertEqual(call_args.kwargs['description_language'], 'en')
         self.assertEqual(call_args.kwargs['target_filename'], 'Example_renamed.jpg')
         self.assertEqual(call_args.kwargs['author'], 'Example Photographer')
         self.assertEqual(call_args.kwargs['source_url'], 'https://example.org/source-photo')

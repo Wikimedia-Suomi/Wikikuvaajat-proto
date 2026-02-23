@@ -10,3 +10,4 @@ class FrontendViewsTests(TestCase):
         self.assertContains(response, 'id="app"')
         self.assertContains(response, 'window.APP_CONFIG')
         self.assertContains(response, 'sparqlPredefinedEndpoints')
+        self.assertContains(response, 'sparqlOsmEndpoint')
