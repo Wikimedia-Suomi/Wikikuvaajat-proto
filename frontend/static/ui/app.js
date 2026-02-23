@@ -30,7 +30,7 @@
   const OSM_PLANET_SPARQL_ENDPOINT_URL = configuredSparqlOsmEndpoint || 'https://qlever.dev/api/osm-planet'
   const SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS = 150
   const SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS = 100
-  const SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS = 10
+  const SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS = 15
   const SAVE_IMAGE_SUBJECT_OSM_RADIUS_METERS = 30
   const SAVE_IMAGE_SUBJECT_OSM_MAX_ELEMENTS = 80
   const SAVE_IMAGE_SUBJECT_OSM_MAX_TAG_MAPPINGS = 120
@@ -12583,6 +12583,15 @@ LIMIT {{limit}}`,
           return true
         }
 
+        if (suggestionYear) {
+          for (const placeLabel of placeLabels) {
+            pushCandidateCategory(`${suggestionYear} in ${placeLabel}`)
+            if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
+              break
+            }
+          }
+        }
+
         for (const subjectCategory of subjectCategories) {
           const subjectCategoryDisplay = subjectCategory.replace(/_/g, ' ')
           for (const placeLabel of placeLabels) {
@@ -12599,15 +12608,6 @@ LIMIT {{limit}}`,
         for (const subjectCategory of subjectCategories) {
           if (!pushCandidateCategory(subjectCategory)) {
             continue
-          }
-        }
-
-        if (suggestionYear) {
-          for (const placeLabel of placeLabels) {
-            pushCandidateCategory(`${suggestionYear} in ${placeLabel}`)
-            if (candidateCategories.length >= SAVE_IMAGE_SUBJECT_CATEGORY_CONTEXT_MAX_CANDIDATES) {
-              break
-            }
           }
         }
 
