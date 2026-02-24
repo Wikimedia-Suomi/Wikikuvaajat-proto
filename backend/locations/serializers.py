@@ -5,8 +5,6 @@ from datetime import date
 
 from rest_framework import serializers
 
-from .models import DraftLocation
-
 
 _WIKIDATA_QID_PATTERN = re.compile(r'(Q\d+)', flags=re.IGNORECASE)
 _WIKIDATA_PID_PATTERN = re.compile(r'(P\d+)', flags=re.IGNORECASE)
@@ -78,7 +76,6 @@ class LocationSerializer(serializers.Serializer):
     latitude = serializers.FloatField()
     longitude = serializers.FloatField()
     source = serializers.CharField(required=False)
-    draft_id = serializers.IntegerField(required=False, allow_null=True)
     location_type = serializers.CharField(required=False, allow_blank=True)
     wikidata_item = serializers.CharField(required=False, allow_blank=True)
     address_text = serializers.CharField(required=False, allow_blank=True)
@@ -140,41 +137,6 @@ class LocationSerializer(serializers.Serializer):
     parent_uri = serializers.CharField(required=False, allow_blank=True)
     parent_id = serializers.CharField(required=False, allow_blank=True)
     children = serializers.ListField(child=serializers.DictField(), required=False)
-
-
-class DraftLocationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DraftLocation
-        fields = [
-            'id',
-            'name',
-            'description',
-            'location_type',
-            'wikidata_item',
-            'latitude',
-            'longitude',
-            'address_text',
-            'postal_code',
-            'municipality_p131',
-            'commons_category',
-            'parent_uri',
-            'created_at',
-            'updated_at',
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-
-    def validate_parent_uri(self, value: str) -> str:
-        return value.strip()
-
-    def validate_latitude(self, value: float) -> float:
-        if value < -90 or value > 90:
-            raise serializers.ValidationError('Latitude must be between -90 and 90.')
-        return value
-
-    def validate_longitude(self, value: float) -> float:
-        if value < -180 or value > 180:
-            raise serializers.ValidationError('Longitude must be between -180 and 180.')
-        return value
 
 
 class AddExistingWikidataItemSerializer(serializers.Serializer):

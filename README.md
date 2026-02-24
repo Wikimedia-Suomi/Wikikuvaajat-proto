@@ -58,10 +58,6 @@ The backend extends it with label/description and coordinates needed by the list
 
 - `GET /api/locations/?lang=en`
 - `GET /api/locations/<location_id>/?lang=fi`
-- `GET /api/drafts/`
-- `POST /api/drafts/`
-- `GET /api/drafts/<draft_id>/`
-- `PATCH /api/drafts/<draft_id>/`
 - `GET /api/wikidata/search/?q=helsinki&lang=fi`
 - `GET /api/wikidata/entities/<entity_id>/?lang=fi`
 - `GET /api/auth/status/`

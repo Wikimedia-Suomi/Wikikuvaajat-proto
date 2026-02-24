@@ -8,26 +8,15 @@
       ? window.APP_CONFIG.apiBaseUrl
       : 'http://localhost:8000/api'
     ).replace(/\/$/, '')
-  const configuredSparqlDefaultEndpoint =
-    (window.APP_CONFIG && typeof window.APP_CONFIG.sparqlDefaultEndpoint === 'string'
-      ? window.APP_CONFIG.sparqlDefaultEndpoint
-      : ''
-    ).trim()
-  const configuredSparqlOsmEndpoint =
-    (window.APP_CONFIG && typeof window.APP_CONFIG.sparqlOsmEndpoint === 'string'
-      ? window.APP_CONFIG.sparqlOsmEndpoint
-      : ''
-    ).trim()
-  const configuredPredefinedEndpoints =
-    window.APP_CONFIG && Array.isArray(window.APP_CONFIG.sparqlPredefinedEndpoints)
-      ? window.APP_CONFIG.sparqlPredefinedEndpoints
-      : []
+  const configuredSparqlDefaultEndpoint = 'https://query.wikidata.org/sparql'
+  const configuredSparqlOsmEndpoint = 'https://qlever.dev/api/osm-planet'
+  const configuredPredefinedEndpoints = []
   const API_BASE_URL = configuredApiBaseUrl
   const SUPPORTED_LOCALES = ['en', 'sv', 'fi']
   const WIKIDATA_LANGUAGE_SEARCH_URL = 'https://commons.wikimedia.org/w/api.php'
   const WIKIDATA_PROPERTY_SEARCH_URL = 'https://www.wikidata.org/w/api.php'
-  const WIKIDATA_SPARQL_ENDPOINT_URL = configuredSparqlDefaultEndpoint || 'https://query.wikidata.org/sparql'
-  const OSM_PLANET_SPARQL_ENDPOINT_URL = configuredSparqlOsmEndpoint || 'https://qlever.dev/api/osm-planet'
+  const WIKIDATA_SPARQL_ENDPOINT_URL = configuredSparqlDefaultEndpoint
+  const OSM_PLANET_SPARQL_ENDPOINT_URL = configuredSparqlOsmEndpoint
   const SAVE_IMAGE_NEARBY_WIKIDATA_RADIUS_METERS = 150
   const SAVE_IMAGE_NEARBY_OSM_RADIUS_METERS = 100
   const SAVE_IMAGE_NEARBY_WIKIDATA_MAX_ITEMS = 15
@@ -15596,9 +15585,6 @@ LIMIT {{limit}}`,
             </ul>
           </section>
           <div class="detail-actions">
-            <button v-if="canEditDraft" type="button" class="secondary-btn" @click="openDraftEditor">
-              {{ t('editLocationData') }}
-            </button>
             <RouterLink to="/">{{ t('backToList') }}</RouterLink>
           </div>
 
@@ -18527,21 +18513,10 @@ LIMIT {{limit}}`,
         }
       }
 
-      function openCreateLocationDialog(initialParent = null) {
+      function openCreateLocationDialog() {
         if (!canCreateLocation.value) {
           return
         }
-
-        const hasParentContext =
-          initialParent &&
-          typeof initialParent === 'object' &&
-          (
-            Object.prototype.hasOwnProperty.call(initialParent, 'parentUri') ||
-            Object.prototype.hasOwnProperty.call(initialParent, 'parentName') ||
-            Object.prototype.hasOwnProperty.call(initialParent, 'parentLatitude') ||
-            Object.prototype.hasOwnProperty.call(initialParent, 'parentLongitude')
-          )
-        const parentContext = hasParentContext ? initialParent : null
 
         locationDialogMode.value = 'create'
         editingDraftId.value = null
@@ -18550,29 +18525,9 @@ LIMIT {{limit}}`,
         wizardSaving.value = false
         resetDraftForm()
         resetWikidataCreationForm()
-        wizardChoiceLocked.value = Boolean(parentContext)
-        if (wizardChoiceLocked.value) {
-          createWizardMode.value = 'local-draft'
-          createWizardStep.value = 'form'
-        } else {
-          createWizardMode.value = ''
-          createWizardStep.value = 'choose'
-        }
-        if (parentContext) {
-          const parentUri = normalizeLocationUri(String(parentContext.parentUri || ''))
-          if (parentUri) {
-            draftParentUri.value = parentUri
-            const parentName = typeof parentContext.parentName === 'string' ? parentContext.parentName.trim() : ''
-            draftParentSearch.value = parentName ? `${parentName} (${parentUri})` : parentUri
-          }
-
-          const parentLatitude = parseCoordinate(parentContext.parentLatitude)
-          const parentLongitude = parseCoordinate(parentContext.parentLongitude)
-          if (parentLatitude !== null && parentLongitude !== null) {
-            draftLatitude.value = String(parentLatitude)
-            draftLongitude.value = String(parentLongitude)
-          }
-        }
+        wizardChoiceLocked.value = false
+        createWizardMode.value = ''
+        createWizardStep.value = 'choose'
         showCreateLocationDialog.value = true
       }
 
@@ -19858,7 +19813,7 @@ LIMIT {{limit}}`,
           await submitNewWikidataItem()
           return
         }
-        await submitLocationDraft()
+        return
       }
 
       async function submitLocationDraft() {
@@ -19996,12 +19951,8 @@ LIMIT {{limit}}`,
       onMounted(() => {
         loadProjects()
         loadAuthStatus()
-        window.addEventListener('open-draft-editor', handleOpenDraftEditorEvent)
-        window.addEventListener('open-create-sub-location', handleOpenCreateSubLocationEvent)
       })
       onBeforeUnmount(() => {
-        window.removeEventListener('open-draft-editor', handleOpenDraftEditorEvent)
-        window.removeEventListener('open-create-sub-location', handleOpenCreateSubLocationEvent)
         destroyCoordinatePickerMap()
         destroyCoordinatePreviewMap()
       })

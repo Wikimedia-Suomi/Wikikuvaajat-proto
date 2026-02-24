@@ -12,15 +12,9 @@
     <div id="app"></div>
 
     {{ api_base_url|json_script:"api-base-url" }}
-    {{ sparql_default_endpoint|json_script:"sparql-default-endpoint" }}
-    {{ sparql_predefined_endpoints|json_script:"sparql-predefined-endpoints" }}
-    {{ sparql_osm_endpoint|json_script:"sparql-osm-endpoint" }}
     <script>
       window.APP_CONFIG = {
-        apiBaseUrl: JSON.parse(document.getElementById('api-base-url').textContent),
-        sparqlDefaultEndpoint: JSON.parse(document.getElementById('sparql-default-endpoint').textContent),
-        sparqlPredefinedEndpoints: JSON.parse(document.getElementById('sparql-predefined-endpoints').textContent),
-        sparqlOsmEndpoint: JSON.parse(document.getElementById('sparql-osm-endpoint').textContent)
+        apiBaseUrl: JSON.parse(document.getElementById('api-base-url').textContent)
       }
     </script>
 
