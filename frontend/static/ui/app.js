@@ -10779,9 +10779,6 @@ ORDER BY ASC(?distance)
             }
             _setSaveImageSubjectMapCoordinates(event.latlng.lat, event.latlng.lng, { updateMapView: false })
             saveImageSubjectSelectionError.value = ''
-            if (saveImageSubjectHasActiveSelection.value) {
-              return
-            }
             _prepareSaveImageSubjectMapFeatureLoadingState()
             refreshSaveImageSubjectMapFeaturesDebounced(event.latlng.lat, event.latlng.lng)
           })
@@ -11726,11 +11723,42 @@ ORDER BY ASC(?distance)
         setSaveImageApiCoordinateMode(nextMode)
       }
 
+      function _syncSaveImageSubjectCoordinatesFromPrimaryLocation() {
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        if (latitude === null || longitude === null) {
+          saveImageSubjectMapLatitude.value = ''
+          saveImageSubjectMapLongitude.value = ''
+          if (
+            showSaveImageApiForm.value &&
+            saveImageSubjectTypeLocationRelevant.value &&
+            saveImageSubjectLinkUsesMap.value
+          ) {
+            _clearSaveImageSubjectMapFeatures()
+          }
+          return
+        }
+        _setSaveImageSubjectMapCoordinates(latitude, longitude)
+        if (
+          !showSaveImageApiForm.value ||
+          !saveImageSubjectTypeLocationRelevant.value ||
+          !saveImageSubjectLinkUsesMap.value
+        ) {
+          return
+        }
+        if (_hasSaveImageSubjectMapFeaturesLoadedForCoordinates(latitude, longitude)) {
+          return
+        }
+        _prepareSaveImageSubjectMapFeatureLoadingState()
+        refreshSaveImageSubjectMapFeaturesDebounced(latitude, longitude)
+      }
+
       function resetSaveImageCoordinatesToExif() {
         if (!saveImageHasExifCoordinates.value) {
           return
         }
         _setSaveImageCoordinates(saveImageExifLatitude.value, saveImageExifLongitude.value)
+        _syncSaveImageSubjectCoordinatesFromPrimaryLocation()
       }
 
       function resetSaveImageCoordinatesToWikidata() {
@@ -11738,6 +11766,7 @@ ORDER BY ASC(?distance)
           return
         }
         _setSaveImageCoordinates(saveImageInitialWikidataLatitude.value, saveImageInitialWikidataLongitude.value)
+        _syncSaveImageSubjectCoordinatesFromPrimaryLocation()
       }
 
       function onSaveImageOwnPhotoChange() {
@@ -14582,6 +14611,7 @@ ORDER BY ASC(?distance)
             _clearSaveImageSubjectMapFeatures()
             return
           }
+          _syncSaveImageSubjectCoordinatesFromPrimaryLocation()
           refreshSaveImageNearbyCategorySuggestionsDebounced()
           if (!previousOpen) {
             await nextTick()
