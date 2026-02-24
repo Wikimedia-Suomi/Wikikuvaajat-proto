@@ -5202,10 +5202,31 @@ ORDER BY ASC(?distance)
   }
 
   function normalizeLocationId(id) {
+    if (typeof id !== 'string') {
+      return ''
+    }
+    const trimmed = id.trim()
+    if (!trimmed) {
+      return ''
+    }
+
+    const decoded = (() => {
+      try {
+        return decodeURIComponent(trimmed)
+      } catch (error) {
+        return trimmed
+      }
+    })()
+
+    const qid = extractWikidataId(decoded)
+    if (qid) {
+      return qid
+    }
+
     try {
-      return encodeURIComponent(decodeURIComponent(id))
+      return encodeURIComponent(decodeURIComponent(trimmed))
     } catch (error) {
-      return encodeURIComponent(id)
+      return encodeURIComponent(trimmed)
     }
   }
 
@@ -7905,6 +7926,24 @@ ORDER BY ASC(?distance)
         return t('noValue')
       }
 
+      function locationRouteId(item) {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        const idValue = typeof item.id === 'string' ? item.id.trim() : ''
+        if (idValue) {
+          const normalizedId = normalizeLocationId(idValue)
+          if (normalizedId) {
+            return normalizedId
+          }
+        }
+        const uriValue = typeof item.uri === 'string' ? item.uri.trim() : ''
+        if (!uriValue) {
+          return ''
+        }
+        return normalizeLocationId(uriValue)
+      }
+
       function formatDescription(value) {
         return displayValue(value, t('noValue'))
       }
@@ -8106,6 +8145,7 @@ ORDER BY ASC(?distance)
         formatDateModified,
         locationDistanceLabel,
         locationDisplayName,
+        locationRouteId,
         formatDescription,
         detailsAriaLabel,
         listQueryUrl,
@@ -8150,7 +8190,7 @@ ORDER BY ASC(?distance)
                 <h2>
                   <RouterLink
                     class="text-link"
-                    :to="{ name: 'detail', params: { id: location.id } }"
+                    :to="{ name: 'detail', params: { id: locationRouteId(location) } }"
                     :aria-label="detailsAriaLabel(location)"
                   >
                     {{ locationDisplayName(location) }}
@@ -8159,7 +8199,7 @@ ORDER BY ASC(?distance)
               </header>
               <figure v-if="location.image_thumb_url || location.image_url" class="location-thumb">
                 <RouterLink
-                  :to="{ name: 'detail', params: { id: location.id } }"
+                  :to="{ name: 'detail', params: { id: locationRouteId(location) } }"
                   :aria-label="detailsAriaLabel(location)"
                 >
                   <img
@@ -8374,9 +8414,10 @@ ORDER BY ASC(?distance)
           )
         }
 
-        const locationId = (typeof location.id === 'string' && location.id.trim())
+        const locationIdSource = (typeof location.id === 'string' && location.id.trim())
           ? location.id.trim()
-          : normalizeLocationId(String(location.uri || ''))
+          : String(location.uri || '')
+        const locationId = normalizeLocationId(locationIdSource)
         const detailsLink = locationId
           ? `<a class="text-link map-popup-link" href="#/location/${escapeHtml(locationId)}">${escapeHtml(t('openDetails'))}</a>`
           : ''
@@ -13752,7 +13793,10 @@ ORDER BY ASC(?distance)
           return ''
         }
         if (typeof item.id === 'string' && item.id.trim()) {
-          return item.id
+          const normalizedId = normalizeLocationId(item.id.trim())
+          if (normalizedId) {
+            return normalizedId
+          }
         }
         if (typeof item.uri === 'string' && item.uri.trim()) {
           return normalizeLocationId(item.uri)
@@ -13777,7 +13821,10 @@ ORDER BY ASC(?distance)
           return ''
         }
         if (typeof location.value.parent_id === 'string' && location.value.parent_id.trim()) {
-          return location.value.parent_id
+          const normalizedParentId = normalizeLocationId(location.value.parent_id.trim())
+          if (normalizedParentId) {
+            return normalizedParentId
+          }
         }
         if (typeof location.value.parent_uri === 'string' && location.value.parent_uri.trim()) {
           return normalizeLocationId(location.value.parent_uri)
@@ -16295,6 +16342,27 @@ ORDER BY ASC(?distance)
   const router = createRouter({
     history: createWebHashHistory(),
     routes
+  })
+
+  router.beforeEach((to) => {
+    if (to.name !== 'detail') {
+      return true
+    }
+    const rawId = typeof to.params.id === 'string' ? to.params.id.trim() : ''
+    if (!rawId) {
+      return true
+    }
+    const qid = extractWikidataId(rawId)
+    if (!qid || rawId.toUpperCase() === qid) {
+      return true
+    }
+    return {
+      name: 'detail',
+      params: { ...to.params, id: qid },
+      query: to.query,
+      hash: to.hash,
+      replace: true,
+    }
   })
 
   const AppRoot = {

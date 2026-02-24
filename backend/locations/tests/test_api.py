@@ -175,6 +175,13 @@ class LocationApiTests(APITestCase):
         self.assertEqual(response.status_code, 404)
         fetch_location_detail_mock.assert_not_called()
 
+    @patch('locations.views.fetch_location_detail')
+    def test_location_detail_returns_404_for_invalid_location_id(self, fetch_location_detail_mock):
+        response = self.client.get(reverse('location-detail', kwargs={'location_id': 'not-a-qid'}))
+
+        self.assertEqual(response.status_code, 404)
+        fetch_location_detail_mock.assert_not_called()
+
     @patch('locations.views.search_wikidata_entities')
     def test_wikidata_search_endpoint(self, search_wikidata_entities_mock):
         search_wikidata_entities_mock.return_value = [
@@ -1221,6 +1228,12 @@ class LocationApiTests(APITestCase):
         encoded = quote('https://draft.local/location/123', safe='')
 
         response = self.client.get(reverse('location-children'), {'lang': 'fi', 'location_id': encoded})
+
+        self.assertEqual(response.status_code, 404)
+        self.fetch_location_children_mock.assert_not_called()
+
+    def test_location_children_endpoint_returns_404_for_invalid_location_id(self):
+        response = self.client.get(reverse('location-children'), {'lang': 'fi', 'location_id': 'not-a-qid'})
 
         self.assertEqual(response.status_code, 404)
         self.fetch_location_children_mock.assert_not_called()

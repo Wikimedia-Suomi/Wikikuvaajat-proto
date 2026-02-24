@@ -46,6 +46,7 @@ _WIKIDATA_ENTITY_PATTERN = re.compile(
     r'^https?://www\.wikidata\.org/entity/(Q\d+)$',
     flags=re.IGNORECASE,
 )
+_WIKIDATA_QID_ONLY_PATTERN = re.compile(r'^Q\d+$', flags=re.IGNORECASE)
 _WIKIDATA_QID_PATTERN = re.compile(r'(Q\d+)', flags=re.IGNORECASE)
 _LOCAL_DRAFT_URI_PATTERN = re.compile(r'^https://draft\.local/location/\d+$', flags=re.IGNORECASE)
 _CACHE_BUST_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$')
@@ -175,6 +176,21 @@ def _extract_wikidata_qid(value: str) -> str:
     if not match:
         return ''
     return match.group(1).upper()
+
+
+def _normalized_wikidata_entity_uri_from_location_id(location_id: str) -> str:
+    decoded_value = decode_location_id(str(location_id or '').strip()).strip()
+    if not decoded_value:
+        return ''
+
+    entity_match = _WIKIDATA_ENTITY_PATTERN.match(decoded_value)
+    if entity_match:
+        return f'https://www.wikidata.org/entity/{entity_match.group(1).upper()}'
+
+    if _WIKIDATA_QID_ONLY_PATTERN.fullmatch(decoded_value):
+        return f'https://www.wikidata.org/entity/{decoded_value.upper()}'
+
+    return ''
 
 
 def _wikidata_qid_from_location(location: dict) -> str:
@@ -478,7 +494,10 @@ class LocationListAPIView(BaseLocationAPIView):
 class LocationDetailAPIView(BaseLocationAPIView):
     def get(self, request, location_id: str):
         lang = self._get_lang(request)
-        uri = decode_location_id(location_id)
+        uri = _normalized_wikidata_entity_uri_from_location_id(location_id)
+        if not uri:
+            return Response({'detail': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
+
         normalized_uri = _normalize_uri(uri)
         if _LOCAL_DRAFT_URI_PATTERN.match(normalized_uri):
             return Response({'detail': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -502,7 +521,10 @@ class LocationChildrenAPIView(BaseLocationAPIView):
         if not raw_location_id:
             return Response({'detail': 'location_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        uri = decode_location_id(raw_location_id)
+        uri = _normalized_wikidata_entity_uri_from_location_id(raw_location_id)
+        if not uri:
+            return Response({'detail': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
+
         normalized_uri = _normalize_uri(uri)
         if _LOCAL_DRAFT_URI_PATTERN.match(normalized_uri):
             return Response({'detail': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
