@@ -5348,13 +5348,6 @@ ORDER BY ASC(?distance)
     })
   }
 
-  function createDraft(payload) {
-    return request('/drafts/', {
-      method: 'POST',
-      body: payload
-    })
-  }
-
   function addExistingWikidataItem(payload) {
     return request('/wikidata/add-existing/', {
       method: 'POST',
@@ -5391,17 +5384,6 @@ ORDER BY ASC(?distance)
 
   function fetchAuthStatus() {
     return request('/auth/status/')
-  }
-
-  function fetchDraft(draftId) {
-    return request(`/drafts/${encodeURIComponent(String(draftId))}/`)
-  }
-
-  function updateDraft(draftId, payload) {
-    return request(`/drafts/${encodeURIComponent(String(draftId))}/`, {
-      method: 'PATCH',
-      body: payload
-    })
   }
 
   function searchWikidataEntities(query, lang, limit = AUTOCOMPLETE_RESULT_LIMIT) {
@@ -6801,8 +6783,6 @@ ORDER BY ASC(?distance)
       createModeExistingDesc: 'Pick an existing Wikidata item and add it to the Wikikuvaajat endangered buildings list.',
       createModeNewWikidataTitle: 'Create new Wikidata item',
       createModeNewWikidataDesc: 'Use a guided form to create a new Wikidata item for a building.',
-      createModeLocalTitle: 'Create local draft',
-      createModeLocalDesc: 'Create a locally stored draft as before.',
       addExistingWikidataTitle: 'Add Existing Wikidata Item',
       addExistingWikidataHelp: 'Select an existing Wikidata item and add it to the Wikikuvaajat endangered buildings list.',
       addExistingWikidataSourceHelp: 'Add a source for this item.',
@@ -7140,8 +7120,6 @@ ORDER BY ASC(?distance)
       createModeExistingDesc: 'Välj ett befintligt Wikidata-objekt och lägg till det i Wikikuvaajat-listan över hotade byggnader.',
       createModeNewWikidataTitle: 'Skapa nytt Wikidata-objekt',
       createModeNewWikidataDesc: 'Använd ett guidat formulär för att skapa ett nytt Wikidata-objekt för en byggnad.',
-      createModeLocalTitle: 'Skapa lokalt utkast',
-      createModeLocalDesc: 'Skapa ett lokalt sparat utkast som tidigare.',
       addExistingWikidataTitle: 'Lägg till befintligt Wikidata-objekt',
       addExistingWikidataHelp: 'Välj ett befintligt Wikidata-objekt och lägg till det i Wikikuvaajat-listan över hotade byggnader.',
       addExistingWikidataSourceHelp: 'Lägg till en källa för objektet.',
@@ -7479,8 +7457,6 @@ ORDER BY ASC(?distance)
       createModeExistingDesc: 'Valitse olemassa oleva Wikidata-kohde ja lisää se Wikikuvaajien vaarassa olevat rakennukset -listaan.',
       createModeNewWikidataTitle: 'Luo uusi Wikidata-kohde',
       createModeNewWikidataDesc: 'Luo rakennukselle uusi Wikidata-kohde ohjatulla lomakkeella.',
-      createModeLocalTitle: 'Luo paikallinen luonnos',
-      createModeLocalDesc: 'Luo paikallisesti tallennettava luonnos kuten aiemmin.',
       addExistingWikidataTitle: 'Lisää olemassa oleva Wikidata-kohde',
       addExistingWikidataHelp: 'Valitse olemassa oleva Wikidata-kohde ja lisää se Wikikuvaajien vaarassa olevat rakennukset -listaan.',
       addExistingWikidataSourceHelp: 'Lisää kohteelle lähde.',
@@ -8686,18 +8662,6 @@ ORDER BY ASC(?distance)
       let locationLoadToken = 0
       let childrenLoadToken = 0
       const childLocations = computed(() => (Array.isArray(children.value) ? children.value : []))
-      const canEditDraft = computed(() => {
-        const draftId = location.value && location.value.draft_id !== undefined
-          ? Number.parseInt(String(location.value.draft_id), 10)
-          : Number.NaN
-        return Boolean(
-          location.value &&
-          location.value.source === 'draft' &&
-          !Number.isNaN(draftId) &&
-          !authStatusLoading.value &&
-          authAuthenticated.value
-        )
-      })
       const canCreateSubLocation = computed(() => {
         if (!location.value || !location.value.uri) {
           return false
@@ -13767,17 +13731,6 @@ ORDER BY ASC(?distance)
         }
       }
 
-      function openDraftEditor() {
-        if (!canEditDraft.value) {
-          return
-        }
-        window.dispatchEvent(
-          new CustomEvent('open-draft-editor', {
-            detail: { draftId: location.value.draft_id }
-          })
-        )
-      }
-
       function openSubLocationCreator() {
         if (!canCreateSubLocation.value) {
           return
@@ -13816,10 +13769,7 @@ ORDER BY ASC(?distance)
           return false
         }
         const normalizedUri = normalizeLocationUri(uri)
-        return (
-          normalizedUri.startsWith('https://www.wikidata.org/entity/') ||
-          normalizedUri.startsWith('https://draft.local/location/')
-        )
+        return normalizedUri.startsWith('https://www.wikidata.org/entity/')
       }
 
       function parentLocationId() {
@@ -14770,12 +14720,10 @@ ORDER BY ASC(?distance)
         childLocations,
         childrenLoading,
         childrenError,
-        canEditDraft,
         canCreateSubLocation,
         canSaveImage,
         detailMapElement,
         hasDetailMapCoordinates,
-        openDraftEditor,
         openSubLocationCreator,
         showSaveImageApiForm,
         showSaveImageCoordinatePickerDialog,
@@ -16471,72 +16419,29 @@ ORDER BY ASC(?distance)
       const newWikidataPropertySearch = ref('')
       const newWikidataPropertySuggestions = ref([])
       const newWikidataPropertyLoading = ref(false)
-      const locationDialogMode = ref('create')
-      const editingDraftId = ref(null)
-      const draftLoading = ref(false)
-      const draftWikidataItem = ref('')
-      const draftWikidataSuggestions = ref([])
-      const draftWikidataSearchLoading = ref(false)
-      const draftParentUri = ref('')
-      const draftParentSearch = ref('')
-      const draftParentSuggestions = ref([])
-      const draftParentLoading = ref(false)
-      const draftName = ref('')
-      const draftDescription = ref('')
-      const draftType = ref('')
-      const draftTypeSearch = ref('')
-      const draftTypeSuggestions = ref([])
-      const draftTypeLoading = ref(false)
-      const draftLatitude = ref('')
-      const draftLongitude = ref('')
-      const draftAddressText = ref('')
-      const draftPostalCode = ref('')
-      const draftMunicipalityP131 = ref('')
-      const draftMunicipalitySearch = ref('')
-      const draftMunicipalitySuggestions = ref([])
-      const draftMunicipalityLoading = ref(false)
-      const draftCommonsCategory = ref('')
-      const draftCommonsSearch = ref('')
-      const draftCommonsSuggestions = ref([])
-      const draftCommonsLoading = ref(false)
-      const wikidataEntity = ref(null)
-      const wikidataLookupLoading = ref(false)
-      const wikidataLookupError = ref('')
-      const coordinatePreviewMapElement = ref(null)
       const showCoordinatePickerDialog = ref(false)
-      const coordinatePickerTarget = ref('draft')
       const coordinatePickerMapElement = ref(null)
       const coordinateSearchQuery = ref('')
       const coordinateSearchResults = ref([])
       const coordinateSearchLoading = ref(false)
       const coordinateSearchError = ref('')
-      const draftError = ref('')
-      const draftSaving = ref(false)
-      const parentCandidateLocations = ref([])
-      const parentCandidatesContext = ref('')
-      let wikidataLookupToken = 0
-      const isEditMode = computed(() => locationDialogMode.value === 'edit' && editingDraftId.value !== null)
-      const isWizardChoiceStep = computed(() => !isEditMode.value && createWizardStep.value === 'choose')
-      const isWizardExistingMode = computed(() => !isEditMode.value && createWizardMode.value === 'existing-wikidata' && createWizardStep.value === 'form')
+      const isWizardChoiceStep = computed(() => createWizardStep.value === 'choose')
+      const isWizardExistingMode = computed(() => createWizardMode.value === 'existing-wikidata' && createWizardStep.value === 'form')
       const wizardExistingHasSelectedItem = computed(() => Boolean(
         resolveWizardQid(wizardExistingWikidataItem.value, wizardExistingWikidataSearch.value)
       ))
-      const isWizardNewMode = computed(() => !isEditMode.value && createWizardMode.value === 'new-wikidata' && createWizardStep.value === 'form')
+      const isWizardNewMode = computed(() => createWizardMode.value === 'new-wikidata' && createWizardStep.value === 'form')
       const isWizardNewBasicStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'basic')
       const isWizardNewLocationStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'location')
       const isWizardNewPropertiesStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'properties')
       const isWizardNewIdentifiersStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'identifiers')
       const isWizardNewSourceStep = computed(() => isWizardNewMode.value && newWikidataWizardStep.value === 'source')
-      const showLocalDraftForm = computed(() => isEditMode.value || createWizardMode.value === 'local-draft')
-      const canReturnToWizardChoice = computed(() => !isEditMode.value && !wizardChoiceLocked.value && createWizardStep.value === 'form')
+      const canReturnToWizardChoice = computed(() => !wizardChoiceLocked.value && createWizardStep.value === 'form')
       const canCreateLocation = computed(() => !authStatusLoading.value && authAuthenticated.value)
       const showCradleGuideButton = computed(() => authEnabled.value && !authAuthenticated.value && !authStatusLoading.value)
-      const isCreateActionBusy = computed(() => draftLoading.value || draftSaving.value || wizardSaving.value)
+      const isCreateActionBusy = computed(() => wizardSaving.value)
       const cradleUrl = 'https://cradle.toolforge.org/#/subject/building_(wikikuvaajat)'
       const locationDialogTitle = computed(() => {
-        if (isEditMode.value) {
-          return t('editLocationTitle')
-        }
         if (isWizardChoiceStep.value) {
           return t('createLocationTypeStepTitle')
         }
@@ -16549,9 +16454,6 @@ ORDER BY ASC(?distance)
         return t('createLocationTitle')
       })
       const locationDialogSubmitLabel = computed(() => {
-        if (isEditMode.value) {
-          return t('saveChanges')
-        }
         if (isWizardExistingMode.value) {
           return t('addToList')
         }
@@ -16563,84 +16465,6 @@ ORDER BY ASC(?distance)
         }
         return t('create')
       })
-      const isWikidataLocked = computed(() => {
-        return Boolean(extractWikidataId(draftWikidataItem.value) && wikidataEntity.value)
-      })
-      const areWikidataFieldsReadOnly = computed(() => isWikidataLocked.value)
-      const emptyValueLabel = computed(() => t('noValue'))
-      const manualTypeDisplay = computed(() => draftTypeSearch.value.trim() || draftType.value.trim())
-      const manualMunicipalityDisplay = computed(() => draftMunicipalitySearch.value.trim() || draftMunicipalityP131.value.trim())
-      const manualCommonsDisplay = computed(() => draftCommonsSearch.value.trim() || draftCommonsCategory.value.trim())
-      const wikidataTypeDisplay = computed(() => {
-        if (!wikidataEntity.value || !wikidataEntity.value.instance_of) {
-          return ''
-        }
-        const item = wikidataEntity.value.instance_of
-        return item.label ? `${item.label} (${item.id})` : item.id
-      })
-      const wikidataMunicipalityDisplay = computed(() => {
-        if (!wikidataEntity.value || !wikidataEntity.value.municipality) {
-          return ''
-        }
-        const item = wikidataEntity.value.municipality
-        return item.label ? `${item.label} (${item.id})` : item.id
-      })
-      const wikidataCommonsDisplay = computed(() => {
-        if (!wikidataEntity.value || !wikidataEntity.value.commons_category) {
-          return ''
-        }
-        return `Category:${wikidataEntity.value.commons_category}`
-      })
-      const wikidataAddressDisplay = computed(() => wikidataEntity.value?.address_text || '')
-      const wikidataPostalDisplay = computed(() => wikidataEntity.value?.postal_code || '')
-      const nameDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftName.value, wikidataEntity.value?.label || ''))
-      const descriptionDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftDescription.value, wikidataEntity.value?.description || ''))
-      const typeDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftType.value, wikidataEntity.value?.instance_of?.id || ''))
-      const addressDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftAddressText.value, wikidataEntity.value?.address_text || ''))
-      const postalDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftPostalCode.value, wikidataEntity.value?.postal_code || ''))
-      const municipalityDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftMunicipalityP131.value, wikidataEntity.value?.municipality?.id || ''))
-      const commonsDiffers = computed(() => isWikidataLocked.value && textValuesDiffer(draftCommonsCategory.value, wikidataEntity.value?.commons_category || ''))
-      const coordinatesDiffers = computed(() => {
-        if (!isWikidataLocked.value) {
-          return false
-        }
-        return coordinatesDiffer(
-          draftLatitude.value,
-          draftLongitude.value,
-          wikidataEntity.value?.latitude,
-          wikidataEntity.value?.longitude,
-        )
-      })
-      const showManualNameDiff = computed(() => nameDiffers.value && hasTextValue(draftName.value))
-      const showManualDescriptionDiff = computed(() => descriptionDiffers.value && hasTextValue(draftDescription.value))
-      const showManualTypeDiff = computed(() => typeDiffers.value && hasTextValue(draftType.value))
-      const showManualAddressDiff = computed(() => addressDiffers.value && hasTextValue(draftAddressText.value))
-      const showManualPostalDiff = computed(() => postalDiffers.value && hasTextValue(draftPostalCode.value))
-      const showManualMunicipalityDiff = computed(() => municipalityDiffers.value && hasTextValue(draftMunicipalityP131.value))
-      const showManualCommonsDiff = computed(() => commonsDiffers.value && hasTextValue(draftCommonsCategory.value))
-      const showManualCoordinatesDiff = computed(() => {
-        const hasLocalCoordinateInput = hasTextValue(draftLatitude.value) && hasTextValue(draftLongitude.value)
-        return coordinatesDiffers.value && hasLocalCoordinateInput
-      })
-      const showNameField = computed(() => !isWikidataLocked.value)
-      const showDescriptionField = computed(() => !isWikidataLocked.value)
-      const showTypeField = computed(() => !isWikidataLocked.value)
-      const showLatitudeField = computed(() => !isWikidataLocked.value)
-      const showLongitudeField = computed(() => !isWikidataLocked.value)
-      const showCoordinateInputRow = computed(() => showLatitudeField.value || showLongitudeField.value)
-      const showAddressField = computed(() => !isWikidataLocked.value)
-      const showPostalField = computed(() => !isWikidataLocked.value)
-      const showMunicipalityField = computed(() => !isWikidataLocked.value)
-      const showPostalMunicipalityRow = computed(() => showPostalField.value || showMunicipalityField.value)
-      const showCommonsField = computed(() => !isWikidataLocked.value)
-      const showNameInfo = computed(() => isWikidataLocked.value && showManualNameDiff.value)
-      const showDescriptionInfo = computed(() => isWikidataLocked.value && showManualDescriptionDiff.value)
-      const showTypeInfo = computed(() => isWikidataLocked.value && showManualTypeDiff.value)
-      const showCoordinatesInfo = computed(() => isWikidataLocked.value && showManualCoordinatesDiff.value)
-      const showAddressInfo = computed(() => isWikidataLocked.value && showManualAddressDiff.value)
-      const showPostalInfo = computed(() => isWikidataLocked.value && showManualPostalDiff.value)
-      const showMunicipalityInfo = computed(() => isWikidataLocked.value && showManualMunicipalityDiff.value)
-      const showCommonsInfo = computed(() => isWikidataLocked.value && showManualCommonsDiff.value)
       const newWikidataOptionalPropertySet = computed(() => new Set(newWikidataOptionalPropertyKeys.value))
 
       function isNewWikidataIdentifierProperty(optionOrKey) {
@@ -16981,20 +16805,8 @@ ORDER BY ASC(?distance)
         hideSuggestionsSoon(newWikidataPropertySuggestions)
       }
 
-      function coordinatePickerFields() {
-        if (coordinatePickerTarget.value === 'new-wikidata') {
-          return {
-            latitudeRef: newWikidataLatitude,
-            longitudeRef: newWikidataLongitude,
-          }
-        }
-        return {
-          latitudeRef: draftLatitude,
-          longitudeRef: draftLongitude,
-        }
-      }
-      const coordinatePickerLatitudeValue = computed(() => coordinatePickerFields().latitudeRef.value)
-      const coordinatePickerLongitudeValue = computed(() => coordinatePickerFields().longitudeRef.value)
+      const coordinatePickerLatitudeValue = computed(() => newWikidataLatitude.value)
+      const coordinatePickerLongitudeValue = computed(() => newWikidataLongitude.value)
       const coordinatePickerLatitudeDisplay = computed(() => (
         hasTextValue(coordinatePickerLatitudeValue.value)
           ? String(coordinatePickerLatitudeValue.value).trim()
@@ -17013,59 +16825,7 @@ ORDER BY ASC(?distance)
 
       let coordinatePickerMapInstance = null
       let coordinatePickerMarker = null
-      let coordinatePickerLastZoomDraft = null
-      let coordinatePickerLastZoomNewWikidata = null
-      let coordinatePreviewMapInstance = null
-      let coordinatePreviewManualMarker = null
-      let coordinatePreviewWikidataMarker = null
-
-      const searchTypeSuggestionsDebounced = debounce(async (searchTerm) => {
-        draftTypeLoading.value = true
-        try {
-          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
-          draftTypeSuggestions.value = Array.isArray(items) ? items : []
-        } catch (error) {
-          draftTypeSuggestions.value = []
-        } finally {
-          draftTypeLoading.value = false
-        }
-      }, 250)
-
-      const searchWikidataItemSuggestionsDebounced = debounce(async (searchTerm) => {
-        draftWikidataSearchLoading.value = true
-        try {
-          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
-          draftWikidataSuggestions.value = Array.isArray(items) ? items : []
-        } catch (error) {
-          draftWikidataSuggestions.value = []
-        } finally {
-          draftWikidataSearchLoading.value = false
-        }
-      }, 250)
-
-      const searchMunicipalitySuggestionsDebounced = debounce(async (searchTerm) => {
-        draftMunicipalityLoading.value = true
-        try {
-          const items = await searchWikidataEntities(searchTerm, locale.value, AUTOCOMPLETE_RESULT_LIMIT)
-          draftMunicipalitySuggestions.value = Array.isArray(items) ? items : []
-        } catch (error) {
-          draftMunicipalitySuggestions.value = []
-        } finally {
-          draftMunicipalityLoading.value = false
-        }
-      }, 250)
-
-      const searchCommonsSuggestionsDebounced = debounce(async (searchTerm) => {
-        draftCommonsLoading.value = true
-        try {
-          const items = await searchCommonsCategories(searchTerm, AUTOCOMPLETE_RESULT_LIMIT)
-          draftCommonsSuggestions.value = Array.isArray(items) ? items : []
-        } catch (error) {
-          draftCommonsSuggestions.value = []
-        } finally {
-          draftCommonsLoading.value = false
-        }
-      }, 250)
+      let coordinatePickerLastZoom = null
 
       const searchNewWikidataPropertySuggestionsDebounced = debounce(async (searchTerm) => {
         newWikidataPropertyLoading.value = true
@@ -17437,154 +17197,6 @@ ORDER BY ASC(?distance)
         return qid
       }
 
-      function parentCandidatesKey() {
-        return `${locale.value}|${locationsVersion.value}`
-      }
-
-      async function loadParentCandidates(force = false) {
-        const contextKey = parentCandidatesKey()
-        if (!force && parentCandidatesContext.value === contextKey && parentCandidateLocations.value.length > 0) {
-          return parentCandidateLocations.value
-        }
-
-        const loaded = await getLocationsCached(locale.value, { force })
-        parentCandidateLocations.value = Array.isArray(loaded) ? loaded : []
-        parentCandidatesContext.value = contextKey
-        return parentCandidateLocations.value
-      }
-
-      function toParentCandidateList(candidates, searchTerm) {
-        const normalizedSearch = searchTerm.trim().toLowerCase()
-        const results = []
-        for (const item of candidates) {
-          if (!item || typeof item !== 'object') {
-            continue
-          }
-          if (isEditMode.value && Number.parseInt(String(item.draft_id), 10) === editingDraftId.value) {
-            continue
-          }
-          const uri = normalizeLocationUri(String(item.uri || ''))
-          if (!uri) {
-            continue
-          }
-          const label = locationOptionLabel(item).toLowerCase()
-          if (normalizedSearch && !label.includes(normalizedSearch)) {
-            continue
-          }
-          results.push(item)
-          if (results.length >= AUTOCOMPLETE_RESULT_LIMIT) {
-            break
-          }
-        }
-        return results
-      }
-
-      const searchParentSuggestionsDebounced = debounce(async (searchTerm) => {
-        draftParentLoading.value = true
-        try {
-          const candidates = await loadParentCandidates()
-          draftParentSuggestions.value = toParentCandidateList(candidates, searchTerm)
-        } catch (error) {
-          draftParentSuggestions.value = []
-        } finally {
-          draftParentLoading.value = false
-        }
-      }, 220)
-
-      function wikidataLookupEntityFromLocation(location, fallbackQid = '') {
-        if (!location || typeof location !== 'object') {
-          return null
-        }
-
-        const uri = normalizeLocationUri(String(location.uri || ''))
-        const qid = extractWikidataId(uri || String(location.wikidata_item || fallbackQid || ''))
-        if (!qid) {
-          return null
-        }
-
-        const latitude = parseCoordinate(location.latitude)
-        const longitude = parseCoordinate(location.longitude)
-        const municipalityId = extractWikidataId(
-          String(location.municipality_p131 || location.location_p276 || '')
-        )
-        const municipalityLabel = String(
-          location.municipality_p131_label || location.location_p276_label || ''
-        ).trim()
-        const instanceOfId = extractWikidataId(
-          String(location.instance_of_p31 || location.location_type || '')
-        )
-        const instanceOfLabel = String(location.instance_of_p31_label || location.location_type || '').trim()
-
-        return {
-          id: qid,
-          uri: uri || `https://www.wikidata.org/entity/${qid}`,
-          label: String(location.name || qid).trim() || qid,
-          description: String(location.description || '').trim(),
-          latitude,
-          longitude,
-          instance_of: instanceOfId
-            ? { id: instanceOfId, label: instanceOfLabel || instanceOfId }
-            : null,
-          municipality: municipalityId
-            ? { id: municipalityId, label: municipalityLabel || municipalityId }
-            : null,
-          commons_category: String(location.commons_category || '').trim(),
-          address_text: String(location.address_text || '').trim(),
-          postal_code: String(location.postal_code || '').trim(),
-        }
-      }
-
-      const wikidataLookupDebounced = debounce(async (entityId) => {
-        const qid = extractWikidataId(entityId)
-        if (!qid) {
-          return
-        }
-        const currentToken = ++wikidataLookupToken
-        const wikidataUri = `https://www.wikidata.org/entity/${qid}`
-        wikidataLookupLoading.value = true
-        wikidataLookupError.value = ''
-
-        const listCached = getLocationFromListCache(wikidataUri, locale.value)
-        const listInitialEntity = wikidataLookupEntityFromLocation(listCached, qid)
-        if (listInitialEntity) {
-          wikidataEntity.value = listInitialEntity
-          draftWikidataItem.value = listInitialEntity.id
-        }
-
-        try {
-          const detailLocation = await getLocationDetailCached(
-            wikidataUri,
-            locale.value,
-            { force: true },
-          )
-          if (currentToken !== wikidataLookupToken) {
-            return
-          }
-          const detailEntity = wikidataLookupEntityFromLocation(detailLocation, qid)
-          if (!detailEntity) {
-            throw new Error(t('wikidataLookupFailed'))
-          }
-          wikidataEntity.value = detailEntity
-          draftWikidataItem.value = detailEntity.id
-          draftWikidataSuggestions.value = []
-          draftTypeSuggestions.value = []
-          draftMunicipalitySuggestions.value = []
-          draftCommonsSuggestions.value = []
-        } catch (error) {
-          if (currentToken !== wikidataLookupToken) {
-            return
-          }
-          if (!listInitialEntity) {
-            wikidataEntity.value = null
-          }
-          wikidataLookupError.value = error.message || t('wikidataLookupFailed')
-        } finally {
-          if (currentToken === wikidataLookupToken) {
-            wikidataLookupLoading.value = false
-          }
-        }
-      }, 320)
-
       async function loadAuthStatus() {
         authStatusLoading.value = true
         try {
@@ -17626,43 +17238,6 @@ ORDER BY ASC(?distance)
 
       function openCradle() {
         window.open(cradleUrl, '_blank', 'noopener,noreferrer')
-      }
-
-      function resetDraftForm() {
-        wikidataEntity.value = null
-        wikidataLookupLoading.value = false
-        wikidataLookupError.value = ''
-        draftWikidataItem.value = ''
-        draftWikidataSuggestions.value = []
-        draftWikidataSearchLoading.value = false
-        draftParentUri.value = ''
-        draftParentSearch.value = ''
-        draftParentSuggestions.value = []
-        draftParentLoading.value = false
-        draftName.value = ''
-        draftDescription.value = ''
-        draftType.value = ''
-        draftTypeSearch.value = ''
-        draftTypeSuggestions.value = []
-        draftTypeLoading.value = false
-        draftLatitude.value = ''
-        draftLongitude.value = ''
-        draftAddressText.value = ''
-        draftPostalCode.value = ''
-        draftMunicipalityP131.value = ''
-        draftMunicipalitySearch.value = ''
-        draftMunicipalitySuggestions.value = []
-        draftMunicipalityLoading.value = false
-        draftCommonsCategory.value = ''
-        draftCommonsSearch.value = ''
-        draftCommonsSuggestions.value = []
-        draftCommonsLoading.value = false
-        coordinateSearchQuery.value = ''
-        coordinateSearchResults.value = []
-        coordinateSearchLoading.value = false
-        coordinateSearchError.value = ''
-        draftError.value = ''
-        destroyCoordinatePreviewMap()
       }
 
       function resetWikidataCreationForm() {
@@ -17773,7 +17348,6 @@ ORDER BY ASC(?distance)
         newWikidataWizardStep.value = 'basic'
         createWizardStep.value = 'choose'
         wizardError.value = ''
-        draftError.value = ''
       }
 
       let newWikidataAdditionalLanguageLookupSequence = 0
@@ -18220,12 +17794,7 @@ ORDER BY ASC(?distance)
           return
         }
 
-        locationDialogMode.value = 'create'
-        editingDraftId.value = null
-        draftLoading.value = false
-        draftSaving.value = false
         wizardSaving.value = false
-        resetDraftForm()
         resetWikidataCreationForm()
         wizardChoiceLocked.value = false
         createWizardMode.value = ''
@@ -18233,243 +17802,16 @@ ORDER BY ASC(?distance)
         showCreateLocationDialog.value = true
       }
 
-      function applyDraftPayloadToForm(draft) {
-        draftWikidataItem.value = String(draft.wikidata_item || '').trim()
-        draftParentUri.value = normalizeLocationUri(String(draft.parent_uri || ''))
-        draftParentSearch.value = draftParentUri.value
-        draftName.value = String(draft.name || '')
-        draftDescription.value = String(draft.description || '')
-        draftType.value = String(draft.location_type || '')
-        draftTypeSearch.value = String(draft.location_type || '')
-        draftLatitude.value = draft.latitude === null || draft.latitude === undefined ? '' : String(draft.latitude)
-        draftLongitude.value = draft.longitude === null || draft.longitude === undefined ? '' : String(draft.longitude)
-        draftAddressText.value = String(draft.address_text || '')
-        draftPostalCode.value = String(draft.postal_code || '')
-        draftMunicipalityP131.value = String(draft.municipality_p131 || '')
-        draftMunicipalitySearch.value = String(draft.municipality_p131 || '')
-        draftCommonsCategory.value = String(draft.commons_category || '')
-        draftCommonsSearch.value = String(draft.commons_category || '')
-      }
-
-      async function syncDraftParentSearchLabel() {
-        if (!draftParentUri.value) {
-          draftParentSearch.value = ''
-          return
-        }
-        try {
-          const candidates = await loadParentCandidates()
-          const normalizedParent = normalizeLocationUri(draftParentUri.value)
-          const match = candidates.find(
-            (item) => normalizeLocationUri(String(item && item.uri ? item.uri : '')) === normalizedParent
-          )
-          if (match) {
-            draftParentSearch.value = locationOptionLabel(match)
-            return
-          }
-        } catch (error) {
-          // Keep URI fallback text if candidates are unavailable.
-        }
-        draftParentSearch.value = draftParentUri.value
-      }
-
-      async function openEditLocationDialog(draftId) {
-        const parsedDraftId = Number.parseInt(String(draftId), 10)
-        if (Number.isNaN(parsedDraftId)) {
-          return
-        }
-
-        locationDialogMode.value = 'edit'
-        editingDraftId.value = parsedDraftId
-        wizardChoiceLocked.value = true
-        createWizardMode.value = 'local-draft'
-        createWizardStep.value = 'form'
-        draftLoading.value = true
-        resetDraftForm()
-        resetWikidataCreationForm()
-        showCreateLocationDialog.value = true
-
-        try {
-          const draft = await fetchDraft(parsedDraftId)
-          applyDraftPayloadToForm(draft)
-          await syncDraftParentSearchLabel()
-        } catch (error) {
-          draftError.value = error.message || t('loadError')
-        } finally {
-          draftLoading.value = false
-        }
-      }
-
-      function handleOpenDraftEditorEvent(event) {
-        const detail = event && event.detail ? event.detail : null
-        const draftId = detail ? detail.draftId : null
-        if (draftId === null || draftId === undefined) {
-          return
-        }
-        openEditLocationDialog(draftId)
-      }
-
-      function handleOpenCreateSubLocationEvent(event) {
-        const detail = event && event.detail ? event.detail : null
-        if (!canCreateLocation.value) {
-          return
-        }
-        openCreateLocationDialog(detail)
-      }
-
       function closeCreateLocationDialog() {
-        if (!draftSaving.value && !draftLoading.value && !wizardSaving.value) {
-          showCreateLocationDialog.value = false
-          locationDialogMode.value = 'create'
-          editingDraftId.value = null
-          createWizardMode.value = ''
-          createWizardStep.value = 'choose'
-          wizardChoiceLocked.value = false
-          draftLoading.value = false
-          wizardSaving.value = false
-          wizardError.value = ''
-          destroyCoordinatePreviewMap()
-        }
-      }
-
-      function onDraftWikidataInput() {
-        const inputValue = draftWikidataItem.value.trim()
-        if (!inputValue) {
-          draftWikidataSuggestions.value = []
+        if (wizardSaving.value) {
           return
         }
-
-        const qid = extractWikidataId(inputValue)
-        if (qid) {
-          draftWikidataSuggestions.value = []
-          return
-        }
-
-        searchWikidataItemSuggestionsDebounced(inputValue)
-      }
-
-      function selectDraftWikidataItem(option) {
-        draftWikidataItem.value = option.id
-        draftWikidataSuggestions.value = []
-      }
-
-      function hideWikidataSuggestionsSoon() {
-        window.setTimeout(() => {
-          draftWikidataSuggestions.value = []
-        }, 120)
-      }
-
-      function onDraftParentInput() {
-        draftParentUri.value = ''
-        if (!draftParentSearch.value.trim()) {
-          draftParentSuggestions.value = []
-          return
-        }
-        searchParentSuggestionsDebounced(draftParentSearch.value)
-      }
-
-      async function onDraftParentFocus() {
-        if (!draftParentSearch.value.trim()) {
-          return
-        }
-        draftParentLoading.value = true
-        try {
-          const candidates = await loadParentCandidates()
-          draftParentSuggestions.value = toParentCandidateList(candidates, draftParentSearch.value)
-        } catch (error) {
-          draftParentSuggestions.value = []
-        } finally {
-          draftParentLoading.value = false
-        }
-      }
-
-      function selectDraftParent(option) {
-        draftParentUri.value = normalizeLocationUri(String(option && option.uri ? option.uri : ''))
-        draftParentSearch.value = locationOptionLabel(option)
-        draftParentSuggestions.value = []
-      }
-
-      function clearDraftParent() {
-        draftParentUri.value = ''
-        draftParentSearch.value = ''
-        draftParentSuggestions.value = []
-      }
-
-      function hideParentSuggestionsSoon() {
-        window.setTimeout(() => {
-          draftParentSuggestions.value = []
-        }, 120)
-      }
-
-      function onDraftTypeInput() {
-        if (areWikidataFieldsReadOnly.value) {
-          return
-        }
-        draftType.value = ''
-        if (!draftTypeSearch.value.trim()) {
-          draftTypeSuggestions.value = []
-          return
-        }
-        searchTypeSuggestionsDebounced(draftTypeSearch.value.trim())
-      }
-
-      function selectDraftType(option) {
-        draftType.value = option.id
-        draftTypeSearch.value = `${option.label} (${option.id})`
-        draftTypeSuggestions.value = []
-      }
-
-      function hideTypeSuggestionsSoon() {
-        window.setTimeout(() => {
-          draftTypeSuggestions.value = []
-        }, 120)
-      }
-
-      function onDraftMunicipalityInput() {
-        if (areWikidataFieldsReadOnly.value) {
-          return
-        }
-        draftMunicipalityP131.value = ''
-        if (!draftMunicipalitySearch.value.trim()) {
-          draftMunicipalitySuggestions.value = []
-          return
-        }
-        searchMunicipalitySuggestionsDebounced(draftMunicipalitySearch.value.trim())
-      }
-
-      function selectDraftMunicipality(option) {
-        draftMunicipalityP131.value = option.id
-        draftMunicipalitySearch.value = `${option.label} (${option.id})`
-        draftMunicipalitySuggestions.value = []
-      }
-
-      function hideMunicipalitySuggestionsSoon() {
-        window.setTimeout(() => {
-          draftMunicipalitySuggestions.value = []
-        }, 120)
-      }
-
-      function onDraftCommonsInput() {
-        if (areWikidataFieldsReadOnly.value) {
-          return
-        }
-        draftCommonsCategory.value = ''
-        if (!draftCommonsSearch.value.trim()) {
-          draftCommonsSuggestions.value = []
-          return
-        }
-        searchCommonsSuggestionsDebounced(draftCommonsSearch.value.trim())
-      }
-
-      function selectDraftCommons(option) {
-        draftCommonsCategory.value = option.name
-        draftCommonsSearch.value = option.title
-        draftCommonsSuggestions.value = []
-      }
-
-      function hideCommonsSuggestionsSoon() {
-        window.setTimeout(() => {
-          draftCommonsSuggestions.value = []
-        }, 120)
+        showCreateLocationDialog.value = false
+        createWizardMode.value = ''
+        createWizardStep.value = 'choose'
+        wizardChoiceLocked.value = false
+        wizardSaving.value = false
+        wizardError.value = ''
       }
 
       function hideSuggestionsSoon(targetSuggestionsRef) {
@@ -19186,36 +18528,11 @@ ORDER BY ASC(?distance)
         }
       }
 
-      function currentManualCoordinates() {
-        const latitude = parseCoordinate(draftLatitude.value)
-        const longitude = parseCoordinate(draftLongitude.value)
-        if (latitude === null || longitude === null) {
-          return null
-        }
-        return { latitude, longitude }
-      }
-
-      function currentWikidataCoordinates() {
-        if (!wikidataEntity.value) {
-          return null
-        }
-        const latitude = parseCoordinate(wikidataEntity.value.latitude)
-        const longitude = parseCoordinate(wikidataEntity.value.longitude)
-        if (latitude === null || longitude === null) {
-          return null
-        }
-        return { latitude, longitude }
-      }
-
       function destroyCoordinatePickerMap() {
         if (coordinatePickerMapInstance) {
           const currentZoom = Number(coordinatePickerMapInstance.getZoom())
           if (Number.isFinite(currentZoom)) {
-            if (coordinatePickerTarget.value === 'new-wikidata') {
-              coordinatePickerLastZoomNewWikidata = currentZoom
-            } else {
-              coordinatePickerLastZoomDraft = currentZoom
-            }
+            coordinatePickerLastZoom = currentZoom
           }
           coordinatePickerMapInstance.remove()
           coordinatePickerMapInstance = null
@@ -19223,80 +18540,9 @@ ORDER BY ASC(?distance)
         }
       }
 
-      function destroyCoordinatePreviewMap() {
-        if (coordinatePreviewMapInstance) {
-          coordinatePreviewMapInstance.remove()
-          coordinatePreviewMapInstance = null
-          coordinatePreviewManualMarker = null
-          coordinatePreviewWikidataMarker = null
-        }
-      }
-
-      function ensureCoordinatePreviewMap() {
-        if (!showCreateLocationDialog.value || !coordinatePreviewMapElement.value) {
-          destroyCoordinatePreviewMap()
-          return
-        }
-
-        const manualCoords = currentManualCoordinates()
-        const wikidataCoords = currentWikidataCoordinates()
-        const points = []
-        if (manualCoords) {
-          points.push([manualCoords.latitude, manualCoords.longitude])
-        }
-        if (isWikidataLocked.value && wikidataCoords) {
-          points.push([wikidataCoords.latitude, wikidataCoords.longitude])
-        }
-
-        const defaultCenter = points[0] || [60.1699, 24.9384]
-        if (!coordinatePreviewMapInstance) {
-          coordinatePreviewMapInstance = L.map(coordinatePreviewMapElement.value).setView(defaultCenter, points.length ? 12 : 5)
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution: '&copy; OpenStreetMap contributors'
-          }).addTo(coordinatePreviewMapInstance)
-        }
-
-        if (coordinatePreviewManualMarker) {
-          coordinatePreviewMapInstance.removeLayer(coordinatePreviewManualMarker)
-          coordinatePreviewManualMarker = null
-        }
-        if (coordinatePreviewWikidataMarker) {
-          coordinatePreviewMapInstance.removeLayer(coordinatePreviewWikidataMarker)
-          coordinatePreviewWikidataMarker = null
-        }
-
-        if (manualCoords) {
-          coordinatePreviewManualMarker = L.circleMarker([manualCoords.latitude, manualCoords.longitude], {
-            radius: 7,
-            color: '#0369a1',
-            fillColor: '#0369a1',
-            fillOpacity: 0.8,
-          }).addTo(coordinatePreviewMapInstance)
-        }
-
-        if (isWikidataLocked.value && wikidataCoords) {
-          coordinatePreviewWikidataMarker = L.circleMarker([wikidataCoords.latitude, wikidataCoords.longitude], {
-            radius: 7,
-            color: '#dc2626',
-            fillColor: '#dc2626',
-            fillOpacity: 0.8,
-          }).addTo(coordinatePreviewMapInstance)
-        }
-
-        if (points.length > 1) {
-          coordinatePreviewMapInstance.fitBounds(points, { padding: [24, 24] })
-        } else if (points.length === 1) {
-          coordinatePreviewMapInstance.setView(points[0], 12)
-        } else {
-          coordinatePreviewMapInstance.setView(defaultCenter, 5)
-        }
-      }
-
       function setCoordinateSelection(latitude, longitude, zoom = null, fillAdministrativeFields = false) {
-        const { latitudeRef, longitudeRef } = coordinatePickerFields()
-        latitudeRef.value = Number(latitude).toFixed(6)
-        longitudeRef.value = Number(longitude).toFixed(6)
+        newWikidataLatitude.value = Number(latitude).toFixed(6)
+        newWikidataLongitude.value = Number(longitude).toFixed(6)
 
         if (!coordinatePickerMapInstance) {
           return
@@ -19312,7 +18558,7 @@ ORDER BY ASC(?distance)
           coordinatePickerMapInstance.setView([latitude, longitude], zoom)
         }
 
-        if (fillAdministrativeFields && coordinatePickerTarget.value === 'new-wikidata') {
+        if (fillAdministrativeFields) {
           void fillNewWikidataAdministrativeFieldsFromCoordinates(latitude, longitude)
         }
       }
@@ -19327,9 +18573,7 @@ ORDER BY ASC(?distance)
         const lon = Number.parseFloat(String(coordinatePickerLongitudeValue.value))
         const initialLat = Number.isNaN(lat) ? 60.1699 : lat
         const initialLon = Number.isNaN(lon) ? 24.9384 : lon
-        const rememberedZoom = coordinatePickerTarget.value === 'new-wikidata'
-          ? coordinatePickerLastZoomNewWikidata
-          : coordinatePickerLastZoomDraft
+        const rememberedZoom = coordinatePickerLastZoom
         const initialZoom = Number.isFinite(rememberedZoom)
           ? rememberedZoom
           : (Number.isNaN(lat) || Number.isNaN(lon) ? 5 : 12)
@@ -19354,11 +18598,7 @@ ORDER BY ASC(?distance)
           if (!Number.isFinite(currentZoom)) {
             return
           }
-          if (coordinatePickerTarget.value === 'new-wikidata') {
-            coordinatePickerLastZoomNewWikidata = currentZoom
-          } else {
-            coordinatePickerLastZoomDraft = currentZoom
-          }
+          coordinatePickerLastZoom = currentZoom
         })
 
         if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
@@ -19370,12 +18610,7 @@ ORDER BY ASC(?distance)
         coordinatePickerMapElement.value = element || null
       }
 
-      async function openCoordinatePickerDialog(target = 'draft') {
-        const normalizedTarget = target === 'new-wikidata' ? 'new-wikidata' : 'draft'
-        if (normalizedTarget === 'draft' && areWikidataFieldsReadOnly.value) {
-          return
-        }
-        coordinatePickerTarget.value = normalizedTarget
+      async function openCoordinatePickerDialog() {
         showCoordinatePickerDialog.value = true
         coordinateSearchError.value = ''
         await nextTick()
@@ -19385,7 +18620,6 @@ ORDER BY ASC(?distance)
       function closeCoordinatePickerDialog() {
         showCoordinatePickerDialog.value = false
         destroyCoordinatePickerMap()
-        coordinatePickerTarget.value = 'draft'
       }
 
       async function runCoordinateSearch() {
@@ -19453,12 +18687,7 @@ ORDER BY ASC(?distance)
           return
         }
         if (!canCreateLocation.value) {
-          const message = t('authRequiredForLocationWrites')
-          if (isWizardExistingMode.value || isWizardNewMode.value) {
-            wizardError.value = message
-          } else {
-            draftError.value = message
-          }
+          wizardError.value = t('authRequiredForLocationWrites')
           return
         }
         if (isWizardExistingMode.value) {
@@ -19476,190 +18705,18 @@ ORDER BY ASC(?distance)
         return
       }
 
-      async function submitLocationDraft() {
-        if (!canCreateLocation.value) {
-          draftError.value = t('authRequiredForLocationWrites')
-          return
-        }
-        if (draftLoading.value) {
-          return
-        }
-        draftError.value = ''
-
-        const wikidataId = extractWikidataId(draftWikidataItem.value)
-        const lockedToWikidata = Boolean(wikidataId && wikidataEntity.value)
-        const localName = draftName.value.trim()
-        const localDescription = draftDescription.value.trim()
-        const localType = draftType.value.trim()
-        const localMunicipality = draftMunicipalityP131.value.trim()
-        const localCommonsCategory = draftCommonsCategory.value.trim()
-        const localAddress = draftAddressText.value.trim()
-        const localPostalCode = draftPostalCode.value.trim()
-        const effectiveParentUri = normalizeLocationUri(draftParentUri.value)
-        const localLatitudeRaw = String(draftLatitude.value).trim()
-        const localLongitudeRaw = String(draftLongitude.value).trim()
-        const effectiveName = localName || (lockedToWikidata ? (wikidataEntity.value.label || wikidataId) : '')
-        const effectiveDescription = localDescription || (lockedToWikidata ? (wikidataEntity.value.description || '') : '')
-        const effectiveType = localType || (
-          lockedToWikidata
-            ? (
-              wikidataEntity.value.instance_of && wikidataEntity.value.instance_of.id
-                ? wikidataEntity.value.instance_of.id
-                : 'wikidata'
-            )
-            : ''
-        )
-        const effectiveMunicipality = localMunicipality || (
-          lockedToWikidata
-            ? (
-              wikidataEntity.value.municipality && wikidataEntity.value.municipality.id
-                ? wikidataEntity.value.municipality.id
-                : ''
-            )
-            : ''
-        )
-        const effectiveCommonsCategory = localCommonsCategory || (lockedToWikidata ? (wikidataEntity.value.commons_category || '') : '')
-        const effectiveAddress = localAddress || (lockedToWikidata ? (wikidataEntity.value.address_text || '') : '')
-        const effectivePostalCode = localPostalCode || (lockedToWikidata ? (wikidataEntity.value.postal_code || '') : '')
-        const effectiveLatitudeRaw = localLatitudeRaw || (
-          lockedToWikidata && wikidataEntity.value && typeof wikidataEntity.value.latitude === 'number'
-            ? String(wikidataEntity.value.latitude)
-            : ''
-        )
-        const effectiveLongitudeRaw = localLongitudeRaw || (
-          lockedToWikidata && wikidataEntity.value && typeof wikidataEntity.value.longitude === 'number'
-            ? String(wikidataEntity.value.longitude)
-            : ''
-        )
-
-        if (!effectiveName) {
-          draftError.value = t('locationNameRequired')
-          return
-        }
-        if (!effectiveType) {
-          draftError.value = t('locationTypeRequired')
-          return
-        }
-        if (draftParentSearch.value.trim() && !effectiveParentUri) {
-          draftError.value = t('parentSelectionRequired')
-          return
-        }
-        if (!lockedToWikidata && draftMunicipalitySearch.value.trim() && !draftMunicipalityP131.value.trim()) {
-          draftError.value = t('municipalitySelectionRequired')
-          return
-        }
-        if (!lockedToWikidata && draftCommonsSearch.value.trim() && !draftCommonsCategory.value.trim()) {
-          draftError.value = t('commonsSelectionRequired')
-          return
-        }
-        if (!effectiveLatitudeRaw) {
-          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('latitudeRequired')
-          return
-        }
-        if (!effectiveLongitudeRaw) {
-          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('longitudeRequired')
-          return
-        }
-
-        const latitude = Number.parseFloat(effectiveLatitudeRaw)
-        const longitude = Number.parseFloat(effectiveLongitudeRaw)
-        if (Number.isNaN(latitude)) {
-          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('latitudeRequired')
-          return
-        }
-        if (Number.isNaN(longitude)) {
-          draftError.value = lockedToWikidata ? t('wikidataCoordinatesMissing') : t('longitudeRequired')
-          return
-        }
-
-        const payload = {
-          name: effectiveName,
-          description: effectiveDescription,
-          location_type: effectiveType,
-          wikidata_item: wikidataId,
-          latitude,
-          longitude,
-          address_text: effectiveAddress,
-          postal_code: effectivePostalCode,
-          municipality_p131: effectiveMunicipality,
-          commons_category: effectiveCommonsCategory,
-          parent_uri: effectiveParentUri,
-        }
-
-        draftSaving.value = true
-        try {
-          if (isEditMode.value) {
-            if (editingDraftId.value === null) {
-              draftError.value = t('loadError')
-              return
-            }
-            await updateDraft(editingDraftId.value, payload)
-          } else {
-            await createDraft(payload)
-          }
-          showCreateLocationDialog.value = false
-          locationDialogMode.value = 'create'
-          editingDraftId.value = null
-          notifyLocationsChanged()
-        } catch (error) {
-          draftError.value = error.message || t('loadError')
-        } finally {
-          draftSaving.value = false
-        }
-      }
-
       onMounted(() => {
         loadAuthStatus()
       })
       onBeforeUnmount(() => {
         destroyCoordinatePickerMap()
-        destroyCoordinatePreviewMap()
       })
-
-      watch(
-        () => draftWikidataItem.value,
-        (nextValue) => {
-          wikidataLookupError.value = ''
-          const qid = extractWikidataId(nextValue)
-          if (!qid) {
-            wikidataLookupToken += 1
-            wikidataEntity.value = null
-            wikidataLookupLoading.value = false
-            draftWikidataSuggestions.value = []
-            return
-          }
-          draftWikidataSuggestions.value = []
-          wikidataLookupDebounced(qid)
-        }
-      )
       watch(
         () => locale.value,
         () => {
-          const qid = extractWikidataId(draftWikidataItem.value)
-          if (qid) {
-            wikidataLookupDebounced(qid)
-          }
           for (const propertyKey of Object.keys(newWikidataCustomPropertyDefinitions.value)) {
             hydrateNewWikidataCustomPropertyMetadata(propertyKey)
           }
-        }
-      )
-      watch(
-        [
-          () => showCreateLocationDialog.value,
-          () => draftLatitude.value,
-          () => draftLongitude.value,
-          () => (wikidataEntity.value && typeof wikidataEntity.value.latitude === 'number' ? wikidataEntity.value.latitude : ''),
-          () => (wikidataEntity.value && typeof wikidataEntity.value.longitude === 'number' ? wikidataEntity.value.longitude : ''),
-          () => isWikidataLocked.value,
-        ],
-        async ([isOpen]) => {
-          if (!isOpen) {
-            destroyCoordinatePreviewMap()
-            return
-          }
-          await nextTick()
-          ensureCoordinatePreviewMap()
         }
       )
 
@@ -19677,7 +18734,6 @@ ORDER BY ASC(?distance)
         showCreateLocationDialog,
         locationDialogTitle,
         locationDialogSubmitLabel,
-        isEditMode,
         isWizardChoiceStep,
         isWizardExistingMode,
         wizardExistingHasSelectedItem,
@@ -19687,14 +18743,11 @@ ORDER BY ASC(?distance)
         isWizardNewPropertiesStep,
         isWizardNewIdentifiersStep,
         isWizardNewSourceStep,
-        showLocalDraftForm,
         canCreateLocation,
         canReturnToWizardChoice,
         isCreateActionBusy,
         wizardSaving,
         wizardError,
-        draftLoading,
-        coordinatePreviewMapElement,
         showCoordinatePickerDialog,
         coordinatePickerMapElement,
         onCoordinatePickerMapElementReady,
@@ -19705,47 +18758,6 @@ ORDER BY ASC(?distance)
         coordinatePickerLatitudeDisplay,
         coordinatePickerLongitudeDisplay,
         hasValidCoordinates,
-        wikidataEntity,
-        wikidataLookupLoading,
-        wikidataLookupError,
-        isWikidataLocked,
-        areWikidataFieldsReadOnly,
-        emptyValueLabel,
-        manualTypeDisplay,
-        manualMunicipalityDisplay,
-        manualCommonsDisplay,
-        wikidataTypeDisplay,
-        wikidataAddressDisplay,
-        wikidataPostalDisplay,
-        wikidataMunicipalityDisplay,
-        wikidataCommonsDisplay,
-        showManualNameDiff,
-        showManualDescriptionDiff,
-        showManualTypeDiff,
-        showManualAddressDiff,
-        showManualPostalDiff,
-        showManualMunicipalityDiff,
-        showManualCommonsDiff,
-        showManualCoordinatesDiff,
-        showNameField,
-        showDescriptionField,
-        showTypeField,
-        showLatitudeField,
-        showLongitudeField,
-        showCoordinateInputRow,
-        showAddressField,
-        showPostalField,
-        showMunicipalityField,
-        showPostalMunicipalityRow,
-        showCommonsField,
-        showNameInfo,
-        showDescriptionInfo,
-        showTypeInfo,
-        showCoordinatesInfo,
-        showAddressInfo,
-        showPostalInfo,
-        showMunicipalityInfo,
-        showCommonsInfo,
         wizardExistingWikidataItem,
         wizardExistingWikidataSearch,
         wizardExistingSuggestions,
@@ -19824,33 +18836,6 @@ ORDER BY ASC(?distance)
         newWikidataOfficialClosureDateSourceUrl,
         newWikidataRouteInstructionP2795,
         newWikidataRouteInstructionLanguageP2795,
-        draftName,
-        draftDescription,
-        draftType,
-        draftWikidataSuggestions,
-        draftWikidataSearchLoading,
-        draftParentUri,
-        draftParentSearch,
-        draftParentSuggestions,
-        draftParentLoading,
-        draftTypeSearch,
-        draftTypeSuggestions,
-        draftTypeLoading,
-        draftWikidataItem,
-        draftLatitude,
-        draftLongitude,
-        draftAddressText,
-        draftPostalCode,
-        draftMunicipalityP131,
-        draftMunicipalitySearch,
-        draftMunicipalitySuggestions,
-        draftMunicipalityLoading,
-        draftCommonsCategory,
-        draftCommonsSearch,
-        draftCommonsSuggestions,
-        draftCommonsLoading,
-        draftError,
-        draftSaving,
         openCreateLocationDialog,
         closeCreateLocationDialog,
         chooseCreateWizardMode,
@@ -19926,29 +18911,11 @@ ORDER BY ASC(?distance)
         onNewWikidataCommonsInput,
         selectNewWikidataCommons,
         hideNewWikidataCommonsSuggestionsSoon,
-        onDraftWikidataInput,
-        selectDraftWikidataItem,
-        hideWikidataSuggestionsSoon,
-        onDraftParentInput,
-        onDraftParentFocus,
-        selectDraftParent,
-        hideParentSuggestionsSoon,
-        clearDraftParent,
         openCoordinatePickerDialog,
         closeCoordinatePickerDialog,
         runCoordinateSearch,
         chooseCoordinateSearchResult,
-        onDraftTypeInput,
-        selectDraftType,
-        hideTypeSuggestionsSoon,
-        onDraftMunicipalityInput,
-        selectDraftMunicipality,
-        hideMunicipalitySuggestionsSoon,
-        onDraftCommonsInput,
-        selectDraftCommons,
-        hideCommonsSuggestionsSoon,
         submitCreateLocation,
-        submitLocationDraft,
         startWikimediaLogin,
         logoutWikimedia,
         openCradleGuideDialog,
@@ -20038,7 +19005,6 @@ ORDER BY ASC(?distance)
           <section class="dialog-card dialog-card-form" role="dialog" aria-modal="true">
             <h2>{{ locationDialogTitle }}</h2>
             <fieldset class="dialog-fieldset" :disabled="isCreateActionBusy">
-              <p v-if="draftLoading && showLocalDraftForm" class="status">{{ t('loading') }}</p>
 
               <div v-if="isWizardChoiceStep" class="wizard-choice-grid">
                 <p class="dialog-help">{{ t('createWizardIntro') }}</p>
@@ -20285,7 +19251,7 @@ ORDER BY ASC(?distance)
                 <div v-else-if="isWizardNewLocationStep" class="wizard-section">
                   <h3>{{ t('locationAndCoordinates') }} (2/5)</h3>
                   <div class="form-row single-action">
-                    <button type="button" class="secondary-btn" @click="openCoordinatePickerDialog('new-wikidata')">
+                    <button type="button" class="secondary-btn" @click="openCoordinatePickerDialog">
                       {{ t('pickCoordinates') }}
                     </button>
                   </div>
@@ -20859,329 +19825,9 @@ ORDER BY ASC(?distance)
                 </div>
 
               </template>
-
-              <template v-else-if="showLocalDraftForm">
-              <label class="form-field">
-              <span>{{ t('wikidataItem') }}</span>
-              <input
-                v-model="draftWikidataItem"
-                type="text"
-                :placeholder="t('wikidataItemPlaceholder')"
-                @input="onDraftWikidataInput"
-                @blur="hideWikidataSuggestionsSoon"
-              />
-              <ul v-if="draftWikidataSuggestions.length > 0" class="autocomplete-list">
-                <li v-for="item in draftWikidataSuggestions" :key="item.id">
-                  <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftWikidataItem(item)">
-                    {{ wikidataAutocompleteLabel(item) }}
-                  </button>
-                </li>
-              </ul>
-              <p v-if="draftWikidataSearchLoading" class="dialog-help">{{ t('searching') }}</p>
-              <p
-                v-else-if="draftWikidataItem.trim() && !draftWikidataSearchLoading && draftWikidataSuggestions.length === 0 && !extractWikidataId(draftWikidataItem)"
-                class="autocomplete-empty"
-              >
-                {{ t('autocompleteNoMatches') }}
-              </p>
-              </label>
-
-              <label class="form-field">
-                <span>{{ t('parentLocation') }}</span>
-                <input
-                  v-model="draftParentSearch"
-                  type="text"
-                  :placeholder="t('parentLocationPlaceholder')"
-                  @input="onDraftParentInput"
-                  @focus="onDraftParentFocus"
-                  @blur="hideParentSuggestionsSoon"
-                />
-                <ul v-if="draftParentSuggestions.length > 0" class="autocomplete-list">
-                  <li v-for="item in draftParentSuggestions" :key="item.id || item.uri">
-                    <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftParent(item)">
-                      {{ item.name || item.uri }}
-                    </button>
-                  </li>
-                </ul>
-                <p v-if="draftParentLoading" class="dialog-help">{{ t('searching') }}</p>
-                <p
-                  v-else-if="draftParentSearch.trim() && !draftParentLoading && draftParentSuggestions.length === 0 && !draftParentUri"
-                  class="autocomplete-empty"
-                >
-                  {{ t('autocompleteNoMatches') }}
-                </p>
-                <div class="inline-form-actions">
-                  <button v-if="draftParentUri" type="button" class="text-btn" @click="clearDraftParent">
-                    {{ t('clearParent') }}
-                  </button>
-                </div>
-              </label>
-
-              <p v-if="wikidataLookupLoading" class="status">{{ t('wikidataLookupLoading') }}</p>
-              <p v-else-if="wikidataLookupError" class="status error">{{ wikidataLookupError }}</p>
-              <div v-if="isWikidataLocked && wikidataEntity" class="wikidata-preview">
-              <p class="dialog-help">{{ isEditMode ? t('wikidataEditDiffNotice') : t('wikidataSourceNotice') }}</p>
-              <p><strong>{{ wikidataEntity.label }}</strong> ({{ wikidataEntity.id }})</p>
-              <div class="wikidata-summary-grid">
-                <p><strong>{{ t('locationName') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.label, emptyValueLabel) }}</p>
-                <p><strong>{{ t('locationDescription') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.description, emptyValueLabel) }}</p>
-                <p><strong>{{ t('locationType') }}:</strong> {{ displayValue(wikidataTypeDisplay, emptyValueLabel) }}</p>
-                <p>
-                  <strong>{{ t('coordinates') }}:</strong>
-                  {{ displayValue(wikidataEntity && wikidataEntity.latitude, emptyValueLabel) }},
-                  {{ displayValue(wikidataEntity && wikidataEntity.longitude, emptyValueLabel) }}
-                </p>
-                <p><strong>{{ t('addressText') }}:</strong> {{ displayValue(wikidataAddressDisplay, emptyValueLabel) }}</p>
-                <p><strong>{{ t('postalCode') }}:</strong> {{ displayValue(wikidataPostalDisplay, emptyValueLabel) }}</p>
-                <p><strong>{{ t('municipalityP131') }}:</strong> {{ displayValue(wikidataMunicipalityDisplay, emptyValueLabel) }}</p>
-                <p><strong>{{ t('commonsCategory') }}:</strong> {{ displayValue(wikidataCommonsDisplay, emptyValueLabel) }}</p>
-              </div>
-              <div v-if="wikidataEntity.image_thumb_url || wikidataEntity.image_url" class="wikidata-preview-image">
-                <p><strong>{{ t('image') }}:</strong> {{ displayValue(wikidataEntity.image_name, emptyValueLabel) }}</p>
-                <img
-                  class="thumb-image"
-                  :src="wikidataEntity.image_thumb_url || wikidataEntity.image_url"
-                  :alt="wikidataEntity.image_name || wikidataEntity.label || wikidataEntity.id"
-                  loading="lazy"
-                  @error="(event) => handleImageLoadError(event, wikidataEntity.image_url)"
-                />
-              </div>
-            </div>
-
-            <label v-if="showNameField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-              <span>{{ t('locationName') }}</span>
-              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-              <input v-model="draftName" type="text" maxlength="200" :disabled="areWikidataFieldsReadOnly" />
-            </label>
-            <div v-if="showNameInfo" class="value-compare" :class="{ 'is-different': showManualNameDiff }">
-              <span class="value-compare-title">{{ t('locationName') }}</span>
-              <template v-if="showManualNameDiff">
-                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftName, emptyValueLabel) }}</span>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.label, emptyValueLabel) }}</span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.label, emptyValueLabel) }}</span>
-              </template>
-            </div>
-
-            <label v-if="showDescriptionField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-              <span>{{ t('locationDescription') }}</span>
-              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-              <textarea v-model="draftDescription" rows="3" :disabled="areWikidataFieldsReadOnly"></textarea>
-            </label>
-            <div v-if="showDescriptionInfo" class="value-compare" :class="{ 'is-different': showManualDescriptionDiff }">
-              <span class="value-compare-title">{{ t('locationDescription') }}</span>
-              <template v-if="showManualDescriptionDiff">
-                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftDescription, emptyValueLabel) }}</span>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.description, emptyValueLabel) }}</span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataEntity && wikidataEntity.description, emptyValueLabel) }}</span>
-              </template>
-            </div>
-
-            <label v-if="showTypeField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-              <span>{{ t('locationType') }}</span>
-              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-              <input
-                v-model="draftTypeSearch"
-                type="text"
-                :placeholder="t('typePlaceholder')"
-                :disabled="areWikidataFieldsReadOnly"
-                @input="onDraftTypeInput"
-                @blur="hideTypeSuggestionsSoon"
-              />
-              <ul v-if="!areWikidataFieldsReadOnly && draftTypeSuggestions.length > 0" class="autocomplete-list">
-                <li v-for="item in draftTypeSuggestions" :key="item.id">
-                  <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftType(item)">
-                    {{ wikidataAutocompleteLabel(item) }}
-                  </button>
-                </li>
-              </ul>
-              <p v-if="!areWikidataFieldsReadOnly && draftTypeLoading" class="dialog-help">{{ t('searching') }}</p>
-              <p
-                v-else-if="!areWikidataFieldsReadOnly && draftTypeSearch.trim() && !draftTypeLoading && draftTypeSuggestions.length === 0 && !draftType"
-                class="autocomplete-empty"
-              >
-                {{ t('autocompleteNoMatches') }}
-              </p>
-            </label>
-            <div v-if="showTypeInfo" class="value-compare" :class="{ 'is-different': showManualTypeDiff }">
-              <span class="value-compare-title">{{ t('locationType') }}</span>
-              <template v-if="showManualTypeDiff">
-                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(manualTypeDisplay, emptyValueLabel) }}</span>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataTypeDisplay, emptyValueLabel) }}</span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataTypeDisplay, emptyValueLabel) }}</span>
-              </template>
-            </div>
-
-            <div v-if="showCoordinateInputRow" class="form-row">
-              <label v-if="showLatitudeField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-                <span>{{ t('latitude') }}</span>
-                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-                <input v-model="draftLatitude" type="number" step="any" :disabled="areWikidataFieldsReadOnly" />
-              </label>
-              <label v-if="showLongitudeField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-                <span>{{ t('longitude') }}</span>
-                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-                <input v-model="draftLongitude" type="number" step="any" :disabled="areWikidataFieldsReadOnly" />
-              </label>
-            </div>
-            <div v-if="showCoordinatesInfo" class="value-compare" :class="{ 'is-different': showManualCoordinatesDiff }">
-              <span class="value-compare-title">{{ t('coordinates') }}</span>
-              <template v-if="showManualCoordinatesDiff">
-                <span>
-                  <strong>{{ t('manualValue') }}:</strong>
-                  {{ displayValue(draftLatitude, emptyValueLabel) }}, {{ displayValue(draftLongitude, emptyValueLabel) }}
-                </span>
-                <span>
-                  <strong>{{ t('wikidataValue') }}:</strong>
-                  {{ displayValue(wikidataEntity && wikidataEntity.latitude, emptyValueLabel) }},
-                  {{ displayValue(wikidataEntity && wikidataEntity.longitude, emptyValueLabel) }}
-                </span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span>
-                  <strong>{{ t('wikidataValue') }}:</strong>
-                  {{ displayValue(wikidataEntity && wikidataEntity.latitude, emptyValueLabel) }},
-                  {{ displayValue(wikidataEntity && wikidataEntity.longitude, emptyValueLabel) }}
-                </span>
-              </template>
-            </div>
-            <div v-if="showCoordinateInputRow && !areWikidataFieldsReadOnly" class="form-row single-action">
-                <button
-                  type="button"
-                  class="secondary-btn"
-                  :disabled="areWikidataFieldsReadOnly"
-                  @click="openCoordinatePickerDialog('draft')"
-                >
-                  {{ t('pickCoordinates') }}
-                </button>
-            </div>
-            <div ref="coordinatePreviewMapElement" class="map-canvas coords-inline-map" aria-label="coordinates preview map"></div>
-            <p class="coord-legend">
-              <span class="legend-item">
-                <span class="legend-dot manual"></span>{{ t('coordMapLegendManual') }}
-              </span>
-              <span
-                v-if="isWikidataLocked && wikidataEntity && typeof wikidataEntity.latitude === 'number' && typeof wikidataEntity.longitude === 'number'"
-                class="legend-item"
-              >
-                <span class="legend-dot wikidata"></span>{{ t('coordMapLegendWikidata') }}
-              </span>
-            </p>
-
-            <label v-if="showAddressField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-              <span>{{ t('addressText') }}</span>
-              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-              <input v-model="draftAddressText" type="text" maxlength="255" :disabled="areWikidataFieldsReadOnly" />
-            </label>
-            <div v-if="showAddressInfo" class="value-compare" :class="{ 'is-different': showManualAddressDiff }">
-              <span class="value-compare-title">{{ t('addressText') }}</span>
-              <template v-if="showManualAddressDiff">
-                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftAddressText, emptyValueLabel) }}</span>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataAddressDisplay, emptyValueLabel) }}</span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataAddressDisplay, emptyValueLabel) }}</span>
-              </template>
-            </div>
-
-            <div v-if="showPostalMunicipalityRow" class="form-row">
-              <label v-if="showPostalField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-                <span>{{ t('postalCode') }}</span>
-                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-                <input v-model="draftPostalCode" type="text" maxlength="40" :disabled="areWikidataFieldsReadOnly" />
-              </label>
-              <label v-if="showMunicipalityField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-                <span>{{ t('municipalityP131') }}</span>
-                <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-                <input
-                  v-model="draftMunicipalitySearch"
-                  type="text"
-                  maxlength="255"
-                  :placeholder="t('municipalityPlaceholder')"
-                  :disabled="areWikidataFieldsReadOnly"
-                  @input="onDraftMunicipalityInput"
-                  @blur="hideMunicipalitySuggestionsSoon"
-                />
-                <ul v-if="!areWikidataFieldsReadOnly && draftMunicipalitySuggestions.length > 0" class="autocomplete-list">
-                  <li v-for="item in draftMunicipalitySuggestions" :key="item.id">
-                    <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftMunicipality(item)">
-                      {{ wikidataAutocompleteLabel(item) }}
-                    </button>
-                  </li>
-                </ul>
-                <p v-if="!areWikidataFieldsReadOnly && draftMunicipalityLoading" class="dialog-help">{{ t('searching') }}</p>
-              </label>
-            </div>
-            <div v-if="showPostalInfo" class="value-compare" :class="{ 'is-different': showManualPostalDiff }">
-              <span class="value-compare-title">{{ t('postalCode') }}</span>
-              <template v-if="showManualPostalDiff">
-                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(draftPostalCode, emptyValueLabel) }}</span>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataPostalDisplay, emptyValueLabel) }}</span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataPostalDisplay, emptyValueLabel) }}</span>
-              </template>
-            </div>
-            <div v-if="showMunicipalityInfo" class="value-compare" :class="{ 'is-different': showManualMunicipalityDiff }">
-              <span class="value-compare-title">{{ t('municipalityP131') }}</span>
-              <template v-if="showManualMunicipalityDiff">
-                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(manualMunicipalityDisplay, emptyValueLabel) }}</span>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataMunicipalityDisplay, emptyValueLabel) }}</span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataMunicipalityDisplay, emptyValueLabel) }}</span>
-              </template>
-            </div>
-
-            <label v-if="showCommonsField" class="form-field" :class="{ 'locked-field': areWikidataFieldsReadOnly }">
-              <span>{{ t('commonsCategory') }}</span>
-              <span v-if="areWikidataFieldsReadOnly" class="field-lock-indicator">{{ t('lockedField') }}</span>
-              <input
-                v-model="draftCommonsSearch"
-                type="text"
-                maxlength="255"
-                :placeholder="t('commonsPlaceholder')"
-                :disabled="areWikidataFieldsReadOnly"
-                @input="onDraftCommonsInput"
-                @blur="hideCommonsSuggestionsSoon"
-              />
-              <ul v-if="!areWikidataFieldsReadOnly && draftCommonsSuggestions.length > 0" class="autocomplete-list">
-                <li v-for="item in draftCommonsSuggestions" :key="item.title">
-                  <button type="button" class="autocomplete-option" @mousedown.prevent @click="selectDraftCommons(item)">
-                    {{ item.title }}
-                  </button>
-                </li>
-              </ul>
-              <p v-if="!areWikidataFieldsReadOnly && draftCommonsLoading" class="dialog-help">{{ t('searching') }}</p>
-            </label>
-            <div v-if="showCommonsInfo" class="value-compare" :class="{ 'is-different': showManualCommonsDiff }">
-              <span class="value-compare-title">{{ t('commonsCategory') }}</span>
-              <template v-if="showManualCommonsDiff">
-                <span><strong>{{ t('manualValue') }}:</strong> {{ displayValue(manualCommonsDisplay, emptyValueLabel) }}</span>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataCommonsDisplay, emptyValueLabel) }}</span>
-                <span class="diff-tag">{{ t('differentValue') }}</span>
-              </template>
-              <template v-else>
-                <span><strong>{{ t('wikidataValue') }}:</strong> {{ displayValue(wikidataCommonsDisplay, emptyValueLabel) }}</span>
-              </template>
-            </div>
-            </template>
             </fieldset>
 
-            <p v-if="wizardError && !showLocalDraftForm" class="status error">{{ wizardError }}</p>
-            <p v-if="draftError && showLocalDraftForm" class="status error">{{ draftError }}</p>
+            <p v-if="wizardError" class="status error">{{ wizardError }}</p>
 
             <div class="dialog-actions">
               <button type="button" class="secondary-btn" :disabled="isCreateActionBusy" @click="closeCreateLocationDialog">{{ t('cancel') }}</button>
@@ -21210,7 +19856,7 @@ ORDER BY ASC(?distance)
                 :disabled="isCreateActionBusy || !canCreateLocation"
                 @click="submitCreateLocation"
               >
-                {{ (draftSaving || wizardSaving) ? t('saving') : locationDialogSubmitLabel }}
+                {{ wizardSaving ? t('saving') : locationDialogSubmitLabel }}
               </button>
             </div>
           </section>

@@ -138,3 +138,7 @@ python3 manage.py test
 ```
 
 Frontend tests should be run from the frontend virtual environment.
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE`.
