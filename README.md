@@ -1,4 +1,10 @@
-# Locations Explorer (Wikidata only)
+# Wikikuvaajat Photo Mapper
+
+Wikikuvaajat Photo Mapper is a web tool for documenting architecture and built environments for Wikimedia Commons.
+Users can register new photo targets, which automatically create corresponding Wikidata items.
+When uploading photos, users first select their location, then annotate images by clicking objects in the photo to
+link them to Wikidata items. For exterior shots, users can pinpoint the corresponding location on an OpenStreetMap
+layer, and the tool then suggests relevant tags based on nearby OSM data.
 
 This repository has two Django subprojects:
 - `backend/`: REST API + Wikidata SPARQL integration
@@ -46,11 +52,11 @@ pip install -r requirements.txt
 export DJANGO_SECRET_KEY=dev-secret-change-me
 export DJANGO_DEBUG=1
 python3 manage.py migrate
-python3 manage.py runserver 8000
+python3 manage.py runserver
 ```
 
 Open:
-- `http://localhost:8000/` for UI
+- `http://localhost:8000/` for UI (Django default dev port)
 - `http://localhost:8000/api/locations/?lang=en` for API
 
 How this works:
@@ -92,11 +98,11 @@ Django raises `The SECRET_KEY setting must not be empty.`.
 - `SPARQL_DEFAULT_LIMIT` (default: `500`)
 - `SPARQL_TIMEOUT_SECONDS` (default: `15`)
 - `API_BASE_URL` (default: `/api`)
-- `CORS_ALLOWED_ORIGINS` (default: `http://localhost:8001`, only needed if you run frontend on another origin)
+- `CORS_ALLOWED_ORIGINS` (optional; for same-origin local dev this can stay unset)
 - `SOCIAL_AUTH_MEDIAWIKI_KEY` (required for Wikimedia OAuth login and Wikidata write actions)
 - `SOCIAL_AUTH_MEDIAWIKI_SECRET` (required for Wikimedia OAuth login and Wikidata write actions)
 - `SOCIAL_AUTH_MEDIAWIKI_URL` (default: `https://meta.wikimedia.org/w/index.php`)
-- `SOCIAL_AUTH_MEDIAWIKI_CALLBACK` (recommended: your exact callback URL, e.g. `http://127.0.0.1:8000/auth/complete/mediawiki/`)
+- `SOCIAL_AUTH_MEDIAWIKI_CALLBACK` (optional explicit override; by default callback uses the same host and path `/auth/complete/mediawiki/`)
 - `LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN` (optional local-dev fallback OAuth access token)
 - `LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET` (optional local-dev fallback OAuth access secret)
 - `WIKIDATA_COLLECTION_QID` (default: `Q138299296`)
@@ -119,14 +125,11 @@ For local development (`DEBUG=1`) you can configure OAuth token fallback for Wik
 - `LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN`
 - `LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET`
 
-Alias env names are also supported:
-
-- `WIKIMEDIA_OAUTH1_ACCESS_TOKEN`
-- `WIKIMEDIA_OAUTH1_ACCESS_SECRET` (or `WIKIMEDIA_OAUTH1_ACCESS_TOKEN_SECRET`)
-
 This is intended for endpoint-specific OAuth credentials (for example a consumer created with settings like "This consumer is for use only by Zache").
 
 ## Optional: run frontend subproject standalone
+
+Not needed for normal local development. By default backend serves frontend and API from the same origin.
 
 ```bash
 cd frontend

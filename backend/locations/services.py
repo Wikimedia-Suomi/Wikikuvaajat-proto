@@ -3537,7 +3537,7 @@ def _commons_upload_description_wikitext(
     _push_description_entry(normalized_caption_language, normalized_caption)
     _push_description_entry(normalized_description_language, normalized_description)
     if not description_entries:
-        _push_description_entry('en', 'Uploaded with Locations Explorer.')
+        _push_description_entry('en', 'Uploaded with Wikikuvaajat Photo Mapper.')
     description_value = '<br />'.join(description_entries)
 
     lines = [
@@ -3658,7 +3658,7 @@ def upload_image_to_commons(
         longitude=longitude,
         use_exif_coordinates=use_exif_coordinates,
     )
-    upload_comment = 'Uploaded with Locations Explorer'
+    upload_comment = 'Uploaded with Wikikuvaajat Photo Mapper'
     normalized_qid = _extract_wikidata_qid(str(wikidata_item or ''))
     if normalized_qid:
         upload_comment = f'{upload_comment} ({normalized_qid})'

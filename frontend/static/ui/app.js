@@ -6544,7 +6544,7 @@ ORDER BY ASC(?distance)
 
   const messages = {
     en: {
-      appTitle: 'Locations Explorer',
+      appTitle: 'Wikikuvaajat Photo Mapper',
       navList: 'List',
       navMap: 'Map',
       navDetail: 'Details',
@@ -6881,7 +6881,7 @@ ORDER BY ASC(?distance)
       authRequiredForLocationWrites: 'Sign in with Wikimedia before adding locations.'
     },
     sv: {
-      appTitle: 'Platsutforskare',
+      appTitle: 'Wikikuvaajat Photo Mapper',
       navList: 'Lista',
       navMap: 'Karta',
       navDetail: 'Detaljer',
@@ -7218,7 +7218,7 @@ ORDER BY ASC(?distance)
       authRequiredForLocationWrites: 'Logga in med Wikimedia innan du lägger till platser.'
     },
     fi: {
-      appTitle: 'Sijaintiselain',
+      appTitle: 'Wikikuvaajat Photo Mapper',
       navList: 'Lista',
       navMap: 'Kartta',
       navDetail: 'Tiedot',
