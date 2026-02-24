@@ -39,6 +39,13 @@ class WikidataWriteError(RuntimeError):
     pass
 
 
+EXTERNAL_HTTP_USER_AGENT = (
+    'Wikikuvaajat '
+    '(homepage: https://github.com/Wikimedia-Suomi/Wikikuvaajat-proto; '
+    'contact: https://meta.wikimedia.org/wiki/User:Zache)'
+)
+
+
 @dataclass(frozen=True)
 class Location:
     id: str
@@ -311,7 +318,7 @@ def _query_sparql(query: str) -> list[dict[str, Any]]:
             headers={
                 'Accept': 'application/sparql-results+json, application/json;q=0.9, */*;q=0.1',
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+                'User-Agent': EXTERNAL_HTTP_USER_AGENT,
             },
             timeout=settings.SPARQL_TIMEOUT_SECONDS,
         )
@@ -2055,7 +2062,7 @@ def _external_json_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
             params=params,
             headers={
                 'Accept': 'application/json',
-                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+                'User-Agent': EXTERNAL_HTTP_USER_AGENT,
             },
             timeout=_external_timeout_seconds(),
         )
@@ -2280,7 +2287,7 @@ def fetch_citoid_metadata(source_url: str, lang: str | None = None) -> dict[str,
             request_url,
             headers={
                 'Accept': 'application/json',
-                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+                'User-Agent': EXTERNAL_HTTP_USER_AGENT,
             },
             timeout=_external_timeout_seconds(),
         )
@@ -2975,7 +2982,7 @@ def _wikidata_api_session() -> requests.Session:
     session.headers.update(
         {
             'Accept': 'application/json',
-            'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+            'User-Agent': EXTERNAL_HTTP_USER_AGENT,
         }
     )
     return session
@@ -5337,7 +5344,7 @@ LIMIT {combined_limit}
             headers={
                 'Accept': 'application/sparql-results+json, application/json;q=0.9, */*;q=0.1',
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+                'User-Agent': EXTERNAL_HTTP_USER_AGENT,
             },
             timeout=_external_timeout_seconds(),
         )
@@ -5513,7 +5520,7 @@ def fetch_latest_osm_feature_metadata(
             request_url,
             headers={
                 'Accept': 'application/json',
-                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+                'User-Agent': EXTERNAL_HTTP_USER_AGENT,
             },
             timeout=_external_timeout_seconds(),
         )
@@ -5638,7 +5645,7 @@ def search_geocode_places(query: str, limit: int = 10) -> list[dict[str, Any]]:
             },
             headers={
                 'Accept': 'application/json',
-                'User-Agent': 'LocationsExplorer/1.0 (+https://localhost)',
+                'User-Agent': EXTERNAL_HTTP_USER_AGENT,
             },
             timeout=_external_timeout_seconds(),
         )

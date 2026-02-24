@@ -474,6 +474,66 @@ class LocationApiTests(APITestCase):
         self.assertIn('file', response.data)
         oauth_credentials_mock.assert_called_once()
 
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_commons_upload_endpoint_rejects_unsupported_mime_type(
+        self,
+        oauth_credentials_mock,
+    ):
+        self._authenticate()
+        text_file = SimpleUploadedFile('Example.txt', b'test-text-bytes', content_type='text/plain')
+
+        response = self.client.post(
+            reverse('commons-upload'),
+            {
+                'file': text_file,
+                'coordinate_source': 'exif',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('file', response.data)
+        self.assertIn('Allowed types', str(response.data['file'][0]))
+        oauth_credentials_mock.assert_called_once()
+
+    @patch('locations.views.upload_image_to_commons')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_commons_upload_endpoint_accepts_svg_mime_type(
+        self,
+        oauth_credentials_mock,
+        upload_image_to_commons_mock,
+    ):
+        self._authenticate()
+        upload_image_to_commons_mock.return_value = {
+            'filename': 'Example.svg',
+            'file_page_url': 'https://commons.wikimedia.org/wiki/File:Example.svg',
+            'file_url': 'https://commons.wikimedia.org/wiki/Special:FilePath/Example.svg',
+            'thumb_url': 'https://commons.wikimedia.org/wiki/Special:FilePath/Example.svg?width=320',
+            'categories': [],
+            'depicts': [],
+            'wikidata_item': '',
+        }
+        svg_file = SimpleUploadedFile('Example.svg', b'<svg></svg>', content_type='image/svg+xml')
+
+        response = self.client.post(
+            reverse('commons-upload'),
+            {
+                'file': svg_file,
+                'coordinate_source': 'exif',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        oauth_credentials_mock.assert_called_once()
+        upload_image_to_commons_mock.assert_called_once()
+
     @patch('locations.views.upload_image_to_commons')
     @patch(
         'locations.views._mediawiki_oauth_credentials_for_request',

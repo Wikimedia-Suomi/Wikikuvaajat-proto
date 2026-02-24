@@ -10,7 +10,6 @@
     ).replace(/\/$/, '')
   const configuredSparqlDefaultEndpoint = 'https://query.wikidata.org/sparql'
   const configuredSparqlOsmEndpoint = 'https://qlever.dev/api/osm-planet'
-  const configuredPredefinedEndpoints = []
   const API_BASE_URL = configuredApiBaseUrl
   const SUPPORTED_LOCALES = ['en', 'sv', 'fi']
   const WIKIDATA_LANGUAGE_SEARCH_URL = 'https://commons.wikimedia.org/w/api.php'
@@ -5202,20 +5201,49 @@ ORDER BY ASC(?distance)
     }
   }
 
-  const PREDEFINED_ENDPOINTS = configuredPredefinedEndpoints
-    .filter((entry) => entry && typeof entry.url === 'string' && entry.url.trim() !== '')
-    .map((entry) => ({
-      id: String(entry.id || entry.label || entry.url).trim(),
-      label: String(entry.label || entry.id || entry.url).trim(),
-      url: String(entry.url).trim()
-    }))
-
   function normalizeLocationId(id) {
     try {
       return encodeURIComponent(decodeURIComponent(id))
     } catch (error) {
       return encodeURIComponent(id)
     }
+  }
+
+  function readCookieValue(cookieName) {
+    const normalizedName = String(cookieName || '').trim()
+    if (!normalizedName || typeof document === 'undefined') {
+      return ''
+    }
+    const cookieChunks = String(document.cookie || '').split(';')
+    for (const chunk of cookieChunks) {
+      const trimmed = chunk.trim()
+      if (!trimmed) {
+        continue
+      }
+      const separatorIndex = trimmed.indexOf('=')
+      if (separatorIndex === -1) {
+        continue
+      }
+      const name = trimmed.slice(0, separatorIndex).trim()
+      if (name !== normalizedName) {
+        continue
+      }
+      const value = trimmed.slice(separatorIndex + 1)
+      try {
+        return decodeURIComponent(value)
+      } catch (error) {
+        return value
+      }
+    }
+    return ''
+  }
+
+  function requestMethodIsCsrfSafe(method) {
+    const normalizedMethod = String(method || 'GET').trim().toUpperCase()
+    return normalizedMethod === 'GET' ||
+      normalizedMethod === 'HEAD' ||
+      normalizedMethod === 'OPTIONS' ||
+      normalizedMethod === 'TRACE'
   }
 
   async function request(path, options = {}) {
@@ -5240,12 +5268,26 @@ ORDER BY ASC(?distance)
       })
     }
 
-    const requestOptions = { method }
+    const normalizedMethod = String(method || 'GET').trim().toUpperCase() || 'GET'
+    const requestOptions = {
+      method: normalizedMethod,
+      credentials: 'same-origin',
+    }
+    const requestHeaders = {}
     if (formData !== null) {
       requestOptions.body = formData
     } else if (body !== null) {
-      requestOptions.headers = { 'Content-Type': 'application/json' }
+      requestHeaders['Content-Type'] = 'application/json'
       requestOptions.body = JSON.stringify(body)
+    }
+    if (!requestMethodIsCsrfSafe(normalizedMethod)) {
+      const csrfToken = readCookieValue('csrftoken')
+      if (csrfToken) {
+        requestHeaders['X-CSRFToken'] = csrfToken
+      }
+    }
+    if (Object.keys(requestHeaders).length > 0) {
+      requestOptions.headers = requestHeaders
     }
 
     const response = await fetch(url.toString(), requestOptions)
@@ -5304,15 +5346,6 @@ ORDER BY ASC(?distance)
       lang,
       queryParams: { location_id: id },
     })
-  }
-
-  async function fetchProjects() {
-    return []
-  }
-
-  async function createProject(payload) {
-    void payload
-    throw new Error('Projects are disabled.')
   }
 
   function createDraft(payload) {
@@ -5818,84 +5851,6 @@ ORDER BY ASC(?distance)
       lang,
       queryParams: { lat: latitude, lon: longitude }
     })
-  }
-
-  function buildYasguiUrl(endpointUrl, query) {
-    const url = new URL('https://yasgui.triply.cc/')
-    if (endpointUrl) {
-      url.searchParams.set('endpoint', endpointUrl)
-    }
-    if (query) {
-      url.searchParams.set('query', query)
-    }
-    return url.toString()
-  }
-
-  function buildSophoxUrl(query) {
-    return `https://sophox.org/#query=${encodeURIComponent(query)}`
-  }
-
-  function buildQueryUiUrl(endpointUrl, query, endpointId = null) {
-    if (endpointId === 'qlever-osm-planet') {
-      return buildSophoxUrl(query)
-    }
-
-    if (!endpointUrl) {
-      return buildYasguiUrl('', query)
-    }
-
-    let parsed
-    try {
-      parsed = new URL(endpointUrl)
-    } catch (error) {
-      return buildYasguiUrl(endpointUrl, query)
-    }
-
-    const host = parsed.hostname.toLowerCase()
-    const path = parsed.pathname
-
-    if (host === 'query.wikidata.org') {
-      return `https://query.wikidata.org/#${encodeURIComponent(query)}`
-    }
-
-    if (host === 'commons-query.wikimedia.org') {
-      return `https://commons-query.wikimedia.org/#${encodeURIComponent(query)}`
-    }
-
-    if (host === 'sophox.org') {
-      return buildSophoxUrl(query)
-    }
-
-    if (path.startsWith('/api/') && host.includes('qlever')) {
-      const datasetPath = path.slice('/api/'.length).replace(/^\/+|\/+$/g, '')
-      if (datasetPath === 'osm-planet') {
-        return buildSophoxUrl(query)
-      }
-      const uiBase = `${parsed.protocol}//${parsed.host}/${datasetPath || 'wikidata'}/`
-      const uiUrl = new URL(uiBase)
-      uiUrl.searchParams.set('query', query)
-      return uiUrl.toString()
-    }
-
-    if (host === 'dbpedia.org' && path.startsWith('/sparql')) {
-      const uiUrl = new URL('https://dbpedia.org/sparql')
-      uiUrl.searchParams.set('query', query)
-      uiUrl.searchParams.set('format', 'text/html')
-      return uiUrl.toString()
-    }
-
-    return buildYasguiUrl(endpointUrl, query)
-  }
-
-  function openQueryInUi(endpointUrl, query, endpointId = null) {
-    const url = buildQueryUiUrl(endpointUrl, query, endpointId)
-    window.open(url, '_blank', 'noopener,noreferrer')
-  }
-
-  function renderQueryForTesting(queryTemplate, lang, limit) {
-    return queryTemplate
-      .replace(/\{\{\s*lang\s*\}\}/g, lang)
-      .replace(/\{\{\s*limit\s*\}\}/g, String(limit))
   }
 
   function normalizeSupportedLocale(candidate) {
@@ -6591,7 +6546,6 @@ ORDER BY ASC(?distance)
       navMap: 'Map',
       navDetail: 'Details',
       loading: 'Loading...',
-      loadingProjects: 'Loading projects...',
       loadError: 'Could not load data.',
       noData: 'No locations found.',
       sortBy: 'Sort by',
@@ -6623,9 +6577,6 @@ ORDER BY ASC(?distance)
       sourceUri: 'Source URI',
       wikidataIdLabel: 'WIKIDATA ID',
       collectionMembershipSourcesP5008: 'Collection membership sources (P5008)',
-      project: 'Project',
-      defaultProject: 'Default data',
-      newProject: 'New Project',
       newLocation: 'Create location',
       createSubLocation: 'Create sub-location',
       saveImage: 'Save image',
@@ -6759,12 +6710,9 @@ ORDER BY ASC(?distance)
       saveImageUploadSuccess: 'Image uploaded: {filename}',
       saveImageOpenUploadedFile: 'Open uploaded file page',
       saveImageCoordinatesRequired: 'Select coordinates on map or enable EXIF coordinates.',
-      createProjectTitle: 'Create Project',
       createLocationTitle: 'Create Draft Location',
       editLocationTitle: 'Edit Draft Location',
       editLocationData: 'Edit details',
-      projectName: 'Name',
-      projectDescription: 'Description',
       locationName: 'Location name',
       locationDescription: 'Description text',
       locationType: 'Type',
@@ -6809,22 +6757,10 @@ ORDER BY ASC(?distance)
       parentLocationPlaceholder: 'Search parent location...',
       clearParent: 'Clear parent',
       wikidataItemPlaceholder: 'Search Wikidata item...',
-      datasourceType: 'Datasource',
-      endpointPreset: 'Endpoint preset',
-      customEndpoint: 'Custom endpoint',
-      sparqlEndpoint: 'SPARQL endpoint',
-      sparqlQuery: 'SPARQL query',
       create: 'Create',
       saveChanges: 'Save changes',
       cancel: 'Cancel',
       saving: 'Saving...',
-      testQuery: 'Test query',
-      testingQuery: 'Testing...',
-      testQueryResult: 'Query returned {count} items.',
-      testQueryNoResult: 'Query executed successfully, but returned no items.',
-      projectNameRequired: 'Project name is required.',
-      projectQueryRequired: 'SPARQL query is required.',
-      sparqlHelp: 'Use variables uri, label, comment, and either coord or lat/lon. Optional placeholders: {{lang}}, {{limit}}.',
       locationNameRequired: 'Location name is required.',
       locationTypeRequired: 'Location type is required.',
       latitudeRequired: 'Latitude is required.',
@@ -6949,7 +6885,6 @@ ORDER BY ASC(?distance)
       navMap: 'Karta',
       navDetail: 'Detaljer',
       loading: 'Laddar...',
-      loadingProjects: 'Laddar projekt...',
       loadError: 'Kunde inte ladda data.',
       noData: 'Inga platser hittades.',
       sortBy: 'Sortera efter',
@@ -6981,9 +6916,6 @@ ORDER BY ASC(?distance)
       sourceUri: 'Käll-URI',
       wikidataIdLabel: 'WIKIDATA ID',
       collectionMembershipSourcesP5008: 'Källor för listmedlemskap (P5008)',
-      project: 'Projekt',
-      defaultProject: 'Standarddata',
-      newProject: 'Nytt projekt',
       newLocation: 'Skapa plats',
       createSubLocation: 'Skapa underplats',
       saveImage: 'Spara bild',
@@ -7117,12 +7049,9 @@ ORDER BY ASC(?distance)
       saveImageUploadSuccess: 'Bild uppladdad: {filename}',
       saveImageOpenUploadedFile: 'Öppna den uppladdade filsidan',
       saveImageCoordinatesRequired: 'Välj koordinater på kartan eller aktivera EXIF-koordinater.',
-      createProjectTitle: 'Skapa projekt',
       createLocationTitle: 'Skapa utkastplats',
       editLocationTitle: 'Redigera utkastplats',
       editLocationData: 'Redigera uppgifter',
-      projectName: 'Namn',
-      projectDescription: 'Beskrivning',
       locationName: 'Platsnamn',
       locationDescription: 'Beskrivningstext',
       locationType: 'Typ',
@@ -7167,22 +7096,10 @@ ORDER BY ASC(?distance)
       parentLocationPlaceholder: 'Sök överordnad plats...',
       clearParent: 'Rensa overordnad',
       wikidataItemPlaceholder: 'Sök Wikidata-objekt...',
-      datasourceType: 'Datakälla',
-      endpointPreset: 'Endpoint-val',
-      customEndpoint: 'Anpassad endpoint',
-      sparqlEndpoint: 'SPARQL-endpoint',
-      sparqlQuery: 'SPARQL-fråga',
       create: 'Skapa',
       saveChanges: 'Spara ändringar',
       cancel: 'Avbryt',
       saving: 'Sparar...',
-      testQuery: 'Testa fråga',
-      testingQuery: 'Testar...',
-      testQueryResult: 'Frågan returnerade {count} objekt.',
-      testQueryNoResult: 'Frågan lyckades, men returnerade inga objekt.',
-      projectNameRequired: 'Projektnamn krävs.',
-      projectQueryRequired: 'SPARQL-fråga krävs.',
-      sparqlHelp: 'Använd variablerna uri, label, comment, och antingen coord eller lat/lon. Valfria platshållare: {{lang}}, {{limit}}.',
       locationNameRequired: 'Platsnamn krävs.',
       locationTypeRequired: 'Platstyp krävs.',
       latitudeRequired: 'Latitud krävs.',
@@ -7307,7 +7224,6 @@ ORDER BY ASC(?distance)
       navMap: 'Kartta',
       navDetail: 'Tiedot',
       loading: 'Ladataan...',
-      loadingProjects: 'Ladataan projekteja...',
       loadError: 'Tietojen lataus ei onnistunut.',
       noData: 'Sijainteja ei löytynyt.',
       sortBy: 'Järjestä',
@@ -7339,9 +7255,6 @@ ORDER BY ASC(?distance)
       sourceUri: 'Lähde-URI',
       wikidataIdLabel: 'WIKIDATA ID',
       collectionMembershipSourcesP5008: 'Listajäsenyyden lähteet (P5008)',
-      project: 'Projekti',
-      defaultProject: 'Oletusdata',
-      newProject: 'Uusi projekti',
       newLocation: 'Luo kohde',
       createSubLocation: 'Luo alakohde',
       saveImage: 'Tallenna kuva',
@@ -7475,12 +7388,9 @@ ORDER BY ASC(?distance)
       saveImageUploadSuccess: 'Kuva ladattu: {filename}',
       saveImageOpenUploadedFile: 'Avaa ladatun tiedoston sivu',
       saveImageCoordinatesRequired: 'Valitse koordinaatit kartalta tai ota EXIF-koordinaatit käyttöön.',
-      createProjectTitle: 'Luo projekti',
       createLocationTitle: 'Luo kohdeluonnos',
       editLocationTitle: 'Muokkaa kohdeluonnosta',
       editLocationData: 'Muokkaa tietoja',
-      projectName: 'Nimi',
-      projectDescription: 'Kuvaus',
       locationName: 'Kohteen nimi',
       locationDescription: 'Kuvausteksti',
       locationType: 'Tyyppi',
@@ -7525,22 +7435,10 @@ ORDER BY ASC(?distance)
       parentLocationPlaceholder: 'Hae yläkohdetta...',
       clearParent: 'Tyhjennä yläkohde',
       wikidataItemPlaceholder: 'Hae Wikidata-kohdetta...',
-      datasourceType: 'Tietolähde',
-      endpointPreset: 'Päätepistevalinta',
-      customEndpoint: 'Mukautettu päätepiste',
-      sparqlEndpoint: 'SPARQL-päätepiste',
-      sparqlQuery: 'SPARQL-kysely',
       create: 'Luo',
       saveChanges: 'Tallenna muutokset',
       cancel: 'Peruuta',
       saving: 'Tallennetaan...',
-      testQuery: 'Testaa kysely',
-      testingQuery: 'Testataan...',
-      testQueryResult: 'Kysely palautti {count} kohdetta.',
-      testQueryNoResult: 'Kysely onnistui, mutta ei palauttanut kohteita.',
-      projectNameRequired: 'Projektin nimi vaaditaan.',
-      projectQueryRequired: 'SPARQL-kysely vaaditaan.',
-      sparqlHelp: 'Käytä muuttujia uri, label, comment ja joko coord tai lat/lon. Valinnaiset paikat: {{lang}}, {{limit}}.',
       locationNameRequired: 'Kohteen nimi vaaditaan.',
       locationTypeRequired: 'Kohteen tyyppi vaaditaan.',
       latitudeRequired: 'Leveysaste vaaditaan.',
@@ -7674,10 +7572,6 @@ ORDER BY ASC(?distance)
     messages
   })
 
-  const projects = ref([])
-  const activeProjectId = ref(localStorage.getItem('activeProjectId') || '')
-  const projectsLoading = ref(false)
-  const projectError = ref('')
   const locationsVersion = ref(0)
   const locationsCache = ref({})
   const locationsQueryUrlCache = ref({})
@@ -7864,58 +7758,13 @@ ORDER BY ASC(?distance)
     }
   }
 
-  function setActiveProject(projectId) {
-    const normalized = projectId ? String(projectId) : ''
-    activeProjectId.value = normalized
-    if (normalized) {
-      localStorage.setItem('activeProjectId', normalized)
-    } else {
-      localStorage.removeItem('activeProjectId')
-    }
-  }
-
-  async function loadProjects(preferredProjectId = null) {
-    projectsLoading.value = true
-    projectError.value = ''
-
-    try {
-      const loadedProjects = await fetchProjects()
-      projects.value = Array.isArray(loadedProjects) ? loadedProjects : []
-
-      const candidateId = preferredProjectId || localStorage.getItem('activeProjectId') || ''
-      const hasCandidate = projects.value.some((project) => String(project.id) === String(candidateId))
-      if (hasCandidate) {
-        setActiveProject(candidateId)
-      } else {
-        setActiveProject('')
-      }
-    } catch (error) {
-      projectError.value = error.message || 'Failed to load projects.'
-    } finally {
-      projectsLoading.value = false
-    }
-  }
-
-  async function createProjectRecord(payload) {
-    const created = await createProject(payload)
-    await loadProjects(String(created.id))
-    return created
-  }
-
   function notifyLocationsChanged() {
     invalidateLocationsCache()
     locationsVersion.value += 1
   }
 
-  const projectStore = {
-    projects,
-    activeProjectId,
-    projectsLoading,
-    projectError,
+  const locationStore = {
     locationsVersion,
-    setActiveProject,
-    loadProjects,
-    createProjectRecord,
     notifyLocationsChanged,
     getLocationsCached,
     getLocationsQueryUrl,
@@ -7931,95 +7780,6 @@ ORDER BY ASC(?distance)
     authLoginUrl: ref('/auth/login/mediawiki/?next=/'),
     authLogoutUrl: ref('/auth/logout/?next=/'),
     authStatusLoading: ref(true),
-  }
-
-  const defaultProjectQuery = `PREFIX dbo: <http://dbpedia.org/ontology/>
-PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-
-SELECT DISTINCT ?uri ?label ?comment ?lat ?lon
-WHERE {
-  ?uri a dbo:Place ;
-       rdfs:label ?label ;
-       geo:lat ?lat ;
-       geo:long ?lon .
-  FILTER(lang(?label) = "{{lang}}")
-  OPTIONAL {
-    ?uri rdfs:comment ?comment .
-    FILTER(lang(?comment) = "{{lang}}")
-  }
-}
-LIMIT {{limit}}`
-
-  const endpointQueryTemplates = {
-    wikidata: `PREFIX wd: <http://www.wikidata.org/entity/>
-PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-PREFIX schema: <http://schema.org/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-
-SELECT DISTINCT ?uri ?label ?comment ?coord
-WHERE {
-  ?uri wdt:P31/wdt:P279* wd:Q515 ;
-       wdt:P625 ?coord ;
-       rdfs:label ?label .
-  FILTER(LANG(?label) = "{{lang}}")
-  OPTIONAL {
-    ?uri schema:description ?comment .
-    FILTER(LANG(?comment) = "{{lang}}")
-  }
-}
-LIMIT {{limit}}`,
-    'qlever-wikidata': `PREFIX wd: <http://www.wikidata.org/entity/>
-PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-PREFIX schema: <http://schema.org/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-
-SELECT DISTINCT ?uri ?label ?comment ?coord
-WHERE {
-  ?uri wdt:P31/wdt:P279* wd:Q515 ;
-       wdt:P625 ?coord ;
-       rdfs:label ?label .
-  FILTER(LANG(?label) = "{{lang}}")
-  OPTIONAL {
-    ?uri schema:description ?comment .
-    FILTER(LANG(?comment) = "{{lang}}")
-  }
-}
-LIMIT {{limit}}`,
-    'wikimedia-commons-query-service': `PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-
-SELECT DISTINCT ?uri ?label ?coord
-WHERE {
-  ?uri wdt:P1259 ?coord ;
-       rdfs:label ?label .
-  FILTER(LANG(?label) = "{{lang}}")
-}
-LIMIT {{limit}}`,
-    'qlever-wikimedia-commons': `PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-
-SELECT DISTINCT ?uri ?label ?coord
-WHERE {
-  ?uri wdt:P1259 ?coord ;
-       rdfs:label ?label .
-  FILTER(LANG(?label) = "{{lang}}")
-}
-LIMIT {{limit}}`,
-    'qlever-osm-planet': `PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
-PREFIX osmkey: <https://www.openstreetmap.org/wiki/Key:>
-
-SELECT DISTINCT ?uri ?label ?lat ?lon
-WHERE {
-  ?uri osmkey:name ?label ;
-       geo:lat ?lat ;
-       geo:long ?lon .
-}
-LIMIT {{limit}}`,
-  }
-
-  function sampleQueryForEndpoint(endpointId) {
-    return endpointQueryTemplates[endpointId] || defaultProjectQuery
   }
 
   const LanguageSwitcher = {
@@ -8049,7 +7809,7 @@ LIMIT {{limit}}`,
   const ListView = {
     setup() {
       const { t, locale } = useI18n()
-      const { activeProjectId, locationsVersion, getLocationsCached, getLocationsQueryUrl } = projectStore
+      const { locationsVersion, getLocationsCached, getLocationsQueryUrl } = locationStore
       const locations = ref([])
       const loading = ref(false)
       const error = ref('')
@@ -8113,7 +7873,7 @@ LIMIT {{limit}}`,
 
       onMounted(loadLocations)
       onBeforeUnmount(clearSilentRefreshTimer)
-      watch([() => locale.value, () => activeProjectId.value, () => locationsVersion.value], loadLocations)
+      watch([() => locale.value, () => locationsVersion.value], loadLocations)
       watch(
         () => sortBy.value,
         (nextSortBy) => {
@@ -8494,7 +8254,7 @@ LIMIT {{limit}}`,
   const MapView = {
     setup() {
       const { t, locale } = useI18n()
-      const { activeProjectId, locationsVersion, getLocationsCached } = projectStore
+      const { locationsVersion, getLocationsCached } = locationStore
       const mapElement = ref(null)
       const locations = ref([])
       const loading = ref(false)
@@ -8505,9 +8265,9 @@ LIMIT {{limit}}`,
 
       delete L.Icon.Default.prototype._getIconUrl
       L.Icon.Default.mergeOptions({
-        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
+        iconRetinaUrl: 'https://tools-static.wmflabs.org/cdnjs/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+        iconUrl: 'https://tools-static.wmflabs.org/cdnjs/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+        shadowUrl: 'https://tools-static.wmflabs.org/cdnjs/ajax/libs/leaflet/1.9.4/images/marker-shadow.png'
       })
 
       function destroyMap() {
@@ -8713,7 +8473,7 @@ LIMIT {{limit}}`,
         clearSilentRefreshTimer()
         destroyMap()
       })
-      watch([() => locale.value, () => activeProjectId.value, () => locationsVersion.value], loadLocations)
+      watch([() => locale.value, () => locationsVersion.value], loadLocations)
 
       return { t, mapElement, locations, loading, error }
     },
@@ -8911,12 +8671,11 @@ LIMIT {{limit}}`,
     setup(props) {
       const { t, locale } = useI18n()
       const {
-        activeProjectId,
         locationsVersion,
         getLocationFromListCache,
         getLocationDetailCached,
         getLocationChildrenCached,
-      } = projectStore
+      } = locationStore
       const { authEnabled, authAuthenticated, authStatusLoading, authUsername } = authStore
       const location = ref(null)
       const loading = ref(false)
@@ -14798,7 +14557,7 @@ LIMIT {{limit}}`,
       }
 
       watch(
-        [() => props.id, () => locale.value, () => activeProjectId.value, () => locationsVersion.value],
+        [() => props.id, () => locale.value, () => locationsVersion.value],
         loadLocation,
         { immediate: true }
       )
@@ -15599,7 +15358,7 @@ LIMIT {{limit}}`,
                   <input
                     ref="saveImageFileInputElement"
                     type="file"
-                    accept="image/*"
+                    accept=".mp3,.flac,.ogg,.svg,.png,.tif,.tiff,.webp,.webm,.jpg,.jpeg,audio/mpeg,audio/mp3,audio/flac,audio/x-flac,audio/ogg,video/ogg,application/ogg,image/svg+xml,image/png,image/tiff,image/x-tiff,image/webp,video/webm,audio/webm,image/jpeg,image/jpg,image/pjpeg"
                     @change="onSaveImageFileInputChange"
                   />
                   <p v-if="saveImageSelectedFileName" class="dialog-help">{{ saveImageSelectedFileName }}</p>
@@ -16596,19 +16355,12 @@ LIMIT {{limit}}`,
       const { t, locale } = useI18n()
       const route = useRoute()
       const {
-        projects,
-        activeProjectId,
         locationsVersion,
-        projectsLoading,
-        projectError,
-        setActiveProject,
-        loadProjects,
-        createProjectRecord,
         notifyLocationsChanged,
         getLocationsCached,
         getLocationFromListCache,
         getLocationDetailCached,
-      } = projectStore
+      } = locationStore
 
       const detailHref = computed(() => (route.name === 'detail' ? route.fullPath : '/'))
       const {
@@ -16619,22 +16371,7 @@ LIMIT {{limit}}`,
         authLogoutUrl,
         authStatusLoading,
       } = authStore
-      const showCreateDialog = ref(false)
       const showCradleGuideDialog = ref(false)
-      const formName = ref('')
-      const formDescription = ref('')
-      const formDatasourceType = ref('sparql')
-      const customEndpointPresetId = '__custom__'
-      const defaultPreset =
-        PREDEFINED_ENDPOINTS.find((item) => item.url === configuredSparqlDefaultEndpoint) ||
-        PREDEFINED_ENDPOINTS.find((item) => item.id === 'wikidata') ||
-        PREDEFINED_ENDPOINTS[0] ||
-        null
-      const formSparqlEndpoint = ref(defaultPreset ? defaultPreset.url : configuredSparqlDefaultEndpoint)
-      const formEndpointPreset = ref(defaultPreset ? defaultPreset.id : customEndpointPresetId)
-      const formSparqlQuery = ref(defaultProjectQuery)
-      const formError = ref('')
-      const formSaving = ref(false)
       const showCreateLocationDialog = ref(false)
       const createWizardStep = ref('choose')
       const createWizardMode = ref('')
@@ -17848,13 +17585,6 @@ LIMIT {{limit}}`,
         }
       }, 320)
 
-      const activeProjectModel = computed({
-        get: () => activeProjectId.value,
-        set: (nextValue) => {
-          setActiveProject(nextValue)
-        }
-      })
-
       async function loadAuthStatus() {
         authStatusLoading.value = true
         try {
@@ -17896,34 +17626,6 @@ LIMIT {{limit}}`,
 
       function openCradle() {
         window.open(cradleUrl, '_blank', 'noopener,noreferrer')
-      }
-
-      function openCreateDialog() {
-        formName.value = ''
-        formDescription.value = ''
-        formDatasourceType.value = 'sparql'
-        formEndpointPreset.value = defaultPreset ? defaultPreset.id : customEndpointPresetId
-        formSparqlEndpoint.value = defaultPreset ? defaultPreset.url : configuredSparqlDefaultEndpoint
-        formSparqlQuery.value = sampleQueryForEndpoint(formEndpointPreset.value)
-        formError.value = ''
-        showCreateDialog.value = true
-      }
-
-      function applyEndpointPreset() {
-        if (formEndpointPreset.value === customEndpointPresetId) {
-          return
-        }
-        const selectedPreset = PREDEFINED_ENDPOINTS.find((item) => item.id === formEndpointPreset.value)
-        if (selectedPreset) {
-          formSparqlEndpoint.value = selectedPreset.url
-          formSparqlQuery.value = sampleQueryForEndpoint(selectedPreset.id)
-        }
-      }
-
-      function closeCreateDialog() {
-        if (!formSaving.value) {
-          showCreateDialog.value = false
-        }
       }
 
       function resetDraftForm() {
@@ -19746,48 +19448,6 @@ LIMIT {{limit}}`,
         }
       }
 
-      function runQueryTest() {
-        formError.value = ''
-
-        if (!formSparqlQuery.value.trim()) {
-          formError.value = t('projectQueryRequired')
-          return
-        }
-
-        const endpointUrl = formSparqlEndpoint.value.trim() || configuredSparqlDefaultEndpoint
-        const renderedQuery = renderQueryForTesting(formSparqlQuery.value, locale.value, 25)
-        openQueryInUi(endpointUrl, renderedQuery, formEndpointPreset.value)
-      }
-
-      async function submitProject() {
-        formError.value = ''
-
-        if (!formName.value.trim()) {
-          formError.value = t('projectNameRequired')
-          return
-        }
-        if (!formSparqlQuery.value.trim()) {
-          formError.value = t('projectQueryRequired')
-          return
-        }
-
-        formSaving.value = true
-        try {
-          await createProjectRecord({
-            name: formName.value.trim(),
-            description: formDescription.value.trim(),
-            datasource_type: formDatasourceType.value,
-            sparql_endpoint: formSparqlEndpoint.value.trim(),
-            sparql_query: formSparqlQuery.value,
-          })
-          showCreateDialog.value = false
-        } catch (error) {
-          formError.value = error.message || t('loadError')
-        } finally {
-          formSaving.value = false
-        }
-      }
-
       async function submitCreateLocation() {
         if (isWizardChoiceStep.value || isCreateActionBusy.value) {
           return
@@ -19949,7 +19609,6 @@ LIMIT {{limit}}`,
       }
 
       onMounted(() => {
-        loadProjects()
         loadAuthStatus()
       })
       onBeforeUnmount(() => {
@@ -20015,11 +19674,6 @@ LIMIT {{limit}}`,
         showCradleGuideDialog,
         showCradleGuideButton,
         cradleUrl,
-        projects,
-        activeProjectModel,
-        projectsLoading,
-        projectError,
-        showCreateDialog,
         showCreateLocationDialog,
         locationDialogTitle,
         locationDialogSubmitLabel,
@@ -20092,16 +19746,6 @@ LIMIT {{limit}}`,
         showPostalInfo,
         showMunicipalityInfo,
         showCommonsInfo,
-        formName,
-        formDescription,
-        formDatasourceType,
-        formEndpointPreset,
-        customEndpointPresetId,
-        predefinedEndpoints: PREDEFINED_ENDPOINTS,
-        formSparqlEndpoint,
-        formSparqlQuery,
-        formError,
-        formSaving,
         wizardExistingWikidataItem,
         wizardExistingWikidataSearch,
         wizardExistingSuggestions,
@@ -20207,8 +19851,6 @@ LIMIT {{limit}}`,
         draftCommonsLoading,
         draftError,
         draftSaving,
-        openCreateDialog,
-        closeCreateDialog,
         openCreateLocationDialog,
         closeCreateLocationDialog,
         chooseCreateWizardMode,
@@ -20305,9 +19947,6 @@ LIMIT {{limit}}`,
         onDraftCommonsInput,
         selectDraftCommons,
         hideCommonsSuggestionsSoon,
-        applyEndpointPreset,
-        runQueryTest,
-        submitProject,
         submitCreateLocation,
         submitLocationDraft,
         startWikimediaLogin,

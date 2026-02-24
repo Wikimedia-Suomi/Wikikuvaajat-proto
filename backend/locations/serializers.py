@@ -10,6 +10,26 @@ _WIKIDATA_QID_PATTERN = re.compile(r'(Q\d+)', flags=re.IGNORECASE)
 _WIKIDATA_PID_PATTERN = re.compile(r'(P\d+)', flags=re.IGNORECASE)
 _DATE_LIKE_ISO_PATTERN = re.compile(r'(?P<year>\d{4})(?:-(?P<month>\d{2})(?:-(?P<day>\d{2}))?)?$')
 _DATE_LIKE_FI_PATTERN = re.compile(r'(?P<day>\d{1,2})\.\s*(?P<month>\d{1,2})\.\s*(?P<year>\d{4})')
+_COMMONS_ALLOWED_MIME_TYPES = {
+    'audio/mpeg',  # MP3
+    'audio/mp3',  # MP3 (non-standard but common)
+    'audio/flac',  # FLAC
+    'audio/x-flac',  # FLAC (legacy)
+    'audio/ogg',  # OGG
+    'video/ogg',  # OGG
+    'application/ogg',  # OGG
+    'image/svg+xml',  # SVG
+    'image/png',  # PNG
+    'image/tiff',  # TIF/TIFF
+    'image/x-tiff',  # TIF/TIFF (legacy)
+    'image/webp',  # WebP
+    'video/webm',  # WebM
+    'audio/webm',  # WebM audio
+    'image/jpeg',  # JPEG
+    'image/jpg',  # JPEG (non-standard but common)
+    'image/pjpeg',  # JPEG (legacy)
+}
+_COMMONS_ALLOWED_MIME_TYPE_LIST_TEXT = 'MP3, FLAC, OGG, SVG, PNG, TIF, WebP, WebM, JPEG'
 
 
 def _normalize_wikidata_qid(value: str) -> str:
@@ -222,6 +242,16 @@ class CommonsImageUploadSerializer(serializers.Serializer):
     heading = serializers.FloatField(required=False)
     elevation_meters = serializers.FloatField(required=False)
     wikidata_item = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    def validate_file(self, value):
+        raw_content_type = str(getattr(value, 'content_type', '') or '')
+        normalized_content_type = raw_content_type.split(';', 1)[0].strip().lower()
+        if normalized_content_type not in _COMMONS_ALLOWED_MIME_TYPES:
+            raise serializers.ValidationError(
+                f'Unsupported file MIME type "{raw_content_type or "(missing)"}". '
+                f'Allowed types: {_COMMONS_ALLOWED_MIME_TYPE_LIST_TEXT}.'
+            )
+        return value
 
     def validate_caption_language(self, value: str) -> str:
         raw_value = (value or '').strip().lower()

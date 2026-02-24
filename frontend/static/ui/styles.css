@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap');
+@import url('https://tools-static.wmflabs.org/fontcdn/css?family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap');
+@import url('https://tools-static.wmflabs.org/fontcdn/css?family=Manrope:wght@400;500;600;700&display=swap');
 
 :root {
   --font-ui: 'Manrope', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -93,19 +94,6 @@ textarea:focus-visible {
   border: 1px solid #bae6fd;
   border-radius: 999px;
   padding: 0.16rem 0.55rem;
-}
-
-.project-switcher {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.project-switcher select {
-  border: 1px solid #94a3b8;
-  border-radius: 0.4rem;
-  padding: 0.3rem 0.5rem;
-  min-width: 180px;
 }
 
 .tabs {
@@ -2048,14 +2036,6 @@ textarea:focus-visible {
   .topbar-controls {
     width: 100%;
     justify-content: flex-start;
-  }
-
-  .project-switcher {
-    width: 100%;
-  }
-
-  .project-switcher select {
-    width: 100%;
   }
 
   .content {
