@@ -8,8 +8,8 @@ FRONTEND_DIR = BASE_DIR.parent / 'frontend'
 if FRONTEND_DIR.exists() and str(FRONTEND_DIR) not in sys.path:
     sys.path.insert(0, str(FRONTEND_DIR))
 
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-me')
-DEBUG = os.getenv('DEBUG', '1') == '1'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+DEBUG = os.getenv('DJANGO_DEBUG', '0') == '1'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 INSTALLED_APPS = [
@@ -127,6 +127,7 @@ SPARQL_OSM_ENDPOINT = os.getenv(
 SPARQL_DEFAULT_LIMIT = int(os.getenv('SPARQL_DEFAULT_LIMIT', '500'))
 SPARQL_TIMEOUT_SECONDS = int(os.getenv('SPARQL_TIMEOUT_SECONDS', '15'))
 IMAGE_COUNT_CACHE_TTL_SECONDS = int(os.getenv('IMAGE_COUNT_CACHE_TTL_SECONDS', '86400'))
+COMMONS_UPLOAD_MAX_SIZE_BYTES = int(os.getenv('COMMONS_UPLOAD_MAX_SIZE_BYTES', str(50 * 1024 * 1024)))
 API_BASE_URL = os.getenv('API_BASE_URL', '/api')
 SOCIAL_AUTH_MEDIAWIKI_KEY = os.getenv(
     'SOCIAL_AUTH_MEDIAWIKI_KEY',

@@ -3,6 +3,7 @@ import math
 import re
 from datetime import date
 
+from django.conf import settings
 from rest_framework import serializers
 
 
@@ -30,6 +31,18 @@ _COMMONS_ALLOWED_MIME_TYPES = {
     'image/pjpeg',  # JPEG (legacy)
 }
 _COMMONS_ALLOWED_MIME_TYPE_LIST_TEXT = 'MP3, FLAC, OGG, SVG, PNG, TIF, WebP, WebM, JPEG'
+_COMMONS_DEFAULT_MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
+
+
+def _commons_upload_max_size_bytes() -> int:
+    raw_value = getattr(settings, 'COMMONS_UPLOAD_MAX_SIZE_BYTES', _COMMONS_DEFAULT_MAX_UPLOAD_SIZE_BYTES)
+    try:
+        parsed_value = int(raw_value)
+    except (TypeError, ValueError):
+        return _COMMONS_DEFAULT_MAX_UPLOAD_SIZE_BYTES
+    if parsed_value < 1:
+        return _COMMONS_DEFAULT_MAX_UPLOAD_SIZE_BYTES
+    return parsed_value
 
 
 def _normalize_wikidata_qid(value: str) -> str:
@@ -250,6 +263,16 @@ class CommonsImageUploadSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 f'Unsupported file MIME type "{raw_content_type or "(missing)"}". '
                 f'Allowed types: {_COMMONS_ALLOWED_MIME_TYPE_LIST_TEXT}.'
+            )
+        file_size = int(getattr(value, 'size', 0) or 0)
+        max_size_bytes = _commons_upload_max_size_bytes()
+        if file_size > max_size_bytes:
+            if max_size_bytes % (1024 * 1024) == 0:
+                max_size_label = f'{max_size_bytes // (1024 * 1024)} MB'
+            else:
+                max_size_label = f'{max_size_bytes / (1024 * 1024):.1f} MB'
+            raise serializers.ValidationError(
+                f'File is too large ({file_size} bytes). Maximum upload size is {max_size_label}.'
             )
         return value
 

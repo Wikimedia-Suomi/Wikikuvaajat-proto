@@ -3,6 +3,7 @@ from urllib.parse import quote, unquote
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import HttpResponseRedirect
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework.test import APITestCase
@@ -33,6 +34,15 @@ class LocationApiTests(APITestCase):
         self._enrich_counts_patcher.stop()
         self._fetch_children_patcher.stop()
         super().tearDown()
+
+    @override_settings(DEBUG=True, ROOT_URLCONF='locations.tests.test_urlconf')
+    def test_static_app_js_served_with_script_mime_type(self):
+        response = self.client.get('/static/ui/app.js')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('javascript', str(response.get('Content-Type', '')))
+        first_chunk = next(iter(response.streaming_content), b'')
+        self.assertIn(b'(function ()', first_chunk)
 
     def test_frontend_app_served(self):
         response = self.client.get(reverse('frontend-app'))
@@ -506,6 +516,35 @@ class LocationApiTests(APITestCase):
         self.assertIn('Allowed types', str(response.data['file'][0]))
         oauth_credentials_mock.assert_called_once()
 
+    @override_settings(COMMONS_UPLOAD_MAX_SIZE_BYTES=10)
+    @patch('locations.views.upload_image_to_commons')
+    @patch(
+        'locations.views._mediawiki_oauth_credentials_for_request',
+        return_value=({'oauth_token': 'token', 'oauth_token_secret': 'secret'}, '', 200),
+    )
+    def test_commons_upload_endpoint_rejects_too_large_file(
+        self,
+        oauth_credentials_mock,
+        upload_image_to_commons_mock,
+    ):
+        self._authenticate()
+        image_file = SimpleUploadedFile('Example.jpg', b'01234567890', content_type='image/jpeg')
+
+        response = self.client.post(
+            reverse('commons-upload'),
+            {
+                'file': image_file,
+                'coordinate_source': 'exif',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('file', response.data)
+        self.assertIn('Maximum upload size is', str(response.data['file'][0]))
+        oauth_credentials_mock.assert_called_once()
+        upload_image_to_commons_mock.assert_not_called()
+
     @patch('locations.views.upload_image_to_commons')
     @patch(
         'locations.views._mediawiki_oauth_credentials_for_request',
@@ -633,21 +672,58 @@ class LocationApiTests(APITestCase):
         LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
         LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
     )
-    @patch(
-        'locations.views.fetch_wikidata_authenticated_username',
-        return_value='Zache',
-    )
-    def test_auth_status_endpoint_reports_local_access_token_mode(
-        self,
-        fetch_wikidata_authenticated_username_mock,
-    ):
+    def test_auth_status_endpoint_reports_local_access_token_mode_without_session_login(self):
         response = self.client.get(reverse('auth-status'))
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data['enabled'])
-        self.assertTrue(response.data['authenticated'])
+        self.assertFalse(response.data['authenticated'])
         self.assertEqual(response.data['auth_mode'], 'access_token')
-        self.assertEqual(response.data['username'], 'Zache')
+        self.assertEqual(response.data['username'], '')
+        self.assertEqual(response.data['login_url'], '/auth/login/local/?next=/')
+        self.assertEqual(response.data['logout_url'], '/auth/logout/?next=/')
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    def test_auth_status_endpoint_hides_local_access_token_mode_for_non_local_ip(self):
+        response = self.client.get(reverse('auth-status'), REMOTE_ADDR='10.0.0.55')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['enabled'])
+        self.assertEqual(response.data['auth_mode'], 'oauth')
+        self.assertEqual(response.data['login_url'], '/auth/login/mediawiki/?next=/')
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch(
+        'locations.views.fetch_wikidata_authenticated_username',
+        return_value='Zache',
+    )
+    def test_local_access_login_creates_user_and_sets_authenticated_session(
+        self,
+        fetch_wikidata_authenticated_username_mock,
+    ):
+        login_response = self.client.get('/auth/login/local/?next=/')
+        auth_response = self.client.get(reverse('auth-status'))
+
+        self.assertEqual(login_response.status_code, 302)
+        self.assertEqual(login_response.headers.get('Location'), '/')
+        self.assertEqual(auth_response.status_code, 200)
+        self.assertTrue(auth_response.data['authenticated'])
+        self.assertEqual(auth_response.data['username'], 'local_Zache')
+        self.assertEqual(auth_response.data['auth_mode'], 'access_token')
+        self.assertTrue(get_user_model().objects.filter(username='local_Zache').exists())
+        self.assertFalse(get_user_model().objects.filter(username='Zache').exists())
         fetch_wikidata_authenticated_username_mock.assert_called_once_with(
             oauth_token='local-access-token',
             oauth_token_secret='local-access-secret',
@@ -660,26 +736,104 @@ class LocationApiTests(APITestCase):
         LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
         LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
     )
-    @patch('builtins.print')
     @patch(
         'locations.views.fetch_wikidata_authenticated_username',
         side_effect=WikidataWriteError('userinfo request failed'),
     )
-    def test_auth_status_endpoint_logs_debug_when_local_access_username_lookup_fails(
+    def test_local_access_login_returns_502_when_username_lookup_fails(
         self,
         fetch_wikidata_authenticated_username_mock,
-        print_mock,
     ):
-        response = self.client.get(reverse('auth-status'))
+        response = self.client.get('/auth/login/local/?next=/')
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['username'], 'local-access-token')
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('detail', response.data)
         fetch_wikidata_authenticated_username_mock.assert_called_once_with(
             oauth_token='local-access-token',
             oauth_token_secret='local-access-secret',
         )
-        print_mock.assert_called_once()
-        self.assertIn('username lookup failed', str(print_mock.call_args))
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    def test_local_access_login_rejects_non_local_ip(self):
+        response = self.client.get('/auth/login/local/?next=/', REMOTE_ADDR='10.0.0.55')
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.data.get('detail'),
+            'Local development access token mode is only allowed from localhost.',
+        )
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='oauth-key',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='oauth-secret',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    def test_mediawiki_login_route_redirects_to_local_login_when_local_tokens_enabled(self):
+        response = self.client.get('/auth/login/mediawiki/?next=/dashboard/')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers.get('Location'), '/auth/login/local/?next=%2Fdashboard%2F')
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='oauth-key',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='oauth-secret',
+        DEBUG=True,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='local-access-token',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='local-access-secret',
+    )
+    @patch('social_django.views.auth')
+    def test_mediawiki_login_route_uses_oauth_for_non_local_ip_even_when_local_tokens_enabled(
+        self,
+        social_auth_mock,
+    ):
+        social_auth_mock.return_value = HttpResponseRedirect('/auth/complete/mediawiki/')
+
+        response = self.client.get('/auth/login/mediawiki/?next=/', REMOTE_ADDR='10.0.0.55')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers.get('Location'), '/auth/complete/mediawiki/')
+        social_auth_mock.assert_called_once()
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='',
+        DEBUG=False,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='',
+    )
+    def test_mediawiki_login_route_returns_503_when_oauth_not_configured(self):
+        response = self.client.get('/auth/login/mediawiki/?next=/')
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('detail', response.data)
+
+    @override_settings(
+        SOCIAL_AUTH_MEDIAWIKI_KEY='oauth-key',
+        SOCIAL_AUTH_MEDIAWIKI_SECRET='oauth-secret',
+        DEBUG=False,
+        LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='',
+        LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='',
+    )
+    @patch('social_django.views.auth')
+    def test_mediawiki_login_route_delegates_to_social_auth_view(
+        self,
+        social_auth_mock,
+    ):
+        social_auth_mock.return_value = HttpResponseRedirect('/auth/complete/mediawiki/')
+
+        response = self.client.get('/auth/login/mediawiki/?next=/')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers.get('Location'), '/auth/complete/mediawiki/')
+        social_auth_mock.assert_called_once()
 
     def test_auth_logout_route_redirects_and_clears_session(self):
         user = get_user_model().objects.create_user(username='logout-user')
@@ -816,6 +970,16 @@ class LocationApiTests(APITestCase):
         self,
         ensure_wikidata_collection_membership_mock,
     ):
+        with patch('locations.views.fetch_wikidata_authenticated_username', return_value='Zache') as username_mock:
+            login_response = self.client.get('/auth/login/local/?next=/')
+
+        self.assertEqual(login_response.status_code, 302)
+        self.assertEqual(login_response.headers.get('Location'), '/')
+        username_mock.assert_called_once_with(
+            oauth_token='local-access-token',
+            oauth_token_secret='local-access-secret',
+        )
+
         ensure_wikidata_collection_membership_mock.return_value = {
             'qid': 'Q1757',
             'uri': 'https://www.wikidata.org/entity/Q1757',

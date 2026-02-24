@@ -19037,14 +19037,6 @@ ORDER BY ASC(?distance)
               {{ t('signedInAs', { name: authUsername }) }}
             </span>
             <button
-              v-if="showCradleGuideButton"
-              type="button"
-              class="secondary-btn"
-              @click="openCradleGuideDialog"
-            >
-              {{ t('addLocationWithCradle') }}
-            </button>
-            <button
               v-if="authEnabled && !authAuthenticated && authLoginUrl !== '#'"
               type="button"
               class="secondary-btn"

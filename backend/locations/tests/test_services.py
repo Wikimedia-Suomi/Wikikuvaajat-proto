@@ -147,7 +147,10 @@ class WikidataWriteAuthTests(SimpleTestCase):
 
         self.assertEqual(username, '')
         print_mock.assert_called_once()
-        self.assertIn('userinfo', str(print_mock.call_args))
+        log_call = str(print_mock.call_args)
+        self.assertIn('MediaWiki userinfo fetch failed.', log_call)
+        self.assertIn('response_body_present=True', log_call)
+        self.assertNotIn('{"query":{"userinfo":{}}}', log_call)
 
     def test_wikidata_source_snaks_include_optional_metadata_fields(self):
         snaks = services._wikidata_source_snaks(

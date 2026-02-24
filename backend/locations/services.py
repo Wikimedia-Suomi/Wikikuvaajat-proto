@@ -3742,8 +3742,9 @@ def upload_image_to_commons(
 def _log_wikidata_userinfo_failure(response_text: str, status_code: int | None = None, detail: str = '') -> None:
     status_part = f' status={status_code}' if status_code is not None else ''
     detail_part = f' detail={detail}' if detail else ''
-    preview = str(response_text or '').replace('\n', ' ').strip()
-    print(f'[AUTH-DEBUG] MediaWiki userinfo fetch failed.{status_part}{detail_part} response={preview!r}', flush=True)
+    response_body_present = bool(str(response_text or '').strip())
+    response_part = f' response_body_present={response_body_present}'
+    print(f'[AUTH-DEBUG] MediaWiki userinfo fetch failed.{status_part}{detail_part}{response_part}', flush=True)
 
 
 def fetch_wikidata_authenticated_username(

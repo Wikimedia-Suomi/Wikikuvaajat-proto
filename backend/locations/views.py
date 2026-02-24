@@ -4,8 +4,11 @@ import re
 from time import perf_counter
 from urllib.parse import quote
 
+from django.contrib.auth import get_user_model, login as auth_login
 from django.conf import settings
+from django.http import HttpResponseRedirect
 from django.utils import translation
+from django.utils.http import url_has_allowed_host_and_scheme
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -49,7 +52,11 @@ _WIKIDATA_ENTITY_PATTERN = re.compile(
 _WIKIDATA_QID_ONLY_PATTERN = re.compile(r'^Q\d+$', flags=re.IGNORECASE)
 _WIKIDATA_QID_PATTERN = re.compile(r'(Q\d+)', flags=re.IGNORECASE)
 _LOCAL_DRAFT_URI_PATTERN = re.compile(r'^https://draft\.local/location/\d+$', flags=re.IGNORECASE)
+_LOCAL_AUTH_USERNAME_PATTERN = re.compile(r'[^A-Za-z0-9.@_+-]+')
+_LOCAL_AUTH_USERNAME_PREFIX = 'local_'
+_LOCAL_AUTH_USERNAME_FALLBACK_SUFFIX = 'access-token'
 _CACHE_BUST_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$')
+_LOCAL_DEV_ALLOWED_IPS = frozenset({'localhost', '127.0.0.1', '::1'})
 
 
 def _list_render_debug_log(message: str) -> None:
@@ -60,6 +67,10 @@ def _list_render_debug_log(message: str) -> None:
 
 def _oauth_login_url() -> str:
     return '/auth/login/mediawiki/?next=/'
+
+
+def _local_dev_access_login_url() -> str:
+    return '/auth/login/local/?next=/'
 
 
 def _oauth_logout_url() -> str:
@@ -78,11 +89,37 @@ def _local_dev_access_token_credentials() -> tuple[str, str]:
     return token, secret
 
 
-def _local_dev_access_token_enabled() -> bool:
-    if not getattr(settings, 'DEBUG', False):
-        return False
+def _local_dev_access_token_configured() -> bool:
     token, secret = _local_dev_access_token_credentials()
     return bool(token and secret)
+
+
+def _local_dev_access_request_allowed(request) -> bool:
+    remote_addr = str(request.META.get('REMOTE_ADDR') or '').strip().lower()
+    if remote_addr not in _LOCAL_DEV_ALLOWED_IPS:
+        return False
+
+    x_forwarded_for = str(request.META.get('HTTP_X_FORWARDED_FOR') or '').strip()
+    if x_forwarded_for:
+        client_ip = x_forwarded_for.split(',', 1)[0].strip().lower()
+        if client_ip and client_ip not in _LOCAL_DEV_ALLOWED_IPS:
+            return False
+
+    x_real_ip = str(request.META.get('HTTP_X_REAL_IP') or '').strip().lower()
+    if x_real_ip and x_real_ip not in _LOCAL_DEV_ALLOWED_IPS:
+        return False
+
+    return True
+
+
+def _local_dev_access_token_enabled(request=None) -> bool:
+    if not getattr(settings, 'DEBUG', False):
+        return False
+    if not _local_dev_access_token_configured():
+        return False
+    if request is not None and not _local_dev_access_request_allowed(request):
+        return False
+    return True
 
 
 def _cache_bust_query_comment(request) -> str:
@@ -94,9 +131,90 @@ def _cache_bust_query_comment(request) -> str:
     return f'# cache-bust: {raw_value}'
 
 
+def _safe_next_redirect_url(request, fallback: str = '/') -> str:
+    fallback_value = str(fallback or '/').strip() or '/'
+    raw_next = str(request.query_params.get('next') or request.GET.get('next') or '').strip()
+    if not raw_next:
+        return fallback_value
+    if url_has_allowed_host_and_scheme(
+        raw_next,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return raw_next
+    return fallback_value
+
+
+def _api_error_detail(public_message: str, exc: Exception | None = None) -> str:
+    fallback_message = str(public_message or '').strip() or 'Request failed.'
+    if not getattr(settings, 'DEBUG', False) or exc is None:
+        return fallback_message
+    debug_message = str(exc).strip()
+    if not debug_message:
+        return fallback_message
+    return debug_message
+
+
+def _api_error_response(
+    public_message: str,
+    *,
+    status_code: int,
+    exc: Exception | None = None,
+) -> Response:
+    return Response(
+        {'detail': _api_error_detail(public_message, exc)},
+        status=status_code,
+    )
+
+
+def _normalize_local_auth_username(raw_username: str, max_length: int = 150) -> str:
+    normalized = str(raw_username or '').strip()
+    if normalized:
+        normalized = re.sub(r'\s+', '_', normalized)
+        normalized = _LOCAL_AUTH_USERNAME_PATTERN.sub('_', normalized).strip('._-')
+    if not normalized:
+        normalized = _LOCAL_AUTH_USERNAME_FALLBACK_SUFFIX
+    local_username = f'{_LOCAL_AUTH_USERNAME_PREFIX}{normalized}'
+    if max_length > 0:
+        local_username = local_username[:max_length].strip('._-')
+    if not local_username:
+        fallback_local_username = _LOCAL_AUTH_USERNAME_PREFIX.strip('._-') or 'local'
+        if max_length > 0:
+            fallback_local_username = fallback_local_username[:max_length].strip('._-')
+        local_username = fallback_local_username or 'local'
+    return local_username
+
+
+def _local_dev_login_user(request):
+    access_token, access_token_secret = _local_dev_access_token_credentials()
+    resolved_username = fetch_wikidata_authenticated_username(
+        oauth_token=access_token,
+        oauth_token_secret=access_token_secret,
+    )
+    if not resolved_username:
+        raise WikidataWriteError('Could not resolve Wikimedia username from local access tokens.')
+
+    user_model = get_user_model()
+    username_field = str(getattr(user_model, 'USERNAME_FIELD', 'username') or 'username')
+    try:
+        username_field_max_length = int(getattr(user_model._meta.get_field(username_field), 'max_length', 150) or 150)
+    except Exception:
+        username_field_max_length = 150
+
+    normalized_username = _normalize_local_auth_username(resolved_username, max_length=username_field_max_length)
+    user, created = user_model.objects.get_or_create(**{username_field: normalized_username})
+    if created and hasattr(user, 'set_unusable_password'):
+        user.set_unusable_password()
+        user.save(update_fields=['password'])
+
+    auth_login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+    request.session['local_dev_access_authenticated'] = True
+    return user
+
+
 def _mediawiki_oauth_credentials_for_request(request) -> tuple[dict[str, str] | None, str, int]:
     oauth_enabled = _oauth_enabled()
-    local_access_token_enabled = _local_dev_access_token_enabled()
+    local_access_token_enabled = _local_dev_access_token_enabled(request)
     if not oauth_enabled and not local_access_token_enabled:
         return None, 'Wikimedia OAuth is not configured on this server.', status.HTTP_503_SERVICE_UNAVAILABLE
 
@@ -146,7 +264,7 @@ def _mediawiki_oauth_credentials_for_request(request) -> tuple[dict[str, str] | 
             status.HTTP_403_FORBIDDEN,
         )
 
-    if local_access_token_enabled:
+    if local_access_token_enabled and user is not None and user.is_authenticated:
         access_token, access_token_secret = _local_dev_access_token_credentials()
         return {
             'oauth_token': access_token,
@@ -294,8 +412,6 @@ class BaseLocationAPIView(APIView):
         user = getattr(request, 'user', None)
         if user is not None and user.is_authenticated:
             return None
-        if _local_dev_access_token_enabled():
-            return None
         return Response(
             {'detail': 'Authentication required. Sign in with Wikimedia OAuth first.'},
             status=status.HTTP_401_UNAUTHORIZED,
@@ -316,18 +432,48 @@ class BaseLocationAPIView(APIView):
         return min(parsed_limit, maximum)
 
 
+class LocalDevAccessTokenLoginAPIView(APIView):
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        if not getattr(settings, 'DEBUG', False) or not _local_dev_access_token_configured():
+            return Response(
+                {'detail': 'Local development access token mode is not enabled.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        if not _local_dev_access_request_allowed(request):
+            return Response(
+                {'detail': 'Local development access token mode is only allowed from localhost.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            _local_dev_login_user(request)
+        except WikidataWriteError as exc:
+            print(f'[AUTH-DEBUG] Local access token login failed: {exc}', flush=True)
+            return _api_error_response(
+                'Local access token login failed.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
+
+        return HttpResponseRedirect(_safe_next_redirect_url(request))
+
+
 class AuthStatusAPIView(APIView):
     def get(self, request):
         oauth_enabled = _oauth_enabled()
-        local_access_token_enabled = _local_dev_access_token_enabled()
+        local_access_token_enabled = _local_dev_access_token_enabled(request)
         enabled = oauth_enabled or local_access_token_enabled
-        request_is_authenticated = bool(getattr(request, 'user', None) and request.user.is_authenticated)
-        use_access_token_mode = bool(local_access_token_enabled and (not request_is_authenticated or not oauth_enabled))
+        request_user = getattr(request, 'user', None)
+        request_is_authenticated = bool(request_user and request_user.is_authenticated)
+        use_access_token_mode = bool(local_access_token_enabled)
         payload: dict[str, object] = {
             'enabled': enabled,
-            'authenticated': request_is_authenticated or use_access_token_mode,
-            'login_url': '#' if use_access_token_mode else _oauth_login_url(),
-            'logout_url': '#' if use_access_token_mode else _oauth_logout_url(),
+            'authenticated': request_is_authenticated,
+            'login_url': _local_dev_access_login_url() if use_access_token_mode else _oauth_login_url(),
+            'logout_url': _oauth_logout_url(),
             'provider': 'mediawiki',
             'auth_mode': 'access_token' if use_access_token_mode else 'oauth',
             'username': '',
@@ -336,27 +482,37 @@ class AuthStatusAPIView(APIView):
         if not enabled:
             return Response(payload)
 
-        if payload['authenticated']:
-            if use_access_token_mode:
-                access_token, access_token_secret = _local_dev_access_token_credentials()
-                try:
-                    payload['username'] = (
-                        fetch_wikidata_authenticated_username(
-                            oauth_token=access_token,
-                            oauth_token_secret=access_token_secret,
-                        )
-                        or 'local-access-token'
-                    )
-                except WikidataWriteError as exc:
-                    print(
-                        f'[AUTH-DEBUG] Local access token username lookup failed: {exc}',
-                        flush=True,
-                    )
-                    payload['username'] = 'local-access-token'
-            else:
-                payload['username'] = str(request.user.get_username() or '')
+        if request_is_authenticated:
+            payload['username'] = str(request.user.get_username() or '')
 
         return Response(payload)
+
+
+class MediaWikiLoginAPIView(APIView):
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        next_url = _safe_next_redirect_url(request)
+        if _local_dev_access_token_enabled(request):
+            return HttpResponseRedirect(f'/auth/login/local/?next={quote(next_url, safe="")}')
+        if not _oauth_enabled():
+            return Response(
+                {'detail': 'Wikimedia OAuth is not configured on this server.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            from social_django.views import auth as social_auth_begin
+
+            return social_auth_begin(request, 'mediawiki')
+        except Exception as exc:
+            print(f'[AUTH-DEBUG] Wikimedia OAuth login start failed: {exc}', flush=True)
+            return _api_error_response(
+                'Wikimedia OAuth login failed.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
 
 
 class OSMFeatureLatestAPIView(BaseLocationAPIView):
@@ -418,7 +574,11 @@ class OSMFeatureLatestAPIView(BaseLocationAPIView):
                 hint_name=hint_name,
             )
         except ExternalServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not fetch latest OSM feature metadata.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
 
         if payload is None:
             return Response({'detail': 'OSM feature not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -450,7 +610,11 @@ class LocationListAPIView(BaseLocationAPIView):
                     f'locations_list_total status=error '
                     f'duration_ms={(perf_counter() - request_started_at) * 1000:.1f}'
                 )
-                return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+                return _api_error_response(
+                    'Could not fetch locations.',
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    exc=exc,
+                )
 
             _list_render_debug_log(
                 f'phase=fetch_locations status=ok '
@@ -505,7 +669,11 @@ class LocationDetailAPIView(BaseLocationAPIView):
         try:
             location = fetch_location_detail(uri=uri, lang=lang)
         except SPARQLServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not fetch location details.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
 
         if location:
             serializer = LocationSerializer(_enrich_location_payload(location, lang))
@@ -544,7 +712,11 @@ class WikidataSearchAPIView(BaseLocationAPIView):
         try:
             items = search_wikidata_entities(query=query, lang=lang, limit=limit)
         except ExternalServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Wikidata search failed.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
         return Response(items)
 
 
@@ -554,7 +726,11 @@ class WikidataEntityAPIView(BaseLocationAPIView):
         try:
             entity = fetch_wikidata_entity(entity_id, lang=lang)
         except ExternalServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not fetch Wikidata entity.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
 
         if entity is None:
             return Response({'detail': 'Wikidata entity not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -591,7 +767,11 @@ class WikidataAddExistingAPIView(BaseLocationAPIView):
                 ).strip(),
             )
         except (ExternalServiceError, WikidataWriteError) as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not update Wikidata item.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
 
         return Response(result)
 
@@ -606,7 +786,11 @@ class CitoidMetadataAPIView(BaseLocationAPIView):
         try:
             metadata = fetch_citoid_metadata(source_url, lang=lang)
         except ExternalServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not fetch citation metadata.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
         return Response(metadata)
 
 
@@ -631,7 +815,11 @@ class WikidataCreateItemAPIView(BaseLocationAPIView):
                 oauth_token_secret=oauth_credentials['oauth_token_secret'],
             )
         except (ExternalServiceError, WikidataWriteError) as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not create Wikidata item.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
 
         return Response(created, status=status.HTTP_201_CREATED)
 
@@ -646,7 +834,11 @@ class CommonsCategorySearchAPIView(BaseLocationAPIView):
         try:
             categories = search_commons_categories(query=query, limit=limit)
         except ExternalServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not fetch Commons categories.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
         return Response(categories)
 
 
@@ -691,7 +883,11 @@ class CommonsImageUploadAPIView(BaseLocationAPIView):
                 oauth_token_secret=oauth_credentials['oauth_token_secret'],
             )
         except (ExternalServiceError, WikidataWriteError) as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Could not upload file to Wikimedia Commons.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
 
         return Response(result, status=status.HTTP_201_CREATED)
 
@@ -706,7 +902,11 @@ class GeocodeSearchAPIView(BaseLocationAPIView):
         try:
             places = search_geocode_places(query=query, limit=limit)
         except ExternalServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Geocoding search failed.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
         return Response(places)
 
 
@@ -733,5 +933,9 @@ class GeocodeReverseAPIView(BaseLocationAPIView):
         try:
             result = reverse_geocode_places(latitude=latitude, longitude=longitude, lang=lang)
         except ExternalServiceError as exc:
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return _api_error_response(
+                'Reverse geocoding failed.',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                exc=exc,
+            )
         return Response(result)

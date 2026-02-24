@@ -22,13 +22,29 @@ Supported default languages:
 - `frontend/static/ui/app.js` Vue app logic (no build step)
 - `frontend/static/ui/styles.css` responsive styling
 
-## Run with single web server
+## Fetch code
+
+SSH:
+```bash
+git clone git@github.com:Wikimedia-Suomi/Wikikuvaajat-proto.git
+cd Wikikuvaajat-proto
+```
+
+HTTPS:
+```bash
+git clone https://github.com/Wikimedia-Suomi/Wikikuvaajat-proto.git
+cd Wikikuvaajat-proto
+```
+
+## Start development environment (single web server)
 
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export DJANGO_SECRET_KEY=dev-secret-change-me
+export DJANGO_DEBUG=1
 python3 manage.py migrate
 python3 manage.py runserver 8000
 ```
@@ -65,6 +81,9 @@ The backend extends it with label/description and coordinates needed by the list
 - `POST /api/wikidata/create/`
 - `GET /api/commons/categories/?q=hel`
 - `GET /api/geocode/search/?q=helsinki`
+
+`DJANGO_SECRET_KEY` is required for both backend and frontend. If it is empty,
+Django raises `The SECRET_KEY setting must not be empty.`.
 
 ## Backend environment variables (optional)
 
@@ -114,6 +133,8 @@ cd frontend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export DJANGO_SECRET_KEY=dev-secret-change-me
+export DJANGO_DEBUG=1
 python3 manage.py migrate
 python3 manage.py runserver 8001
 ```
@@ -127,17 +148,19 @@ Open:
 Backend:
 ```bash
 cd backend
-python3 manage.py test
+source .venv/bin/activate
+DJANGO_SECRET_KEY=test-secret-for-tests python3 manage.py test
 ```
 
 Frontend:
 ```bash
 cd frontend
 source .venv/bin/activate
-python3 manage.py test
+DJANGO_SECRET_KEY=test-secret-for-tests python3 manage.py test
 ```
 
-Frontend tests should be run from the frontend virtual environment.
+Both backend and frontend tests require `DJANGO_SECRET_KEY` to be set. If it is
+missing or empty, Django raises `The SECRET_KEY setting must not be empty.`.
 
 ## License
 
