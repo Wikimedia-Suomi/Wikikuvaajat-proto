@@ -1972,6 +1972,12 @@ textarea:focus-visible {
   justify-content: flex-start;
 }
 
+.save-image-subject-error-link {
+  margin-left: 0.4rem;
+  color: #92400e;
+  font-weight: 600;
+}
+
 .save-image-linked-subjects {
   display: grid;
   gap: 0.4rem;

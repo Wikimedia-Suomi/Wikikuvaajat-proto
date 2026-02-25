@@ -3825,6 +3825,118 @@ LIMIT ${normalizedQids.length}
     return { latitude, longitude }
   }
 
+  function buildSparqlQueryUiUrl(endpointUrl, query) {
+    const normalizedEndpoint = String(endpointUrl || '').trim()
+    const normalizedQuery = String(query || '')
+    const buildYasguiUrl = (endpointValue, queryValue) => {
+      const params = new URLSearchParams()
+      if (endpointValue) {
+        params.set('endpoint', endpointValue)
+      }
+      if (queryValue) {
+        params.set('query', queryValue)
+      }
+      const queryString = params.toString()
+      if (!queryString) {
+        return 'https://yasgui.triply.cc/'
+      }
+      return `https://yasgui.triply.cc/?${queryString}`
+    }
+    const buildSophoxUrl = (queryValue) => `https://sophox.org/#query=${encodeURIComponent(String(queryValue || ''))}`
+
+    if (!normalizedEndpoint) {
+      return buildYasguiUrl('', normalizedQuery)
+    }
+
+    let parsedEndpointUrl = null
+    try {
+      parsedEndpointUrl = new URL(normalizedEndpoint)
+    } catch (error) {
+      void error
+      return buildYasguiUrl(normalizedEndpoint, normalizedQuery)
+    }
+
+    const host = String(parsedEndpointUrl.hostname || '').toLowerCase()
+    const path = String(parsedEndpointUrl.pathname || '')
+    if (host === 'query.wikidata.org') {
+      return `https://query.wikidata.org/#${encodeURIComponent(normalizedQuery)}`
+    }
+    if (host === 'commons-query.wikimedia.org') {
+      return `https://commons-query.wikimedia.org/#${encodeURIComponent(normalizedQuery)}`
+    }
+    if (host === 'sophox.org') {
+      return buildSophoxUrl(normalizedQuery)
+    }
+    if (path.startsWith('/api/') && host.includes('qlever')) {
+      const datasetPath = path.slice('/api/'.length).replace(/^\/+|\/+$/g, '')
+      if (datasetPath === 'osm-planet') {
+        return buildSophoxUrl(normalizedQuery)
+      }
+      const uiBase = `${parsedEndpointUrl.protocol}//${parsedEndpointUrl.host}/${datasetPath || 'wikidata'}/`
+      return `${uiBase}?query=${encodeURIComponent(normalizedQuery)}`
+    }
+    if (host === 'dbpedia.org' && path.startsWith('/sparql')) {
+      return `https://dbpedia.org/sparql?query=${encodeURIComponent(normalizedQuery)}&format=text/html`
+    }
+
+    return buildYasguiUrl(normalizedEndpoint, normalizedQuery)
+  }
+
+  function buildSparqlHttpError(statusCode, responseText, endpointUrl, submittedQuery) {
+    const sanitizeSparqlErrorDetail = (value) => {
+      const compactValue = String(value || '').replace(/\s+/g, ' ').trim()
+      if (!compactValue) {
+        return ''
+      }
+      if (
+        compactValue.length > 180 &&
+        /(?:prefix\s+[a-z_][\w-]*\s*:|select\s+\?|where\s*\{)/i.test(compactValue)
+      ) {
+        return 'Endpoint returned SPARQL error payload (query omitted).'
+      }
+      return compactValue.slice(0, 320)
+    }
+    const status = Number.parseInt(String(statusCode), 10)
+    const normalizedStatus = Number.isFinite(status) ? status : 500
+    const normalizedText = String(responseText || '').trim()
+    let parsedDetail = ''
+    let parsedQuery = ''
+
+    if (normalizedText) {
+      try {
+        const parsedPayload = JSON.parse(normalizedText)
+        if (parsedPayload && typeof parsedPayload === 'object') {
+          parsedDetail = sanitizeSparqlErrorDetail(
+            parsedPayload.exception ||
+            parsedPayload.detail ||
+            parsedPayload.message ||
+            '',
+          )
+          parsedQuery = typeof parsedPayload.query === 'string' ? parsedPayload.query : ''
+        }
+      } catch (error) {
+        void error
+      }
+      if (!parsedDetail) {
+        parsedDetail = sanitizeSparqlErrorDetail(normalizedText)
+      }
+    }
+
+    const sparqlQuery = String(parsedQuery || submittedQuery || '').trim()
+    const sparqlQueryUiUrl = sparqlQuery
+      ? buildSparqlQueryUiUrl(endpointUrl, sparqlQuery)
+      : ''
+    const detailMessage = parsedDetail ? `: ${parsedDetail}` : ''
+    const linkMessage = sparqlQueryUiUrl ? ` SPARQL query UI URL: ${sparqlQueryUiUrl}` : ''
+    const error = new Error(
+      `SPARQL request failed with status ${normalizedStatus}${detailMessage}.${linkMessage}`.trim(),
+    )
+    if (sparqlQueryUiUrl) {
+      error.sparqlQueryUiUrl = sparqlQueryUiUrl
+    }
+    return error
+  }
+
   function buildSubjectNearbyFeaturesSparqlQuery(
     latitude,
     longitude,
@@ -3955,8 +4067,12 @@ ORDER BY ASC(?distance)
       } catch (error) {
         void error
       }
-      const detailSuffix = responseDetail ? `: ${responseDetail.slice(0, 320)}` : ''
-      throw new Error(`Request failed with status ${response.status}${detailSuffix}`)
+      throw buildSparqlHttpError(
+        response.status,
+        responseDetail,
+        requestUrl.toString(),
+        normalizedQuery,
+      )
     }
 
     return response.json()
@@ -6644,6 +6760,7 @@ ORDER BY ASC(?distance)
       saveImageSubjectWikidataRequired: 'Select a matching Wikidata item for the linked place.',
       saveImageSubjectLinkRequired: 'Link at least one depicted subject between image and Wikidata.',
       saveImageSubjectFeatureFetchFailed: 'Could not load nearby map features right now.',
+      saveImageSubjectFeatureFetchOpenQueryUi: 'Open SPARQL query UI',
       saveImageSubjectNearbyFeaturesTitle: 'Nearby features',
       saveImageSubjectLoadingInfo: 'Loading info...',
       saveImageSubjectNoNearbyFeatures: 'No nearby features found for this click.',
@@ -6995,6 +7112,7 @@ ORDER BY ASC(?distance)
       saveImageSubjectWikidataRequired: 'Välj ett motsvarande Wikidata-objekt för den kopplade platsen.',
       saveImageSubjectLinkRequired: 'Länka minst ett avbildat motiv mellan bild och Wikidata.',
       saveImageSubjectFeatureFetchFailed: 'Kunde inte läsa in närliggande kartobjekt just nu.',
+      saveImageSubjectFeatureFetchOpenQueryUi: 'Öppna SPARQL-frågan',
       saveImageSubjectNearbyFeaturesTitle: 'Närliggande objekt',
       saveImageSubjectLoadingInfo: 'Laddar information...',
       saveImageSubjectNoNearbyFeatures: 'Inga närliggande objekt hittades för klickpunkten.',
@@ -7346,6 +7464,7 @@ ORDER BY ASC(?distance)
       saveImageSubjectWikidataRequired: 'Valitse linkitetylle paikalle vastaava Wikidata-kohde.',
       saveImageSubjectLinkRequired: 'Linkitä vähintään yksi kuvassa näkyvä kohde kuvan ja Wikidatan välille.',
       saveImageSubjectFeatureFetchFailed: 'Lähikohteiden lataaminen epäonnistui.',
+      saveImageSubjectFeatureFetchOpenQueryUi: 'Avaa SPARQL-kysely',
       saveImageSubjectNearbyFeaturesTitle: 'Lähellä olevat kohteet',
       saveImageSubjectLoadingInfo: 'Ladataan tietoja...',
       saveImageSubjectNoNearbyFeatures: 'Klikatun pisteen läheltä ei löytynyt kohteita.',
@@ -8798,6 +8917,7 @@ ORDER BY ASC(?distance)
       const saveImageSubjectNearbyMapFeatures = ref([])
       const saveImageSubjectMapFeaturesLoading = ref(false)
       const saveImageSubjectMapFeaturesError = ref('')
+      const saveImageSubjectMapFeaturesErrorUrl = ref('')
       const saveImageSubjectMapFeaturesLoadedLatitude = ref(null)
       const saveImageSubjectMapFeaturesLoadedLongitude = ref(null)
       const saveImageSubjectHoveredMapFeatureKey = ref('')
@@ -8894,6 +9014,7 @@ ORDER BY ASC(?distance)
       let saveImageSubjectLatestMetadataToken = 0
       let saveImageSubjectMapHoverRenderToken = 0
       let saveImageSubjectMapSelectedRenderToken = 0
+      let saveImageSkipPrimaryToSubjectSyncOnce = false
       const isSaveImageDialogOpen = computed(() => showSaveImageApiForm.value)
       function normalizeSaveImageApiTabKey(value) {
         const normalized = String(value || '').trim().toLowerCase()
@@ -9479,7 +9600,7 @@ ORDER BY ASC(?distance)
           return t('saveImageMapPickHelpImage')
         }
         if (normalizeHeadingDegrees(saveImageHeading.value) === null) {
-          return ''
+          return t('saveImageMapPickHelpPhotographerStart')
         }
         return t('saveImageMapPickHelpPhotographerTarget')
       })
@@ -10128,6 +10249,7 @@ ORDER BY ASC(?distance)
         saveImageSubjectMapListViewBeforeSelection = null
         saveImageSubjectMapFeaturesLoading.value = false
         saveImageSubjectMapFeaturesError.value = ''
+        saveImageSubjectMapFeaturesErrorUrl.value = ''
         saveImageSubjectMapFeaturesLoadedLatitude.value = null
         saveImageSubjectMapFeaturesLoadedLongitude.value = null
         saveImageSubjectNearbyMapFeatures.value = []
@@ -10145,6 +10267,7 @@ ORDER BY ASC(?distance)
         saveImageSubjectMapListViewBeforeSelection = null
         saveImageSubjectMapFeaturesLoading.value = true
         saveImageSubjectMapFeaturesError.value = ''
+        saveImageSubjectMapFeaturesErrorUrl.value = ''
         saveImageSubjectMapFeaturesLoadedLatitude.value = null
         saveImageSubjectMapFeaturesLoadedLongitude.value = null
         saveImageSubjectNearbyMapFeatures.value = []
@@ -10935,6 +11058,7 @@ ORDER BY ASC(?distance)
         const currentToken = ++saveImageSubjectMapFeaturesToken
         saveImageSubjectMapFeaturesLoading.value = true
         saveImageSubjectMapFeaturesError.value = ''
+        saveImageSubjectMapFeaturesErrorUrl.value = ''
         try {
           const containerWikidataQid = (
             location.value && typeof location.value === 'object'
@@ -11001,6 +11125,12 @@ ORDER BY ASC(?distance)
           saveImageSubjectNearbyMapFeatures.value = []
           saveImageSubjectSelectedMapFeatureKey.value = ''
           saveImageSubjectMapFeaturesError.value = t('saveImageSubjectFeatureFetchFailed')
+          const queryUiUrl = (
+            error &&
+            typeof error === 'object' &&
+            typeof error.sparqlQueryUiUrl === 'string'
+          ) ? error.sparqlQueryUiUrl.trim() : ''
+          saveImageSubjectMapFeaturesErrorUrl.value = queryUiUrl
           _clearSaveImageSubjectMapFeatureLayers()
           _clearSaveImageSubjectSelectedFeatureWikidataSuggestions()
           _renderSaveImageSubjectLinkedMarkers()
@@ -11051,13 +11181,23 @@ ORDER BY ASC(?distance)
             if (!event || !event.latlng) {
               return
             }
-            _setSaveImageSubjectMapCoordinates(event.latlng.lat, event.latlng.lng, {
+            const clickedLatitude = Number(event.latlng.lat)
+            const clickedLongitude = Number(event.latlng.lng)
+            if (!Number.isFinite(clickedLatitude) || !Number.isFinite(clickedLongitude)) {
+              return
+            }
+            _setSaveImageSubjectMapCoordinates(clickedLatitude, clickedLongitude, {
               updateMapView: false,
               pointSource: 'user',
             })
+            // Keep step 2 primary coordinates aligned with the clicked subject point.
+            saveImageSkipPrimaryToSubjectSyncOnce = true
+            _setSaveImageCoordinates(clickedLatitude, clickedLongitude, false)
             saveImageSubjectSelectionError.value = ''
-            _prepareSaveImageSubjectMapFeatureLoadingState()
-            refreshSaveImageSubjectMapFeaturesDebounced(event.latlng.lat, event.latlng.lng)
+            if (!saveImageSubjectHasActiveSelection.value) {
+              _prepareSaveImageSubjectMapFeatureLoadingState()
+            }
+            refreshSaveImageSubjectMapFeaturesDebounced(clickedLatitude, clickedLongitude)
           })
           saveImageSubjectMapInstance.on('zoomend', () => {
             _syncSaveImageSubjectMapZoomLevel()
@@ -11996,8 +12136,6 @@ ORDER BY ASC(?distance)
         if (event && typeof event.stopPropagation === 'function') {
           event.stopPropagation()
         }
-        const nextMode = saveImageApiUsesPhotographerCoordinates.value ? 'image' : 'photographer'
-        setSaveImageApiCoordinateMode(nextMode)
       }
 
       function _syncSaveImageSubjectCoordinatesFromPrimaryLocation() {
@@ -12084,7 +12222,7 @@ ORDER BY ASC(?distance)
         const center = hasSelectedCoordinates ? [latitude, longitude] : fallbackCenter
         const initialZoom = Number.isFinite(saveImageCoordinatePickerLastZoom)
           ? saveImageCoordinatePickerLastZoom
-          : (hasSelectedCoordinates ? 13 : 6)
+          : (hasSelectedCoordinates ? 15 : 8)
 
         if (!saveImageMapInstance) {
           saveImageMapInstance = L.map(saveImageMapElement.value, {
@@ -12099,22 +12237,32 @@ ORDER BY ASC(?distance)
 
           saveImageMapInstance.on('click', (event) => {
             if (showSaveImageCoordinatePickerDialog.value) {
-              if (saveImageApiUsesPhotographerCoordinates.value) {
-                const clickedLatitude = event.latlng.lat
-                const clickedLongitude = event.latlng.lng
-                _armSaveImageHeadingDoubleClickFallback()
-                if (saveImageMapHeadingClickTimeout !== null) {
-                  window.clearTimeout(saveImageMapHeadingClickTimeout)
-                  saveImageMapHeadingClickTimeout = null
-                }
-                saveImageMapHeadingClickTimeout = window.setTimeout(() => {
-                  saveImageMapHeadingClickTimeout = null
-                  if (!showSaveImageCoordinatePickerDialog.value || !saveImageApiUsesPhotographerCoordinates.value) {
-                    return
-                  }
-                  _setSaveImageHeadingFromMapClick(clickedLatitude, clickedLongitude)
-                }, 200)
+              if (!event || !event.latlng) {
+                return
               }
+              const clickedLatitude = Number(event.latlng.lat)
+              const clickedLongitude = Number(event.latlng.lng)
+              if (!Number.isFinite(clickedLatitude) || !Number.isFinite(clickedLongitude)) {
+                return
+              }
+
+              if (!saveImageApiUsesPhotographerCoordinates.value) {
+                _clearSaveImageHeadingDoubleClickTracking()
+                setSaveImageApiCoordinateMode('photographer')
+              }
+
+              _armSaveImageHeadingDoubleClickFallback()
+              if (saveImageMapHeadingClickTimeout !== null) {
+                window.clearTimeout(saveImageMapHeadingClickTimeout)
+                saveImageMapHeadingClickTimeout = null
+              }
+              saveImageMapHeadingClickTimeout = window.setTimeout(() => {
+                saveImageMapHeadingClickTimeout = null
+                if (!showSaveImageCoordinatePickerDialog.value || !saveImageApiUsesPhotographerCoordinates.value) {
+                  return
+                }
+                _setSaveImageHeadingFromMapClick(clickedLatitude, clickedLongitude)
+              }, 200)
               return
             }
             _setSaveImageCoordinates(event.latlng.lat, event.latlng.lng)
@@ -14907,6 +15055,7 @@ ORDER BY ASC(?distance)
         async ([isOpen], previousValues = []) => {
           const previousOpen = Array.isArray(previousValues) ? Boolean(previousValues[0]) : false
           if (!isOpen) {
+            saveImageSkipPrimaryToSubjectSyncOnce = false
             destroySaveImageWizardMap()
             destroySaveImageSubjectMap()
             _clearSaveImageNearbyCategorySuggestions()
@@ -14914,7 +15063,11 @@ ORDER BY ASC(?distance)
             _clearSaveImageSubjectMapFeatures()
             return
           }
-          _syncSaveImageSubjectCoordinatesFromPrimaryLocation()
+          if (saveImageSkipPrimaryToSubjectSyncOnce) {
+            saveImageSkipPrimaryToSubjectSyncOnce = false
+          } else {
+            _syncSaveImageSubjectCoordinatesFromPrimaryLocation()
+          }
           refreshSaveImageNearbyCategorySuggestionsDebounced()
           if (!previousOpen) {
             await nextTick()
@@ -15165,6 +15318,7 @@ ORDER BY ASC(?distance)
         saveImageSubjectNearbyMapFeatures,
         saveImageSubjectMapFeaturesLoading,
         saveImageSubjectMapFeaturesError,
+        saveImageSubjectMapFeaturesErrorUrl,
         saveImageSelectedSubjectMapFeature,
         saveImageSubjectHasActiveSelection,
         saveImageVisibleSubjectSelectedFeatureWikidataSuggestions,
@@ -16073,6 +16227,15 @@ ORDER BY ASC(?distance)
                         </ul>
                         <p v-else-if="saveImageSubjectMapFeaturesError" class="dialog-help warning">
                           {{ saveImageSubjectMapFeaturesError }}
+                          <a
+                            v-if="saveImageSubjectMapFeaturesErrorUrl"
+                            :href="saveImageSubjectMapFeaturesErrorUrl"
+                            target="_blank"
+                            rel="noreferrer"
+                            class="save-image-subject-error-link"
+                          >
+                            {{ t('saveImageSubjectFeatureFetchOpenQueryUi') }}
+                          </a>
                         </p>
                         <ul v-else-if="saveImageSubjectNearbyMapFeatures.length > 0" class="save-image-subject-feature-list">
                           <li
@@ -16235,7 +16398,7 @@ ORDER BY ASC(?distance)
                       <div class="save-image-subject-image-pane">
                         <p class="dialog-help">{{ t('saveImageSubjectImageClickHelp') }}</p>
                         <p
-                          v-if="saveImageSubjectHasActiveSelection && saveImageSubjectMapHasPoint"
+                          v-if="saveImageSubjectMapHasPoint"
                           class="dialog-help save-image-subject-map-point-coordinates"
                         >
                           {{ t('coordinates') }}: {{ saveImageSubjectMapLatitude }}, {{ saveImageSubjectMapLongitude }}
