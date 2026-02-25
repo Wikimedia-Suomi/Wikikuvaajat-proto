@@ -51,6 +51,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 export DJANGO_SECRET_KEY=dev-secret-change-me
 export DJANGO_DEBUG=1
+export SOCIAL_AUTH_MEDIAWIKI_KEY='dsasdsa...' # (required for Wikimedia OAuth login and Wikidata write actions)
+export SOCIAL_AUTH_MEDIAWIKI_SECRET=`dsadsadsa...' # (required for Wikimedia OAuth login and Wikidata write actions)
+export LOCAL_DEV_MEDIAWIKI_ACCESS_TOKEN='dsadsdsa...' # (OPTIONAL local-dev fallback OAuth access token)
+export LOCAL_DEV_MEDIAWIKI_ACCESS_SECRET='dsdsadsa...' # (OPTIONAL local-dev fallback OAuth access secret)
+export SOCIAL_AUTH_MEDIAWIKI_URL # (default: `https://meta.wikimedia.org/w/index.php`)
 python3 manage.py migrate
 python3 manage.py runserver
 ```
