@@ -60,6 +60,8 @@ python3 manage.py migrate
 python3 manage.py runserver
 ```
 
+Using LOCAL_DEV tokens require also DJANG_DEBUG=1 is set and browser is connecting from localhost.
+
 Open:
 - `http://localhost:8000/` for UI (Django default dev port)
 - `http://localhost:8000/api/locations/?lang=en` for API
