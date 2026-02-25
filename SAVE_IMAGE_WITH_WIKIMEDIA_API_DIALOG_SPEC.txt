@@ -1,0 +1,309 @@
+SAVE IMAGE WITH WIKIMEDIA API - DIALOG SPECIFICATION
+Version: 1.0
+Status: Target behavior specification
+
+1. Purpose
+- This document defines how the "Save image with Wikimedia API" dialog must work.
+- The document is intended to be used as a functional specification for implementation and testing.
+
+2. Scope
+- Scope includes:
+  1) Dialog lifecycle (open, close, reset)
+  2) Wizard navigation (Previous/Next pattern)
+  3) Step-by-step data collection and validation
+  4) Map and coordinate behavior
+  5) Upload action, request payload, success and error handling
+- Scope does not include backend implementation details beyond required API contract.
+
+3. Definitions
+- Primary coordinates:
+  Coordinates selected in wizard step 2 ("Coordinates and heading").
+- Subject point:
+  Point used in wizard step 4 ("Describe what is in the image") for nearby feature search and map feature linking.
+- Active step:
+  Currently visible wizard page.
+
+4. Preconditions
+- User can open the dialog from location detail view.
+- User must be authenticated before final upload can proceed.
+- Dialog can be used without immediate authentication, but upload is blocked until authenticated.
+
+5. Dialog lifecycle
+- On open:
+  1) Wizard starts from step 1.
+  2) Form state is initialized.
+  3) Existing upload success/error state is cleared.
+- On close (Cancel or backdrop close):
+  1) Dialog closes.
+  2) Wizard state and temporary form state are reset.
+  3) Temporary map instances/layers related to dialog are destroyed.
+
+6. Wizard structure and order
+- The wizard contains exactly 7 steps in this order:
+  1) File and EXIF confirmation
+  2) Coordinates and heading confirmation
+  3) Image type
+  4) Describe what is in the image
+  5) Categories
+  6) Target filename on Commons
+  7) Caption/description text and license
+
+7. Navigation model
+- Top step row is a progress indicator, not free tab navigation.
+- Action buttons:
+  1) Cancel: always visible
+  2) Back: visible on steps 2-7
+  3) Next: visible on steps 1-6
+  4) Upload: visible only on step 7
+- Next behavior:
+  1) If current step is valid -> move to next step
+  2) If current step is invalid -> stay on current step and show validation error
+- Upload behavior:
+  1) Upload button exists only on step 7
+  2) Upload enabled only when all required data in all steps is valid
+  3) Upload disabled while upload is in progress
+
+8. Step-by-step behavior
+
+8.1 Step 1: File and EXIF confirmation
+- Fields and data:
+  1) File input (required)
+  2) EXIF preview info (if available): date, coordinates, heading, elevation
+  3) Ownership selection (own photo / not own photo)
+  4) Author (auto-filled for own photo, read-only)
+  5) Source URL (required only when not own photo)
+  6) Date created (required)
+  7) Include elevation toggle (only if elevation exists)
+- Required for step completion:
+  1) File selected
+  2) Date created present
+  3) Source URL present when photo is not own photo
+
+8.2 Step 3: Coordinates and heading confirmation
+- Initial values priority (highest to lowest)
+  1) EXIF coordinates if available
+  2) Wikidata initial coordinates
+
+- Fields and controls:
+  1) Coordinate preview map
+  2) Open coordinate picker button
+  3) Optional reset to EXIF coordinates (when available)
+  4) Optional reset to Wikidata initial coordinates (when available)
+  5) Heading value shown/managed in photographer mode
+- Coordinate picker behavior:
+  1) Supports "photographer + heading" mode
+  2) Supports "point only" mode
+  3) In photographer mode, map center defines primary coordinates; map click defines heading direction
+  4) In point-only mode, map center defines primary coordinates
+- Required for step completion:
+  1) Primary latitude is valid
+  2) Primary longitude is valid
+  3) Heading is valid or none
+
+8.2 Step 2: Image type
+- User selects exactly one image type option.
+- Required for step completion:
+  1) One valid image type is selected
+
+8.4 Step 4: Describe what is in the image
+- Purpose:
+  Link depicted object/place between map location, image point, and Wikidata entity.
+- 8.4.1 Authoritative state in this step:
+  1) subject_point_latitude
+  2) subject_point_longitude
+  3) subject_point_source (auto-from-step2 or user-selected-in-step4)
+  4) selected_osm_feature_key
+  5) selected_wikidata_qid
+  6) image_x_percent
+  7) image_y_percent
+  8) linked_subjects[]
+
+- 8.4.2 Linked subject data contract:
+  1) id (Wikidata QID, required)
+  2) label (optional)
+  3) map_latitude (required in map-assisted mode, null in image-only mode)
+  4) map_longitude (required in map-assisted mode, null in image-only mode)
+  5) image_x_percent (required)
+  6) image_y_percent (required)
+  7) osm_feature_key (optional, map-assisted mode)
+  8) osm_feature_type (optional, map-assisted mode)
+  9) osm_feature_id (optional, map-assisted mode)
+  10) osm_feature_label (optional, map-assisted mode)
+  11) dedupeKey (required, deterministic)
+
+- 8.4.3 Mode and visibility rules:
+  1) If subject type is location-relevant, user can use map-assisted or image-only linking.
+  2) If subject type is not location-relevant, map-assisted linking is not required for completion.
+  3) Map-assisted mode shows map + nearby feature proposals + selected-feature details.
+  4) Image-only mode hides map-assisted feature list and uses direct Wikidata + image point flow.
+
+- 8.4.4 Deterministic state transitions:
+  1) Entering step 4:
+     If subject_point is empty and step 2 coordinates exist, subject_point is initialized from step 2 coordinates.
+  2) User changes coordinates in step 2:
+     Subject_point is updated from step 2.
+  3) User clicks subject point select map in step 4:
+     subject_point is set to click coordinates
+  4) User changes link mode to image-only:
+     map-assisted query/selection state is cleared.
+  5) User changes link mode back to map-assisted:
+     If subject_point exists, nearby features are loaded for current subject_point.
+  6) User removes linked subject:
+     linked_subjects[] is updated immediately and completion state is recalculated immediately.
+
+- 8.4.5 Proposal pipelines and contracts:
+  1) Nearby feature proposals (map-assisted):
+     Input: subject_point_latitude, subject_point_longitude, radiusMeters, nearbyLimit, lang, containerWikidataQid.
+     Output item fields: key, type, id, displayLabel, displayMeta, latitude, longitude, distanceMeters, tags/rawTags.
+  2) Wikidata proposals for selected feature:
+     Input: selected feature object, lang, municipalityQid, limit.
+     Output item fields: id (QID), label, description.
+  3) Direct Wikidata search proposals:
+     Input: search query, lang, limit.
+     Output item fields: id (QID), label, description.
+  4) Nearby depict proposals:
+     Input: primary coordinates from step 2 (not subject_point), radius/limit/lang.
+     Output item fields: id (QID), label, description.
+
+- 8.4.6 Proposal refresh triggers:
+  1) Nearby feature proposals refresh when subject_point changes.
+  2) Feature-specific Wikidata proposals refresh when selected_osm_feature_key changes.
+  3) Direct Wikidata search proposals refresh when search query changes.
+  4) Nearby depict proposals refresh when step 2 primary coordinates change or when linked subject is added.
+
+- 8.4.7 Ranking and tie-break rules:
+  1) Nearby feature proposals:
+     Sort by distanceSortValue ascending.
+     If equal distance, sort by displayLabel localeCompare('en', sensitivity='base').
+     Features with same normalized name may be merged; merged result keeps nearest representative.
+  2) Wikidata proposals for selected feature:
+     Priority bucket order: direct (0), reverse (1 if direct exists else 0), tag (3), key (4).
+     If same bucket, candidates with reverse source are ranked before non-reverse.
+     Final tie-break by label localeCompare('en', sensitivity='base').
+  3) Direct Wikidata search proposals:
+     Preserve source order from search API, then dedupe by QID (first occurrence wins).
+  4) Nearby depict proposals:
+     Source order precedence: nearby Wikidata items first, nearby OSM-derived items second.
+     Dedupe by QID, first occurrence wins.
+
+- 8.4.8 Async and race-handling rules:
+  1) Nearby feature proposal fetch is debounced by 250 ms.
+  2) Direct Wikidata search is debounced by 250 ms.
+  3) Nearby depict proposal fetch (via nearby suggestion loader) is debounced by 300 ms.
+  4) Nearby feature fetch uses token/cancellation guard; stale responses are discarded.
+  5) Selected-feature Wikidata proposal fetch uses token/cancellation guard; stale responses are discarded.
+  6) Nearby depict proposal loader uses token/cancellation guard; stale responses are discarded.
+  7) Direct Wikidata search currently uses debounce only; exact duplicate behavior does not guarantee stale-response discard after request start.
+
+- 8.4.9 Validation order for Add linked subject action:
+  1) If map-assisted mode and map point missing: show map-point-required error and stop.
+  2) If image point missing: show image-point-required error and stop.
+  3) If Wikidata item/QID missing: show Wikidata-required error and stop.
+  4) If all required fields exist: proceed to dedupe and add.
+
+- 8.4.10 Dedupe and add semantics:
+  1) Dedupe key format:
+     lower(qid) + '|' + map_part + '|' + imageX.toFixed(3) + '|' + imageY.toFixed(3)
+  2) map_part:
+     map_lat.toFixed(6) + ',' + map_lon.toFixed(6) in map-assisted mode, otherwise 'no-map'.
+  3) If dedupe key already exists, no new linked subject is added.
+  4) If dedupe key is new, linked subject is appended to linked_subjects[].
+  5) Removed linked subject can be re-added later if it no longer exists in linked_subjects[].
+
+- 8.4.11 Post-add behavior:
+  1) If link added in map-assisted mode, UI returns to nearby feature list view for adding next item.
+  2) If link added in image-only mode, Wikidata and image-point selection fields are cleared for next item.
+  3) Existing proposal panels remain available for iterative linking.
+
+- 8.4.12 Error and resilience behavior:
+  1) Proposal fetch errors are non-blocking and must not close step 4.
+  2) Proposal fetch errors must not clear already-added linked_subjects[].
+  3) Temporary network/search errors must not clear manually selected image point.
+  4) Temporary network/search errors must not clear confirmed Wikidata selection unless user changes it.
+
+- 8.4.13 Completion rule for step 4:
+  1) For location-relevant subject types: at least one valid linked subject is required.
+  2) For non-location-relevant subject types: at least one valid linked subject is required.
+
+8.5 Step 5: Categories
+- User can search and add Commons categories.
+- At least one category is required.
+- Required for step completion:
+  1) Category list contains at least one category
+
+8.6 Step 6: Target filename on Commons
+- User enters target filename.
+- Filename availability check may run asynchronously.
+- Required for step completion:
+  1) Normalized target filename is non-empty
+  2) Availability is not explicitly false
+
+8.7 Step 7: Caption/description and license
+- Fields:
+  1) Caption text + language
+  2) Description text + language
+  3) License template
+- Required for step completion:
+  1) Caption non-empty
+  2) Description non-empty
+  3) License selected
+
+9. Validation and error model
+- Validation is step-gated:
+  1) Next validates only active step
+  2) Upload validates full wizard state
+- Validation errors are shown as user-facing text in dialog.
+- If upload is attempted without full completion, dialog shows completion error and does not submit.
+
+10. Map and coordinate consistency requirements
+- Primary coordinates are the canonical upload location values.
+- Step 4 nearby feature logic must never be hard-locked to initial Wikidata location.
+- Any user action that changes subject point in step 4 must update nearby feature source coordinates immediately.
+- Any user action that changes primary coordinates should keep step 4 state consistent:
+  1) If no explicit subject-point override is active, subject point follows primary coordinates.
+  2) If user explicitly picked a subject point, that point remains until user changes it again.
+
+11. Upload execution flow
+- Preconditions for request:
+  1) Active step is 7
+  2) All steps valid
+  3) User authenticated
+  4) No ongoing upload
+- Before request:
+  1) Optional confirmation prompt is shown
+- Request payload includes (when applicable):
+  1) file
+  2) latitude, longitude
+  3) heading
+  4) elevation_meters (if chosen)
+  5) caption + language
+  6) description + language
+  7) license_template
+  8) categories_json
+  9) depicts_json
+  10) target_filename
+  11) author
+  12) source_url
+  13) date_created
+  14) wikidata_item (context item if available)
+- On success:
+  1) Show success message with uploaded filename
+  2) Show link to uploaded file page if URL exists
+- On failure:
+  1) Show error message
+  2) Keep user data in dialog for correction/retry
+
+12. Non-functional requirements
+- Dialog must work on desktop and mobile viewport.
+- Navigation and controls must be keyboard accessible.
+- Loading states (EXIF read, filename check, nearby feature fetch, upload) must be visible.
+- Progress indicator must show current step index and total step count.
+
+13. Acceptance criteria (summary)
+- AC-1: Wizard has exactly 7 steps in defined order.
+- AC-2: User cannot skip required data via free tab clicking.
+- AC-3: Upload action appears only on last step.
+- AC-4: Upload is possible only when all required data is valid.
+- AC-5: Nearby features in step 4 always reflect current subject point.
+- AC-6: Step 2 coordinate changes are reflected in step 4 default subject context.
+- AC-7: Success and error states are clearly communicated.

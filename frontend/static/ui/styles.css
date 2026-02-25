@@ -709,6 +709,89 @@ textarea:focus-visible {
   margin-top: 0;
 }
 
+.save-image-api-step-progress {
+  margin: 0;
+  font-size: 0.81rem;
+  font-weight: 700;
+  color: #0f3f58;
+}
+
+.save-image-api-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+}
+
+.save-image-api-tab-btn {
+  appearance: none;
+  border: 1px solid #c8d9e9;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f5faff 100%);
+  color: #0f3f58;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  padding: 0.38rem 0.72rem;
+  cursor: pointer;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+}
+
+.save-image-api-tab-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.22);
+}
+
+.save-image-api-tab-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.save-image-api-tab-index {
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e3a8a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.save-image-api-tab-btn.complete {
+  border-color: #86efac;
+  background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 100%);
+}
+
+.save-image-api-tab-btn.complete .save-image-api-tab-index {
+  background: #bbf7d0;
+  color: #166534;
+}
+
+.save-image-api-tab-btn.active {
+  border-color: #0284c7;
+  background: linear-gradient(180deg, #eef9ff 0%, #d9f0ff 100%);
+  box-shadow: 0 0 0 1px rgba(2, 132, 199, 0.16);
+}
+
+.save-image-api-tab-btn.active .save-image-api-tab-index {
+  background: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.save-image-tab-panel {
+  display: grid;
+  gap: 0.82rem;
+}
+
 .wizard-choice-grid {
   display: grid;
   gap: 0.7rem;
@@ -1997,6 +2080,7 @@ textarea:focus-visible {
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.6rem;
   position: sticky;
   bottom: -0.85rem;
@@ -2005,6 +2089,11 @@ textarea:focus-visible {
   background:
     linear-gradient(180deg, rgba(248, 252, 255, 0.03) 0%, rgba(248, 252, 255, 0.94) 32%, rgba(248, 252, 255, 1) 100%);
   border-top: 1px solid #e2ecf3;
+}
+
+.dialog-actions-error {
+  margin: 0;
+  flex: 1 1 100%;
 }
 
 @media (max-width: 920px) {
@@ -2127,6 +2216,11 @@ textarea:focus-visible {
 
   .save-image-filename-builder-actions .secondary-btn {
     width: 100%;
+  }
+
+  .save-image-api-tab-btn {
+    font-size: 0.78rem;
+    padding: 0.32rem 0.62rem;
   }
 
   .card-actions,

@@ -107,6 +107,24 @@
   const SAVE_IMAGE_SUBJECT_TYPE_BY_VALUE = new Map(
     SAVE_IMAGE_SUBJECT_TYPE_DEFINITIONS.map((entry) => [entry.value, entry])
   )
+  const SAVE_IMAGE_API_TAB_KEYS = Object.freeze({
+    FILE_EXIF: 'file_exif',
+    COORDINATES: 'coordinates',
+    IMAGE_TYPE: 'image_type',
+    DESCRIBE: 'describe',
+    CATEGORIES: 'categories',
+    FILENAME: 'filename',
+    CAPTION_LICENSE: 'caption_license',
+  })
+  const SAVE_IMAGE_API_TAB_ORDER = Object.freeze([
+    SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF,
+    SAVE_IMAGE_API_TAB_KEYS.COORDINATES,
+    SAVE_IMAGE_API_TAB_KEYS.IMAGE_TYPE,
+    SAVE_IMAGE_API_TAB_KEYS.DESCRIBE,
+    SAVE_IMAGE_API_TAB_KEYS.CATEGORIES,
+    SAVE_IMAGE_API_TAB_KEYS.FILENAME,
+    SAVE_IMAGE_API_TAB_KEYS.CAPTION_LICENSE,
+  ])
   const WIKIDATA_LANGUAGE_CODE_CANONICAL = {
     sme: 'se',
   }
@@ -3819,11 +3837,7 @@ LIMIT ${normalizedQids.length}
     if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) {
       return ''
     }
-    const normalizedDistanceMode = (
-      distanceMode === 'dist' || distanceMode === 'none'
-        ? distanceMode
-        : 'geof'
-    )
+    const normalizedDistanceMode = distanceMode === 'none' ? 'none' : 'geof'
     const normalizedContainerQid = (
       extractWikidataId(String(containerWikidataQid || ''))
       || SAVE_IMAGE_SUBJECT_CONTAINER_FALLBACK_QID
@@ -3836,7 +3850,7 @@ LIMIT ${normalizedQids.length}
     const geofPrefix = normalizedDistanceMode === 'geof'
       ? 'PREFIX geof: <http://www.opengis.net/def/function/geosparql/>'
       : ''
-    const distanceFunctionName = normalizedDistanceMode === 'dist' ? 'dist' : 'geof:distance'
+    const distanceFunctionName = 'geof:distance'
     const containerDistanceBindClause = normalizedDistanceMode === 'none'
       ? ''
       : `BIND(${distanceFunctionName}(?containerLocation, "${pointWkt}"^^geo:wktLiteral) AS ?distance)`
@@ -3973,7 +3987,7 @@ ORDER BY ASC(?distance)
     )
     let bindings = []
     let lastError = null
-    for (const distanceMode of ['geof', 'dist', 'none']) {
+    for (const distanceMode of ['geof', 'none']) {
       const sparql = buildSubjectNearbyFeaturesSparqlQuery(
         latitudeValue,
         longitudeValue,
@@ -6588,6 +6602,13 @@ ORDER BY ASC(?distance)
       saveImageWizardSubjectLocationStep: 'Step 3: Describe what is in the image',
       saveImageApiFormTitle: 'Save image with Wikimedia API',
       saveImageApiFormHelp: 'Use this separate form to upload a file and provide metadata before saving.',
+      saveImageTabFileExif: 'File and EXIF',
+      saveImageTabCoordinates: 'Coordinates and heading',
+      saveImageTabImageType: 'Image type',
+      saveImageTabDescribe: 'Describe what is in the image',
+      saveImageTabCategories: 'Categories',
+      saveImageTabFilename: 'Target filename on Commons',
+      saveImageTabCaptionLicense: 'Caption, description and license',
       saveImageSubjectPrompt: 'Is this image...',
       saveImageSubjectTypeInterior: 'Indoor image',
       saveImageSubjectTypeExterior: 'Outdoor image',
@@ -6621,7 +6642,7 @@ ORDER BY ASC(?distance)
       saveImageSubjectMapPointRequired: 'Select the related point on the map first.',
       saveImageSubjectImagePointRequired: 'Select the related point in the image first.',
       saveImageSubjectWikidataRequired: 'Select a matching Wikidata item for the linked place.',
-      saveImageSubjectLinkRequired: 'For location-relevant images, link at least one place between map, image, and Wikidata.',
+      saveImageSubjectLinkRequired: 'Link at least one depicted subject between image and Wikidata.',
       saveImageSubjectFeatureFetchFailed: 'Could not load nearby map features right now.',
       saveImageSubjectNearbyFeaturesTitle: 'Nearby features',
       saveImageSubjectLoadingInfo: 'Loading info...',
@@ -6663,6 +6684,13 @@ ORDER BY ASC(?distance)
       saveImageCoordinatePreviewHide: 'Hide photo preview',
       saveImageCoordinatePreviewShow: 'Show photo preview',
       saveImageFileRequired: 'Select an image file first.',
+      saveImageDateCreatedRequired: 'Enter date created.',
+      saveImageSourceUrlRequired: 'Enter source URL for non-own photos.',
+      saveImageCategoriesRequired: 'Add at least one category.',
+      saveImageFilenameRequired: 'Enter target filename.',
+      saveImageCaptionDescriptionRequired: 'Add both caption and description.',
+      saveImageCompleteAllSteps: 'Complete all wizard steps before uploading.',
+      saveImageStepProgress: 'Step {current} of {total}',
       saveImageApiTargetFilename: 'Target filename on Commons',
       saveImageFilenameBuilderTitle: 'Build filename',
       saveImageFilenameBuilderHelp: 'Tap parts to include in filename.',
@@ -6925,6 +6953,13 @@ ORDER BY ASC(?distance)
       saveImageWizardSubjectLocationStep: 'Steg 3: Beskriv vad som finns i bilden',
       saveImageApiFormTitle: 'Spara bild med Wikimedia API',
       saveImageApiFormHelp: 'Använd detta separata formulär för att ladda upp fil och ange metadata före sparning.',
+      saveImageTabFileExif: 'Fil och EXIF',
+      saveImageTabCoordinates: 'Koordinater och riktning',
+      saveImageTabImageType: 'Bildtyp',
+      saveImageTabDescribe: 'Beskriv vad som finns i bilden',
+      saveImageTabCategories: 'Kategorier',
+      saveImageTabFilename: 'Målfilnamn på Commons',
+      saveImageTabCaptionLicense: 'Bildtext, beskrivning och licens',
       saveImageSubjectPrompt: 'Är bilden...',
       saveImageSubjectTypeInterior: 'Inomhusbild',
       saveImageSubjectTypeExterior: 'Utomhusbild',
@@ -6958,7 +6993,7 @@ ORDER BY ASC(?distance)
       saveImageSubjectMapPointRequired: 'Välj först motsvarande punkt på kartan.',
       saveImageSubjectImagePointRequired: 'Välj först motsvarande punkt i bilden.',
       saveImageSubjectWikidataRequired: 'Välj ett motsvarande Wikidata-objekt för den kopplade platsen.',
-      saveImageSubjectLinkRequired: 'För platsrelevanta bilder, koppla minst en plats mellan karta, bild och Wikidata.',
+      saveImageSubjectLinkRequired: 'Länka minst ett avbildat motiv mellan bild och Wikidata.',
       saveImageSubjectFeatureFetchFailed: 'Kunde inte läsa in närliggande kartobjekt just nu.',
       saveImageSubjectNearbyFeaturesTitle: 'Närliggande objekt',
       saveImageSubjectLoadingInfo: 'Laddar information...',
@@ -7000,6 +7035,13 @@ ORDER BY ASC(?distance)
       saveImageCoordinatePreviewHide: 'Dölj förhandsvisning',
       saveImageCoordinatePreviewShow: 'Visa förhandsvisning',
       saveImageFileRequired: 'Välj en bildfil först.',
+      saveImageDateCreatedRequired: 'Ange skapandedatum.',
+      saveImageSourceUrlRequired: 'Ange käll-URL för bilder som inte är egna.',
+      saveImageCategoriesRequired: 'Lägg till minst en kategori.',
+      saveImageFilenameRequired: 'Ange målfilnamn.',
+      saveImageCaptionDescriptionRequired: 'Ange både bildtext och beskrivning.',
+      saveImageCompleteAllSteps: 'Slutför alla steg innan uppladdning.',
+      saveImageStepProgress: 'Steg {current} av {total}',
       saveImageApiTargetFilename: 'Målfilnamn på Commons',
       saveImageFilenameBuilderTitle: 'Bygg filnamn',
       saveImageFilenameBuilderHelp: 'Tryck på delar som ska ingå i filnamnet.',
@@ -7262,6 +7304,13 @@ ORDER BY ASC(?distance)
       saveImageWizardSubjectLocationStep: 'Vaihe 3: Kerro mitä kuvassa on',
       saveImageApiFormTitle: 'Tallenna kuva Wikimedia API:lla',
       saveImageApiFormHelp: 'Käytä tätä erillistä lomaketta tiedoston lataamiseen ja metatietojen antamiseen ennen tallennusta.',
+      saveImageTabFileExif: 'Tiedosto ja EXIF',
+      saveImageTabCoordinates: 'Koordinaatit ja suunta',
+      saveImageTabImageType: 'Kuvan tyyppi',
+      saveImageTabDescribe: 'Kerro mitä kuvassa on',
+      saveImageTabCategories: 'Luokat',
+      saveImageTabFilename: 'Commonsin kohdetiedoston nimi',
+      saveImageTabCaptionLicense: 'Kuvateksti, kuvaus ja lisenssi',
       saveImageSubjectPrompt: 'Onko kuva...',
       saveImageSubjectTypeInterior: 'Sisäkuva',
       saveImageSubjectTypeExterior: 'Ulkokuva',
@@ -7295,7 +7344,7 @@ ORDER BY ASC(?distance)
       saveImageSubjectMapPointRequired: 'Valitse ensin vastaava piste kartalta.',
       saveImageSubjectImagePointRequired: 'Valitse ensin vastaava piste kuvasta.',
       saveImageSubjectWikidataRequired: 'Valitse linkitetylle paikalle vastaava Wikidata-kohde.',
-      saveImageSubjectLinkRequired: 'Sijaintiriippuvaisissa kuvissa linkitä vähintään yksi paikka kartan, kuvan ja Wikidatan välillä.',
+      saveImageSubjectLinkRequired: 'Linkitä vähintään yksi kuvassa näkyvä kohde kuvan ja Wikidatan välille.',
       saveImageSubjectFeatureFetchFailed: 'Lähikohteiden lataaminen epäonnistui.',
       saveImageSubjectNearbyFeaturesTitle: 'Lähellä olevat kohteet',
       saveImageSubjectLoadingInfo: 'Ladataan tietoja...',
@@ -7337,6 +7386,13 @@ ORDER BY ASC(?distance)
       saveImageCoordinatePreviewHide: 'Piilota esikatselukuva',
       saveImageCoordinatePreviewShow: 'Näytä esikatselukuva',
       saveImageFileRequired: 'Valitse ensin kuvatiedosto.',
+      saveImageDateCreatedRequired: 'Anna luontipäivä.',
+      saveImageSourceUrlRequired: 'Anna lähde-URL, kun kuva ei ole oma.',
+      saveImageCategoriesRequired: 'Lisää vähintään yksi luokka.',
+      saveImageFilenameRequired: 'Anna kohdetiedoston nimi.',
+      saveImageCaptionDescriptionRequired: 'Anna sekä kuvateksti että kuvaus.',
+      saveImageCompleteAllSteps: 'Täydennä kaikki vaiheet ennen latausta.',
+      saveImageStepProgress: 'Vaihe {current}/{total}',
       saveImageApiTargetFilename: 'Commonsin kohdetiedoston nimi',
       saveImageFilenameBuilderTitle: 'Muodosta tiedostonimi',
       saveImageFilenameBuilderHelp: 'Napauta mukaan otettavat osat.',
@@ -8714,6 +8770,7 @@ ORDER BY ASC(?distance)
       let detailMapInstance = null
       let detailMapMarker = null
       const showSaveImageApiForm = ref(false)
+      const saveImageApiActiveTab = ref(SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF)
       const showSaveImageCoordinatePickerDialog = ref(false)
       const saveImageCoordinatePickerPreviewCollapsed = ref(false)
       const saveImageMapElement = ref(null)
@@ -8728,6 +8785,7 @@ ORDER BY ASC(?distance)
       const saveImageDescriptionLanguage = ref(normalizeSupportedLocale(locale.value) || 'en')
       const saveImageSubjectType = ref('')
       const saveImageSubjectLinkMode = ref('map')
+      const saveImageSubjectPointSource = ref('auto')
       const saveImageSubjectMapElement = ref(null)
       const saveImageSubjectMapLatitude = ref('')
       const saveImageSubjectMapLongitude = ref('')
@@ -8837,6 +8895,216 @@ ORDER BY ASC(?distance)
       let saveImageSubjectMapHoverRenderToken = 0
       let saveImageSubjectMapSelectedRenderToken = 0
       const isSaveImageDialogOpen = computed(() => showSaveImageApiForm.value)
+      function normalizeSaveImageApiTabKey(value) {
+        const normalized = String(value || '').trim().toLowerCase()
+        if (!normalized || !SAVE_IMAGE_API_TAB_ORDER.includes(normalized)) {
+          return SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF
+        }
+        return normalized
+      }
+      const saveImageApiTabs = computed(() => ([
+        { key: SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF, label: t('saveImageTabFileExif') },
+        { key: SAVE_IMAGE_API_TAB_KEYS.COORDINATES, label: t('saveImageTabCoordinates') },
+        { key: SAVE_IMAGE_API_TAB_KEYS.IMAGE_TYPE, label: t('saveImageTabImageType') },
+        { key: SAVE_IMAGE_API_TAB_KEYS.DESCRIBE, label: t('saveImageTabDescribe') },
+        { key: SAVE_IMAGE_API_TAB_KEYS.CATEGORIES, label: t('saveImageTabCategories') },
+        { key: SAVE_IMAGE_API_TAB_KEYS.FILENAME, label: t('saveImageTabFilename') },
+        { key: SAVE_IMAGE_API_TAB_KEYS.CAPTION_LICENSE, label: t('saveImageTabCaptionLicense') },
+      ]))
+      function isSaveImageApiTabActive(tabKey) {
+        return saveImageApiActiveTab.value === normalizeSaveImageApiTabKey(tabKey)
+      }
+      function selectSaveImageApiTab(tabKey) {
+        saveImageApiActiveTab.value = normalizeSaveImageApiTabKey(tabKey)
+      }
+      function _trimmedSaveImageValue(value) {
+        return typeof value === 'string' ? value.trim() : ''
+      }
+      const saveImageApiCurrentStepIndex = computed(() => {
+        const currentStepKey = normalizeSaveImageApiTabKey(saveImageApiActiveTab.value)
+        const stepIndex = SAVE_IMAGE_API_TAB_ORDER.indexOf(currentStepKey)
+        return stepIndex < 0 ? 0 : stepIndex
+      })
+      const saveImageApiCurrentStepKey = computed(
+        () => SAVE_IMAGE_API_TAB_ORDER[saveImageApiCurrentStepIndex.value] || SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF,
+      )
+      const saveImageApiHasPreviousStep = computed(() => saveImageApiCurrentStepIndex.value > 0)
+      const saveImageApiHasNextStep = computed(
+        () => saveImageApiCurrentStepIndex.value < SAVE_IMAGE_API_TAB_ORDER.length - 1,
+      )
+      const saveImageApiIsLastStep = computed(() => !saveImageApiHasNextStep.value)
+      const saveImageStepFileExifComplete = computed(() => {
+        if (!saveImageSelectedFile.value) {
+          return false
+        }
+        if (!_trimmedSaveImageValue(saveImageApiDateCreated.value)) {
+          return false
+        }
+        if (!saveImageIsOwnPhoto.value && !_trimmedSaveImageValue(saveImageApiSourceUrl.value)) {
+          return false
+        }
+        return true
+      })
+      const saveImageStepCoordinatesComplete = computed(() => {
+        const latitude = parseCoordinate(saveImageLatitude.value)
+        const longitude = parseCoordinate(saveImageLongitude.value)
+        return latitude !== null && longitude !== null
+      })
+      const saveImageStepImageTypeComplete = computed(
+        () => Boolean(normalizeSaveImageSubjectType(saveImageSubjectType.value)),
+      )
+      const saveImageStepDescribeComplete = computed(() => {
+        const normalizedSubjectType = normalizeSaveImageSubjectType(saveImageSubjectType.value)
+        if (!normalizedSubjectType) {
+          return false
+        }
+        return Array.isArray(saveImageLinkedSubjects.value) && saveImageLinkedSubjects.value.length > 0
+      })
+      const saveImageStepCategoriesComplete = computed(
+        () => Array.isArray(saveImageSelectedCategories.value) && saveImageSelectedCategories.value.length > 0,
+      )
+      const saveImageNormalizedTargetFilename = computed(
+        () => normalizeCommonsFilenameCandidate(saveImageApiTargetFilename.value),
+      )
+      const saveImageStepFilenameComplete = computed(() => {
+        if (!saveImageNormalizedTargetFilename.value) {
+          return false
+        }
+        return saveImageApiTargetFilenameAvailable.value !== false
+      })
+      const saveImageStepCaptionLicenseComplete = computed(() => (
+        Boolean(_trimmedSaveImageValue(saveImageCaption.value))
+        && Boolean(_trimmedSaveImageValue(saveImageDescription.value))
+        && Boolean(_trimmedSaveImageValue(saveImageApiLicenseTemplate.value))
+      ))
+      function isSaveImageApiStepComplete(tabKey) {
+        const normalizedTabKey = normalizeSaveImageApiTabKey(tabKey)
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF) {
+          return saveImageStepFileExifComplete.value
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.COORDINATES) {
+          return saveImageStepCoordinatesComplete.value
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.IMAGE_TYPE) {
+          return saveImageStepImageTypeComplete.value
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.DESCRIBE) {
+          return saveImageStepDescribeComplete.value
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.CATEGORIES) {
+          return saveImageStepCategoriesComplete.value
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.FILENAME) {
+          return saveImageStepFilenameComplete.value
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.CAPTION_LICENSE) {
+          return saveImageStepCaptionLicenseComplete.value
+        }
+        return false
+      }
+      const saveImageCurrentStepComplete = computed(
+        () => isSaveImageApiStepComplete(saveImageApiCurrentStepKey.value),
+      )
+      const saveImageAllStepsComplete = computed(
+        () => SAVE_IMAGE_API_TAB_ORDER.every((stepKey) => isSaveImageApiStepComplete(stepKey)),
+      )
+      const saveImageCanUpload = computed(() => (
+        saveImageApiIsLastStep.value
+        && saveImageAllStepsComplete.value
+        && !saveImageApiUploading.value
+        && !authStatusLoading.value
+        && authAuthenticated.value
+      ))
+      function _saveImageApiStepValidationMessage(tabKey) {
+        const normalizedTabKey = normalizeSaveImageApiTabKey(tabKey)
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF) {
+          if (!saveImageSelectedFile.value) {
+            return t('saveImageFileRequired')
+          }
+          if (!_trimmedSaveImageValue(saveImageApiDateCreated.value)) {
+            return t('saveImageDateCreatedRequired')
+          }
+          if (!saveImageIsOwnPhoto.value && !_trimmedSaveImageValue(saveImageApiSourceUrl.value)) {
+            return t('saveImageSourceUrlRequired')
+          }
+          return ''
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.COORDINATES) {
+          return t('saveImageCoordinatesRequired')
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.IMAGE_TYPE) {
+          return t('saveImageSubjectTypeRequired')
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.DESCRIBE) {
+          return t('saveImageSubjectLinkRequired')
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.CATEGORIES) {
+          return t('saveImageCategoriesRequired')
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.FILENAME) {
+          if (!saveImageNormalizedTargetFilename.value) {
+            return t('saveImageFilenameRequired')
+          }
+          if (saveImageApiTargetFilenameAvailable.value === false) {
+            return t('saveImageFilenameTakenWarning')
+          }
+          return ''
+        }
+        if (normalizedTabKey === SAVE_IMAGE_API_TAB_KEYS.CAPTION_LICENSE) {
+          return t('saveImageCaptionDescriptionRequired')
+        }
+        return t('saveImageCompleteAllSteps')
+      }
+      function onSaveImageApiTabIndicatorClick(tabKey) {
+        if (saveImageApiUploading.value) {
+          return
+        }
+        const normalizedTargetTabKey = normalizeSaveImageApiTabKey(tabKey)
+        const targetStepIndex = SAVE_IMAGE_API_TAB_ORDER.indexOf(normalizedTargetTabKey)
+        if (targetStepIndex < 0) {
+          return
+        }
+        const currentStepIndex = saveImageApiCurrentStepIndex.value
+        if (targetStepIndex <= currentStepIndex) {
+          saveImageError.value = ''
+          selectSaveImageApiTab(normalizedTargetTabKey)
+          return
+        }
+        for (let index = 0; index < targetStepIndex; index += 1) {
+          const stepKey = SAVE_IMAGE_API_TAB_ORDER[index]
+          if (isSaveImageApiStepComplete(stepKey)) {
+            continue
+          }
+          saveImageError.value = _saveImageApiStepValidationMessage(stepKey)
+          selectSaveImageApiTab(stepKey)
+          return
+        }
+        saveImageError.value = ''
+        selectSaveImageApiTab(normalizedTargetTabKey)
+      }
+      function goToPreviousSaveImageApiStep() {
+        if (!saveImageApiHasPreviousStep.value || saveImageApiUploading.value) {
+          return
+        }
+        saveImageError.value = ''
+        const previousStepIndex = Math.max(0, saveImageApiCurrentStepIndex.value - 1)
+        selectSaveImageApiTab(SAVE_IMAGE_API_TAB_ORDER[previousStepIndex])
+      }
+      function goToNextSaveImageApiStep() {
+        if (!saveImageApiHasNextStep.value || saveImageApiUploading.value) {
+          return
+        }
+        if (!saveImageCurrentStepComplete.value) {
+          saveImageError.value = _saveImageApiStepValidationMessage(saveImageApiCurrentStepKey.value)
+          return
+        }
+        saveImageError.value = ''
+        const nextStepIndex = Math.min(
+          SAVE_IMAGE_API_TAB_ORDER.length - 1,
+          saveImageApiCurrentStepIndex.value + 1,
+        )
+        selectSaveImageApiTab(SAVE_IMAGE_API_TAB_ORDER[nextStepIndex])
+      }
       const saveImageSelectedFileName = computed(() => {
         if (!saveImageSelectedFile.value || typeof saveImageSelectedFile.value !== 'object') {
           return ''
@@ -8984,6 +9252,7 @@ ORDER BY ASC(?distance)
         return selectedFeature || null
       })
       const saveImageSubjectLinkUsesMap = computed(() => (
+        saveImageSubjectTypeLocationRelevant.value &&
         String(saveImageSubjectLinkMode.value || '').trim().toLowerCase() !== 'image-only'
       ))
       const saveImageSubjectHasActiveSelection = computed(() => (
@@ -9064,7 +9333,7 @@ ORDER BY ASC(?distance)
         }
       })
       const saveImageSubjectLinkedImageMarkers = computed(() => {
-        if (!saveImageSubjectTypeLocationRelevant.value || saveImageSubjectHasActiveSelection.value) {
+        if (saveImageSubjectLinkUsesMap.value && saveImageSubjectHasActiveSelection.value) {
           return []
         }
         const markers = []
@@ -10002,6 +10271,7 @@ ORDER BY ASC(?distance)
         updateMapView = true,
         minimumZoom = 13,
         showMarker = true,
+        pointSource = '',
       } = {}) {
         const parsedLatitude = Number(latitude)
         const parsedLongitude = Number(longitude)
@@ -10010,6 +10280,10 @@ ORDER BY ASC(?distance)
         }
         saveImageSubjectMapLatitude.value = parsedLatitude.toFixed(6)
         saveImageSubjectMapLongitude.value = parsedLongitude.toFixed(6)
+        const normalizedPointSource = String(pointSource || '').trim().toLowerCase()
+        if (normalizedPointSource === 'user' || normalizedPointSource === 'auto') {
+          saveImageSubjectPointSource.value = normalizedPointSource
+        }
 
         if (!saveImageSubjectMapInstance) {
           return
@@ -10777,7 +11051,10 @@ ORDER BY ASC(?distance)
             if (!event || !event.latlng) {
               return
             }
-            _setSaveImageSubjectMapCoordinates(event.latlng.lat, event.latlng.lng, { updateMapView: false })
+            _setSaveImageSubjectMapCoordinates(event.latlng.lat, event.latlng.lng, {
+              updateMapView: false,
+              pointSource: 'user',
+            })
             saveImageSubjectSelectionError.value = ''
             _prepareSaveImageSubjectMapFeatureLoadingState()
             refreshSaveImageSubjectMapFeaturesDebounced(event.latlng.lat, event.latlng.lng)
@@ -10838,6 +11115,7 @@ ORDER BY ASC(?distance)
             if (latitude !== null && longitude !== null) {
               saveImageSubjectMapLatitude.value = latitude.toFixed(6)
               saveImageSubjectMapLongitude.value = longitude.toFixed(6)
+              saveImageSubjectPointSource.value = 'auto'
             }
           }
           if (!saveImageSubjectLinkUsesMap.value) {
@@ -10869,8 +11147,10 @@ ORDER BY ASC(?distance)
         }
         if (!saveImageSubjectLinkUsesMap.value) {
           destroySaveImageSubjectMap()
+          _clearSaveImageSubjectMapFeatures()
           return
         }
+        _syncSaveImageSubjectCoordinatesFromPrimaryLocation()
         const subjectLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
         const subjectLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
         if (subjectLatitude !== null && subjectLongitude !== null) {
@@ -11162,9 +11442,6 @@ ORDER BY ASC(?distance)
 
       function addSaveImageSubjectLink() {
         saveImageSubjectSelectionError.value = ''
-        if (!saveImageSubjectTypeLocationRelevant.value) {
-          return
-        }
         const requiresMapPoint = saveImageSubjectLinkUsesMap.value
         const mapLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
         const mapLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
@@ -11726,9 +12003,19 @@ ORDER BY ASC(?distance)
       function _syncSaveImageSubjectCoordinatesFromPrimaryLocation() {
         const latitude = parseCoordinate(saveImageLatitude.value)
         const longitude = parseCoordinate(saveImageLongitude.value)
+        const currentSubjectLatitude = parseCoordinate(saveImageSubjectMapLatitude.value)
+        const currentSubjectLongitude = parseCoordinate(saveImageSubjectMapLongitude.value)
+        const hasSubjectPoint = currentSubjectLatitude !== null && currentSubjectLongitude !== null
+        const subjectPointSource = String(saveImageSubjectPointSource.value || '').trim().toLowerCase() === 'user'
+          ? 'user'
+          : 'auto'
+        const shouldFollowPrimary = subjectPointSource !== 'user' || !hasSubjectPoint
         if (latitude === null || longitude === null) {
-          saveImageSubjectMapLatitude.value = ''
-          saveImageSubjectMapLongitude.value = ''
+          if (shouldFollowPrimary) {
+            saveImageSubjectMapLatitude.value = ''
+            saveImageSubjectMapLongitude.value = ''
+            saveImageSubjectPointSource.value = 'auto'
+          }
           if (
             showSaveImageApiForm.value &&
             saveImageSubjectTypeLocationRelevant.value &&
@@ -11738,7 +12025,9 @@ ORDER BY ASC(?distance)
           }
           return
         }
-        _setSaveImageSubjectMapCoordinates(latitude, longitude)
+        if (shouldFollowPrimary) {
+          _setSaveImageSubjectMapCoordinates(latitude, longitude, { pointSource: 'auto' })
+        }
         if (
           !showSaveImageApiForm.value ||
           !saveImageSubjectTypeLocationRelevant.value ||
@@ -11746,11 +12035,17 @@ ORDER BY ASC(?distance)
         ) {
           return
         }
-        if (_hasSaveImageSubjectMapFeaturesLoadedForCoordinates(latitude, longitude)) {
+        const targetLatitude = shouldFollowPrimary ? latitude : currentSubjectLatitude
+        const targetLongitude = shouldFollowPrimary ? longitude : currentSubjectLongitude
+        if (targetLatitude === null || targetLongitude === null) {
+          _clearSaveImageSubjectMapFeatures()
+          return
+        }
+        if (_hasSaveImageSubjectMapFeaturesLoadedForCoordinates(targetLatitude, targetLongitude)) {
           return
         }
         _prepareSaveImageSubjectMapFeatureLoadingState()
-        refreshSaveImageSubjectMapFeaturesDebounced(latitude, longitude)
+        refreshSaveImageSubjectMapFeaturesDebounced(targetLatitude, targetLongitude)
       }
 
       function resetSaveImageCoordinatesToExif() {
@@ -11891,6 +12186,7 @@ ORDER BY ASC(?distance)
 
       function _initializeSaveImageWizard() {
         const currentFallbackToken = ++saveImageFallbackToken
+        saveImageApiActiveTab.value = SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF
         saveImageError.value = ''
         saveImageUploadResult.value = null
         saveImageApiUploading.value = false
@@ -11898,6 +12194,7 @@ ORDER BY ASC(?distance)
         saveImageApiCoordinateMode.value = 'photographer'
         saveImageSubjectType.value = ''
         saveImageSubjectLinkMode.value = 'map'
+        saveImageSubjectPointSource.value = 'auto'
         saveImageSubjectMapLatitude.value = ''
         saveImageSubjectMapLongitude.value = ''
         saveImageSubjectImageXPercent.value = null
@@ -13485,6 +13782,7 @@ ORDER BY ASC(?distance)
         showSaveImageCoordinatePickerDialog.value = false
         saveImageCoordinatePickerPreviewCollapsed.value = false
         showSaveImageApiForm.value = false
+        saveImageApiActiveTab.value = SAVE_IMAGE_API_TAB_KEYS.FILE_EXIF
         saveImageError.value = ''
         saveImageApiUploading.value = false
         saveImageUploadResult.value = null
@@ -13492,6 +13790,7 @@ ORDER BY ASC(?distance)
         saveImageApiCoordinateMode.value = 'photographer'
         saveImageSubjectType.value = ''
         saveImageSubjectLinkMode.value = 'map'
+        saveImageSubjectPointSource.value = 'auto'
         saveImageSubjectMapLatitude.value = ''
         saveImageSubjectMapLongitude.value = ''
         saveImageSubjectImageXPercent.value = null
@@ -13564,6 +13863,10 @@ ORDER BY ASC(?distance)
         saveImageError.value = ''
         saveImageUploadResult.value = null
 
+        if (!saveImageApiIsLastStep.value || !saveImageAllStepsComplete.value) {
+          saveImageError.value = t('saveImageCompleteAllSteps')
+          return
+        }
         if (!saveImageSelectedFile.value) {
           saveImageError.value = t('saveImageFileRequired')
           return
@@ -13577,7 +13880,7 @@ ORDER BY ASC(?distance)
           saveImageError.value = t('saveImageSubjectTypeRequired')
           return
         }
-        if (saveImageSubjectTypeIsLocationRelevant(normalizedSubjectType) && saveImageLinkedSubjects.value.length < 1) {
+        if (saveImageLinkedSubjects.value.length < 1) {
           saveImageError.value = t('saveImageSubjectLinkRequired')
           return
         }
@@ -14622,19 +14925,30 @@ ORDER BY ASC(?distance)
       watch(
         [
           () => showSaveImageApiForm.value,
+          () => saveImageApiActiveTab.value,
+          () => saveImageCoordinatePreviewMapElement.value,
           () => saveImageLatitude.value,
           () => saveImageLongitude.value,
           () => saveImageHeading.value,
           () => saveImageApiCoordinateMode.value,
         ],
-        async ([isOpen]) => {
-          if (!isOpen) {
+        async ([isOpen, activeTab]) => {
+          if (!isOpen || activeTab !== SAVE_IMAGE_API_TAB_KEYS.COORDINATES) {
             destroySaveImageCoordinatePreviewMap()
             return
           }
           await nextTick()
           ensureSaveImageCoordinatePreviewMap()
         }
+      )
+      watch(
+        [() => showSaveImageApiForm.value, () => saveImageApiActiveTab.value],
+        ([isOpen, activeTab]) => {
+          if (!isOpen || activeTab !== SAVE_IMAGE_API_TAB_KEYS.DESCRIBE) {
+            return
+          }
+          _syncSaveImageSubjectCoordinatesFromPrimaryLocation()
+        },
       )
       watch(
         [
@@ -14803,6 +15117,12 @@ ORDER BY ASC(?distance)
         hasDetailMapCoordinates,
         openSubLocationCreator,
         showSaveImageApiForm,
+        saveImageApiActiveTab,
+        saveImageApiTabs,
+        saveImageApiCurrentStepIndex,
+        saveImageApiHasPreviousStep,
+        saveImageApiHasNextStep,
+        saveImageApiIsLastStep,
         showSaveImageCoordinatePickerDialog,
         saveImageCoordinatePickerHasPreview,
         saveImageCoordinatePickerPreviewCollapsed,
@@ -14880,6 +15200,7 @@ ORDER BY ASC(?distance)
         saveImageApiTargetFilenameChecking,
         saveImageApiTargetFilenameAvailable,
         saveImageApiTargetFilenameCheckError,
+        saveImageCanUpload,
         saveImageIsOwnPhoto,
         saveImageShowSourceUrl,
         saveImageApiAuthor,
@@ -14912,6 +15233,12 @@ ORDER BY ASC(?distance)
         closeSaveImageCoordinatePickerDialog,
         onSaveImageMapElementReady,
         closeSaveImageApiForm,
+        isSaveImageApiTabActive,
+        isSaveImageApiStepComplete,
+        selectSaveImageApiTab,
+        onSaveImageApiTabIndicatorClick,
+        goToPreviousSaveImageApiStep,
+        goToNextSaveImageApiStep,
         onSaveImageOwnPhotoChange,
         onSaveImageSubjectTypeChange,
         onSaveImageSubjectLinkModeChange,
@@ -15377,7 +15704,29 @@ ORDER BY ASC(?distance)
               <h2>{{ t('saveImageApiFormTitle') }}</h2>
               <fieldset class="dialog-fieldset">
                 <p class="dialog-help">{{ t('saveImageApiFormHelp') }}</p>
+                <p class="save-image-api-step-progress">
+                  {{ t('saveImageStepProgress', { current: saveImageApiCurrentStepIndex + 1, total: saveImageApiTabs.length }) }}
+                </p>
+                <div class="save-image-api-tabs" role="group" :aria-label="t('saveImageApiFormTitle')">
+                  <button
+                    v-for="(tab, tabIndex) in saveImageApiTabs"
+                    :key="'save-image-api-tab-' + tab.key"
+                    type="button"
+                    class="save-image-api-tab-btn"
+                    :class="{
+                      active: isSaveImageApiTabActive(tab.key),
+                      complete: !isSaveImageApiTabActive(tab.key) && isSaveImageApiStepComplete(tab.key),
+                    }"
+                    :disabled="saveImageApiUploading"
+                    @click="onSaveImageApiTabIndicatorClick(tab.key)"
+                    :aria-current="isSaveImageApiTabActive(tab.key) ? 'step' : null"
+                  >
+                    <span class="save-image-api-tab-index">{{ tabIndex + 1 }}</span>
+                    <span>{{ tab.label }}</span>
+                  </button>
+                </div>
 
+                <div v-if="isSaveImageApiTabActive('file_exif')" class="save-image-tab-panel">
                 <label class="form-field">
                   <span>{{ t('saveImageFile') }}</span>
                   <input
@@ -15453,6 +15802,18 @@ ORDER BY ASC(?distance)
                   </template>
                 </div>
 
+                <label class="form-field">
+                  <span>{{ t('saveImageApiAuthor') }}</span>
+                  <input v-model="saveImageApiAuthor" type="text" maxlength="255" readonly />
+                </label>
+
+                <label v-if="saveImageShowSourceUrl" class="form-field">
+                  <span>{{ t('saveImageApiSourceUrl') }}</span>
+                  <input v-model="saveImageApiSourceUrl" type="url" maxlength="500" />
+                </label>
+                </div>
+
+                <div v-if="isSaveImageApiTabActive('coordinates')" class="save-image-tab-panel">
                 <div class="wizard-section">
                   <h3>{{ t('saveImageWizardLocationStep') }}</h3>
                   <p v-if="saveImageMapPickHelpText" class="dialog-help">{{ saveImageMapPickHelpText }}</p>
@@ -15503,7 +15864,9 @@ ORDER BY ASC(?distance)
                     </button>
                   </div>
                 </div>
+                </div>
 
+                <div v-if="isSaveImageApiTabActive('image_type')" class="save-image-tab-panel">
                 <div class="wizard-section">
                   <h3>{{ t('saveImageWizardSubjectStep') }}</h3>
                   <p class="dialog-help">{{ t('saveImageSubjectPrompt') }}</p>
@@ -15536,8 +15899,10 @@ ORDER BY ASC(?distance)
                     {{ t('saveImageSubjectLocationNotRelevantHelp') }}
                   </p>
                 </div>
+                </div>
 
-                <div v-if="saveImageSubjectTypeLocationRelevant" class="wizard-section">
+                <div v-if="isSaveImageApiTabActive('describe')" class="save-image-tab-panel">
+                <div class="wizard-section">
                   <h3>{{ t('saveImageWizardSubjectLocationStep') }}</h3>
                   <div v-if="saveImageLinkedSubjects.length > 0" class="save-image-linked-subjects save-image-linked-subjects-step3-start">
                     <p class="dialog-help success">
@@ -15582,8 +15947,7 @@ ORDER BY ASC(?distance)
                     </ul>
                   </div>
 
-                  <div class="form-field save-image-subject-link-mode-field">
-                    <span>{{ t('saveImageSubjectLinkModeLabel') }}</span>
+                  <div v-if="saveImageSubjectTypeLocationRelevant" class="form-field save-image-subject-link-mode-field">
                     <div class="toggle-switch" role="radiogroup" :aria-label="t('saveImageSubjectLinkModeLabel')">
                       <label class="toggle-option" :class="{ active: saveImageSubjectLinkMode === 'map' }">
                         <input v-model="saveImageSubjectLinkMode" type="radio" value="map" @change="onSaveImageSubjectLinkModeChange" />
@@ -16014,17 +16378,9 @@ ORDER BY ASC(?distance)
                     {{ saveImageSubjectSelectionError }}
                   </p>
                 </div>
+                </div>
 
-                <label class="form-field">
-                  <span>{{ t('saveImageApiAuthor') }}</span>
-                  <input v-model="saveImageApiAuthor" type="text" maxlength="255" readonly />
-                </label>
-
-                <label v-if="saveImageShowSourceUrl" class="form-field">
-                  <span>{{ t('saveImageApiSourceUrl') }}</span>
-                  <input v-model="saveImageApiSourceUrl" type="url" maxlength="500" />
-                </label>
-
+                <div v-if="isSaveImageApiTabActive('categories')" class="save-image-tab-panel">
                 <div class="form-field">
                   <span>{{ t('saveImageCategories') }}</span>
                   <ul v-if="saveImageSelectedCategories.length > 0" class="category-chip-list">
@@ -16141,7 +16497,9 @@ ORDER BY ASC(?distance)
                   </p>
                   <p class="dialog-help">{{ t('saveImageCategoriesHelp') }}</p>
                 </div>
+                </div>
 
+                <div v-if="isSaveImageApiTabActive('filename')" class="save-image-tab-panel">
                 <div class="wizard-section">
                   <label class="form-field">
                     <span>{{ t('saveImageApiTargetFilename') }}</span>
@@ -16218,7 +16576,11 @@ ORDER BY ASC(?distance)
                       </button>
                     </div>
                   </div>
+                </div>
+                </div>
 
+                <div v-if="isSaveImageApiTabActive('caption_license')" class="save-image-tab-panel">
+                  <div class="wizard-section">
                   <div class="form-row form-row-language">
                     <label class="form-field">
                       <span>{{ t('saveImageCaption') }}</span>
@@ -16257,9 +16619,9 @@ ORDER BY ASC(?distance)
                       <option value="Cc-zero">{{ t('saveImageApiLicenseCcZero') }}</option>
                     </select>
                   </label>
+                  </div>
                 </div>
 
-                <p v-if="saveImageError" class="status error" role="alert">{{ saveImageError }}</p>
                 <p
                   v-if="saveImageUploadResult && saveImageUploadResult.filename"
                   class="status"
@@ -16278,13 +16640,33 @@ ORDER BY ASC(?distance)
                 </p>
               </fieldset>
               <div class="dialog-actions">
+                <p v-if="saveImageError" class="status error dialog-actions-error" role="alert">{{ saveImageError }}</p>
                 <button type="button" class="secondary-btn" @click="closeSaveImageApiForm">
                   {{ t('cancel') }}
                 </button>
                 <button
+                  v-if="saveImageApiHasPreviousStep"
+                  type="button"
+                  class="secondary-btn"
+                  :disabled="saveImageApiUploading"
+                  @click="goToPreviousSaveImageApiStep"
+                >
+                  {{ t('back') }}
+                </button>
+                <button
+                  v-if="saveImageApiHasNextStep"
                   type="button"
                   class="primary-btn"
                   :disabled="saveImageApiUploading"
+                  @click="goToNextSaveImageApiStep"
+                >
+                  {{ t('next') }}
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="primary-btn"
+                  :disabled="!saveImageCanUpload"
                   @click="saveImageViaMediaWikiApi"
                 >
                   {{ saveImageApiUploading ? t('saving') : t('saveImageUploadWithApi') }}
