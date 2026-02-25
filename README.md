@@ -132,25 +132,6 @@ For local development (`DEBUG=1`) you can configure OAuth token fallback for Wik
 
 This is intended for endpoint-specific OAuth credentials (for example a consumer created with settings like "This consumer is for use only by Zache").
 
-## Optional: run frontend subproject standalone
-
-Not needed for normal local development. By default backend serves frontend and API from the same origin.
-
-```bash
-cd frontend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-export DJANGO_SECRET_KEY=dev-secret-change-me
-export DJANGO_DEBUG=1
-python3 manage.py migrate
-python3 manage.py runserver 8001
-```
-
-Open:
-- `http://localhost:8001/` for UI
-- UI reads backend API base URL from `API_BASE_URL` (default: `http://localhost:8000/api`)
-
 ## Tests
 
 Backend:
